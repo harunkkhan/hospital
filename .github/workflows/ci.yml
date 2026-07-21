@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (uv)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync (locked)
+        run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Pyright (strict)
+        run: uv run pyright
+
+      - name: Pytest
+        run: uv run pytest -q
+
+      - name: Import-direction contracts
+        run: uv run lint-imports
+
+  frontend:
+    name: Frontend (bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Gate: the frontend lives at apps/web and arrives in M2. Until its
+      # package.json exists this job is a no-op — every bun step below is
+      # conditioned on the app being present.
+      - name: Detect web app
+        id: detect
+        run: |
+          if [ -f apps/web/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "apps/web not present yet — frontend checks are a no-op until M2."
+          fi
+
+      - name: Install bun
+        if: steps.detect.outputs.present == 'true'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        if: steps.detect.outputs.present == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (tsc)
+        if: steps.detect.outputs.present == 'true'
+        run: bun run --cwd apps/web tsc --noEmit
+
+      - name: Test
+        if: steps.detect.outputs.present == 'true'
+        run: bun test

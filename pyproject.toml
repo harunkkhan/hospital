@@ -1,0 +1,81 @@
+[project]
+name = "hospital-workspace"
+version = "0.0.0"
+description = "Hospital Operations-Research Simulator — uv/bun monorepo workspace root (non-package)"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+# The workspace root is a virtual (non-package) aggregator. It depends on every
+# in-repo distribution so that a bare `uv sync` installs the whole `hospital.*`
+# namespace editable into the shared .venv. Third-party deps live in the member
+# packages, never here.
+dependencies = [
+    "hospital-core",
+    "hospital-data",
+    "hospital-solver",
+    "hospital-analysis",
+    "hospital-sim",
+    "hospital-forecast",
+    "hospital-sim-runner",
+]
+
+# --- uv workspace ---------------------------------------------------------
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/*"]
+# apps/web (M2) is a bun-only package with no pyproject.toml; keep it out of the
+# Python workspace so `uv sync` never tries to build it.
+exclude = ["apps/web"]
+
+# Inter-package dependencies resolve to the local workspace checkouts (editable),
+# never PyPI.
+[tool.uv.sources]
+hospital-core = { workspace = true }
+hospital-data = { workspace = true }
+hospital-solver = { workspace = true }
+hospital-analysis = { workspace = true }
+hospital-sim = { workspace = true }
+hospital-forecast = { workspace = true }
+hospital-sim-runner = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "pytest>=8",
+    "hypothesis>=6",
+    "import-linter>=2",
+]
+
+# --- ruff -----------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["packages", "apps", "tests"]
+extend-exclude = [".venv", "docs/plan"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hospital"]
+
+# --- pyright (strict, resolves hospital.* via the editable .venv) ---------
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+include = ["packages", "apps", "tests"]
+exclude = ["**/__pycache__", ".venv", "docs/plan"]
