@@ -1,0 +1,10 @@
+{
+  "name": "hospital",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hospital Operations-Research Simulator — bun workspace root (frontend). apps/web arrives in M2.",
+  "workspaces": [
+    "apps/*"
+  ],
+  "packageManager": "bun@1.3.14"
+}
