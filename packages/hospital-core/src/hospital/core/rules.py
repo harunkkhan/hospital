@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from pydantic import Field, TypeAdapter
 
@@ -101,10 +101,33 @@ class CompiledRules(FrozenModel):
 _RULE_ADAPTER: TypeAdapter[Rule] = TypeAdapter(Rule)
 
 
+def _canonicalize(obj: object) -> object:
+    """Recursively canonicalize parsed JSON so the encoding is content-addressable.
+
+    ``frozenset``/``tuple`` rule fields serialize to JSON *arrays* whose element
+    order follows process-dependent set iteration (string/enum hashing is salted
+    by ``PYTHONHASHSEED``). ``json.dumps(..., sort_keys=True)`` sorts object keys
+    but **not** array elements, so identical rules would otherwise hash
+    differently across processes. Sorting every array by its element's canonical
+    JSON makes the hash a pure function of rule *content*.
+    """
+    if isinstance(obj, dict):
+        d = cast("dict[str, object]", obj)
+        return {k: _canonicalize(v) for k, v in d.items()}
+    if isinstance(obj, list):
+        items = [_canonicalize(v) for v in cast("list[object]", obj)]
+        return sorted(items, key=lambda e: json.dumps(e, sort_keys=True, separators=(",", ":")))
+    return obj
+
+
 def rules_hash(rules: tuple[Rule, ...]) -> str:
     """Canonical, order-independent sha256 over the rule set (sorted-JSON)."""
     encoded = sorted(
-        json.dumps(_RULE_ADAPTER.dump_python(r, mode="json"), sort_keys=True, separators=(",", ":"))
+        json.dumps(
+            _canonicalize(_RULE_ADAPTER.dump_python(r, mode="json")),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         for r in rules
     )
     payload = json.dumps(encoded, sort_keys=True, separators=(",", ":"))

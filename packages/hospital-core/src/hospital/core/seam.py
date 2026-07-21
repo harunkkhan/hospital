@@ -17,8 +17,11 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import model_validator
+
 from hospital.core.entities import FloorLayout, Patient
 from hospital.core.enums import BayStatus, StaffRole
+from hospital.core.errors import SeamViolation
 from hospital.core.events import EventEnvelope
 from hospital.core.ids import BayId, NodeId, PatientId, StaffId, TaskId
 from hospital.core.models import FrozenModel
@@ -123,6 +126,23 @@ class Plan(FrozenModel):
 
     items: tuple[PlanItem, ...]
 
+    @model_validator(mode="after")
+    def _unique_stable_ids(self) -> Plan:
+        """``stable_id`` must be unique across items, else :meth:`diff` is lossy.
+
+        The diff comprehensions key on ``stable_id``; a duplicate would silently
+        collapse (last wins), dropping items from added/removed/changed.
+        """
+        seen: set[str] = set()
+        dupes: set[str] = set()
+        for item in self.items:
+            if item.stable_id in seen:
+                dupes.add(item.stable_id)
+            seen.add(item.stable_id)
+        if dupes:
+            raise ValueError(f"duplicate stable_id(s) in plan: {sorted(dupes)}")
+        return self
+
     def diff(self, other: Plan) -> PlanDiff:
         """Delta from ``other`` (previous) to ``self`` (new), keyed by ``stable_id``."""
         new_by_id = {item.stable_id: item for item in self.items}
@@ -150,6 +170,19 @@ class DecisionResponse(FrozenModel):
     mode: Literal["keep", "replace"]
     plan: Plan | None = None
     wake: WakeDirective
+
+    @model_validator(mode="after")
+    def _mode_matches_plan(self) -> DecisionResponse:
+        """``mode`` and ``plan`` must agree, or the seam contract is broken.
+
+        ``replace`` requires a concrete plan to apply; ``keep`` carries none (the
+        engine retains the current plan). A mismatch is a malformed response.
+        """
+        if self.mode == "replace" and self.plan is None:
+            raise SeamViolation("DecisionResponse mode='replace' requires a plan")
+        if self.mode == "keep" and self.plan is not None:
+            raise SeamViolation("DecisionResponse mode='keep' must not carry a plan")
+        return self
 
 
 __all__ = [

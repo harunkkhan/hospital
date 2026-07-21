@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
-from hospital.core import BayId, PatientId, Plan, PlanItem, StaffId, TaskId
+import pytest
+from pydantic import ValidationError
+
+from hospital.core import (
+    BayId,
+    DecisionResponse,
+    PatientId,
+    Plan,
+    PlanItem,
+    SeamViolation,
+    StaffId,
+    TaskId,
+    WakeDirective,
+)
 
 
 def _assign(stable_id: str, patient: str, bay: str) -> PlanItem:
@@ -46,3 +59,40 @@ def test_identical_plans_have_empty_diff() -> None:
     assert diff.added == ()
     assert diff.removed == ()
     assert diff.changed == ()
+
+
+# --- Finding #9: duplicate stable_id makes diff lossy -> rejected at construction ---
+
+
+def test_duplicate_stable_id_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Plan(items=(_assign("dup", "p1", "bay-1"), _assign("dup", "p2", "bay-2")))
+
+
+def test_unique_stable_ids_accepted() -> None:
+    plan = Plan(items=(_assign("a", "p1", "bay-1"), _assign("b", "p2", "bay-2")))
+    assert len(plan.items) == 2
+
+
+# --- Finding #11: DecisionResponse mode and plan must agree ---
+
+
+def _plan() -> Plan:
+    return Plan(items=(_assign("a", "p1", "bay-1"),))
+
+
+def test_replace_without_plan_is_seam_violation() -> None:
+    with pytest.raises(SeamViolation):
+        DecisionResponse(mode="replace", plan=None, wake=WakeDirective(kind="keep"))
+
+
+def test_keep_with_plan_is_seam_violation() -> None:
+    with pytest.raises(SeamViolation):
+        DecisionResponse(mode="keep", plan=_plan(), wake=WakeDirective(kind="keep"))
+
+
+def test_well_formed_decision_responses_accepted() -> None:
+    keep = DecisionResponse(mode="keep", plan=None, wake=WakeDirective(kind="keep"))
+    replace = DecisionResponse(mode="replace", plan=_plan(), wake=WakeDirective(kind="keep"))
+    assert keep.plan is None
+    assert replace.plan is not None
