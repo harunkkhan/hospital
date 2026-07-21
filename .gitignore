@@ -1,0 +1,28 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.mypy_cache/
+build/
+dist/
+htmlcov/
+.coverage
+.coverage.*
+
+# --- Node / bun (frontend) ---
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+*.tsbuildinfo
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# NOTE: uv.lock and bun.lockb ARE committed (CI runs --locked / --frozen-lockfile).
