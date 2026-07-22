@@ -19,6 +19,9 @@ apps/web/dist/
 apps/web/.vite/
 *.tsbuildinfo
 
+# --- Agent worktrees (transient; nested inside the repo, must not be linted/searched) ---
+.claude/
+
 # --- OS / editor ---
 .DS_Store
 *.swp
