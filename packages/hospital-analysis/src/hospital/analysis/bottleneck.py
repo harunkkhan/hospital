@@ -153,10 +153,14 @@ def detect_bottleneck(
 
     def _sort_key(rw: ResourceWait) -> tuple[float, str]:
         share = rw.share_of_cycle
-        return (-share if not math.isnan(share) else float("-inf"), rw.resource)
+        # NaN shares (no observed patient-time) rank LAST in the table.
+        return (-share if not math.isnan(share) else float("inf"), rw.resource)
 
     resources.sort(key=_sort_key)
-    binding = resources[0].resource if resources else ""
+    # The binding constraint must be backed by a finite share: with no
+    # patient-time in the window every share is NaN and there is NO binding
+    # constraint (empty), not an arbitrary alphabetically-first resource.
+    binding = next((rw.resource for rw in resources if not math.isnan(rw.share_of_cycle)), "")
 
     util = utilization_report(log, roster, window=window, warmup=warmup, index=idx)
     loads_by_role: dict[str, list[float]] = {}

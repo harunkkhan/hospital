@@ -7,7 +7,7 @@ import math
 from _analysis_fixtures import build_bottleneck_log, tiny_layout, tiny_roster
 
 from hospital.analysis.bottleneck import detect_bottleneck, gini
-from hospital.core import hours
+from hospital.core import EventLog, hours
 
 
 def test_engineered_queue_zone_is_binding_and_tops_resources() -> None:
@@ -38,6 +38,16 @@ def test_share_of_cycle_in_unit_interval() -> None:
     for r in report.resources:
         if not math.isnan(r.share_of_cycle):
             assert 0.0 <= r.share_of_cycle <= 1.0
+
+
+def test_no_patient_time_means_no_binding_constraint() -> None:
+    """Regression (finding #6): with no patient-time in the window every
+    share_of_cycle is NaN — there is no binding constraint, and reporting the
+    alphabetically-first resource as binding would be an arbitrary verdict."""
+    report = detect_bottleneck(EventLog(), tiny_layout(), tiny_roster(), warmup=hours(0))
+    assert report.binding == ""
+    assert report.total_cycle_s == 0.0
+    assert all(math.isnan(r.share_of_cycle) for r in report.resources)
 
 
 def test_gini_zero_for_equal_loads() -> None:

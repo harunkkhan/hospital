@@ -117,7 +117,9 @@ def _avg_waits(decomps: Sequence[WaitDecomposition]) -> WaitDecomposition:
 
 def _bottleneck_sort_key(rw: ResourceWait) -> tuple[float, str]:
     share = rw.share_of_cycle
-    return (-share if not math.isnan(share) else float("-inf"), rw.resource)
+    # NaN shares (no observed patient-time in any rep) rank LAST, as in
+    # bottleneck.detect_bottleneck.
+    return (-share if not math.isnan(share) else float("inf"), rw.resource)
 
 
 def _avg_bottleneck(reports: Sequence[BottleneckReport]) -> BottleneckReport:
@@ -145,7 +147,8 @@ def _avg_bottleneck(reports: Sequence[BottleneckReport]) -> BottleneckReport:
             )
         )
     resources.sort(key=_bottleneck_sort_key)
-    binding = resources[0].resource if resources else ""
+    # As in detect_bottleneck: no finite share -> no binding constraint.
+    binding = next((rw.resource for rw in resources if not math.isnan(rw.share_of_cycle)), "")
     total_cycle_s = _nanmean([r.total_cycle_s for r in reports])
 
     role_names: set[str] = set()

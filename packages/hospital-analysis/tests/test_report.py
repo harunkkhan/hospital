@@ -10,7 +10,7 @@ from _analysis_fixtures import build_sample_log, tiny_layout, tiny_roster
 from hospital.analysis.compare import paired_bootstrap
 from hospital.analysis.fold import compute_kpis
 from hospital.analysis.report import build_metrics, fold_arm, write_metrics
-from hospital.core import KPI_KEYS, EsiAcuity, hours
+from hospital.core import KPI_KEYS, EsiAcuity, EventLog, hours
 
 
 def test_fold_arm_and_build_metrics_round_trip(tmp_path: Path) -> None:
@@ -40,6 +40,14 @@ def test_fold_arm_and_build_metrics_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "metrics.json"
     write_metrics(metrics, path)
     assert path.read_text() == text
+
+
+def test_fold_arm_with_no_patient_time_has_no_binding_constraint() -> None:
+    """Regression (finding #6, rep-averaged path): all-NaN shares across every
+    replication must average to an empty ``binding``, not the alphabetically
+    first resource."""
+    arm = fold_arm([EventLog(), EventLog()], tiny_layout(), tiny_roster(), warmup=hours(0))
+    assert arm.bottleneck.binding == ""
 
 
 def test_metrics_json_serializes_nan_as_null() -> None:
