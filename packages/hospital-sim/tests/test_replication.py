@@ -108,3 +108,25 @@ def test_default_rules_cover_every_acuity() -> None:
     kernel = compile_rules(default_rules())
     for esi in EsiAcuity:
         assert kernel.zone_types_for(esi)  # nobody is placeable-nowhere by default
+
+
+def test_er_floor_reference_week_end_to_end() -> None:
+    """The ONE slower end-to-end: the reference 100k-sqft ER, a full baseline week."""
+    from pathlib import Path
+
+    from hospital.data.scenario import load_scenario
+    from hospital.sim.experiment.scorecard import fold_scorecard
+    from hospital.solver import ObjectiveConfig
+
+    scenario = load_scenario(Path(__file__).resolve().parents[3] / "scenarios" / "er_floor.yaml")
+    rep = run_replication(scenario, "baseline", scenario.seed)
+    arrivals, completions = _counts(rep)
+    assert arrivals > 500  # a real week of load
+    assert completions > 0
+
+    # the log folds through the one KPI fold + the one objective without error,
+    # and conservation holds at the week boundary
+    card = fold_scorecard(rep, ObjectiveConfig())
+    assert card.completions + card.wip == arrivals
+    assert card.completions > 0.8 * arrivals  # the baseline floor actually flows
+    assert card.objective_total > 0
