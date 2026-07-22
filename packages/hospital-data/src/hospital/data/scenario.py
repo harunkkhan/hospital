@@ -17,10 +17,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal, cast
+from types import MappingProxyType
+from typing import Annotated, Literal, cast
 
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 
 from hospital.core import (
     Duration,
@@ -39,6 +40,17 @@ from hospital.core import (
 )
 
 _MIX_TOLERANCE = 1e-6
+
+# Every rate, profile multiplier, and categorical weight must be finite and
+# non-negative *at load* — an ``.inf`` arrival rate would make the Poisson
+# sampler's exponential scale zero and spin ``generate_workload`` forever, and
+# a NaN weight would poison a mix's total silently.
+_Weight = Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+# A probability proper: finite and within [0, 1].
+_Probability = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+# A staffing headcount: ``range(-n)`` is silently empty, so negatives must be
+# rejected at load rather than realizing zero staff.
+_HeadCount = Annotated[int, Field(ge=0)]
 
 _DEFAULT_SKILLS: Mapping[StaffRole, frozenset[str]] = {
     StaffRole.PHYSICIAN: frozenset({"md"}),
@@ -64,6 +76,12 @@ class ZoneQuota(FrozenModel):
     equipment: frozenset[str] = frozenset()
     max_bays_per_station: int = Field(default=12, gt=0)
 
+    @field_serializer("equipment")
+    def _serialize_equipment(self, value: frozenset[str]) -> list[str]:
+        """Emit sorted order — a ``frozenset`` iterates in hash-table order, which
+        varies with ``PYTHONHASHSEED`` and would break byte-stable YAML dumps."""
+        return sorted(value)
+
     @model_validator(mode="after")
     def _check_isolation_subset(self) -> ZoneQuota:
         if self.isolation_bays > self.bays:
@@ -77,7 +95,7 @@ class FacilitySpec(FrozenModel):
     """The ``scale`` argument to ``generate_floor`` — a pure geometry spec."""
 
     target_area_sqft: int = Field(default=100_000, gt=0)
-    aspect_ratio: float = Field(default=1.55, gt=0)
+    aspect_ratio: float = Field(default=1.55, gt=0, allow_inf_nan=False)
     walk_speed_cm_s: int = Field(default=120, gt=0)
     corridor_margin_cm: int = Field(default=600, gt=0)
     room_depth_cm: int = Field(default=420, gt=0)
@@ -96,26 +114,46 @@ class FacilitySpec(FrozenModel):
 class WorkupProfile(FrozenModel):
     """A complaint-keyed profile driving ``distributions.sample_workup``."""
 
-    provider_visits_mean: float = Field(ge=1.0)
-    nurse_visits_mean: float = Field(ge=0.0)
-    imaging_prob: Mapping[ZoneType, float] = {}
-    labs_mean: float = Field(ge=0.0)
-    procedure_prob: float = Field(ge=0.0, le=1.0)
+    provider_visits_mean: float = Field(ge=1.0, allow_inf_nan=False)
+    nurse_visits_mean: float = Field(ge=0.0, allow_inf_nan=False)
+    imaging_prob: Mapping[ZoneType, _Probability] = {}
+    labs_mean: float = Field(ge=0.0, allow_inf_nan=False)
+    procedure_prob: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+    @field_validator("imaging_prob", mode="after")
+    @classmethod
+    def _freeze_imaging_prob(cls, value: Mapping[ZoneType, float]) -> Mapping[ZoneType, float]:
+        """Store a read-only copy — a frozen model must not expose a mutable dict."""
+        return MappingProxyType(dict(value))
+
+    @field_serializer("imaging_prob")
+    def _serialize_imaging_prob(self, value: Mapping[ZoneType, float]) -> dict[ZoneType, float]:
+        return dict(value)
 
 
 class WorkloadSpec(FrozenModel):
     """The one-week arrival + attribute-mix spec consumed by ``generate_workload``."""
 
     horizon: OperatingWeek = Field(default_factory=OperatingWeek.one_week)
-    base_rate_per_hour: float = Field(ge=0.0)
-    hourly_profile: tuple[float, ...]
-    dow_profile: tuple[float, ...]
-    esi_mix: Mapping[EsiAcuity, float]
-    complaint_mix: Mapping[str, float]
-    ambulance_fraction: float = Field(ge=0.0, le=1.0)
-    isolation_fraction: float = Field(ge=0.0, le=1.0)
+    base_rate_per_hour: float = Field(ge=0.0, allow_inf_nan=False)
+    hourly_profile: tuple[_Weight, ...]
+    dow_profile: tuple[_Weight, ...]
+    esi_mix: Mapping[EsiAcuity, _Weight]
+    complaint_mix: Mapping[str, _Weight]
+    ambulance_fraction: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    isolation_fraction: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     workups: Mapping[str, WorkupProfile]
-    esi_workup_scale: Mapping[EsiAcuity, float] = {}
+    esi_workup_scale: Mapping[EsiAcuity, _Weight] = {}
+
+    @field_validator("esi_mix", "complaint_mix", "workups", "esi_workup_scale", mode="after")
+    @classmethod
+    def _freeze_mappings(cls, value: Mapping[object, object]) -> Mapping[object, object]:
+        """Store read-only copies — a frozen model must not expose mutable dicts."""
+        return MappingProxyType(dict(value))
+
+    @field_serializer("esi_mix", "complaint_mix", "workups", "esi_workup_scale")
+    def _serialize_mappings(self, value: Mapping[object, object]) -> dict[object, object]:
+        return dict(value)
 
     @model_validator(mode="after")
     def _check_profiles(self) -> WorkloadSpec:
@@ -123,10 +161,6 @@ class WorkloadSpec(FrozenModel):
             raise ValueError(f"hourly_profile must have length 24 (got {len(self.hourly_profile)})")
         if len(self.dow_profile) != 7:
             raise ValueError(f"dow_profile must have length 7 (got {len(self.dow_profile)})")
-        if any(v < 0.0 for v in self.hourly_profile):
-            raise ValueError("hourly_profile values must be >= 0")
-        if any(v < 0.0 for v in self.dow_profile):
-            raise ValueError("dow_profile values must be >= 0")
         _check_mix_sums_to_one(self.esi_mix, field_name="esi_mix")
         _check_mix_sums_to_one(self.complaint_mix, field_name="complaint_mix")
         unknown = set(self.complaint_mix.keys()) - set(self.workups.keys())
@@ -139,14 +173,34 @@ class ShiftBlock(FrozenModel):
     """A staffing window with its role headcounts (M1: a static input, not solved)."""
 
     window: TimeWindow
-    role_counts: Mapping[StaffRole, int]
+    role_counts: Mapping[StaffRole, _HeadCount]
+
+    @field_validator("role_counts", mode="after")
+    @classmethod
+    def _freeze_role_counts(cls, value: Mapping[StaffRole, int]) -> Mapping[StaffRole, int]:
+        """Store a read-only copy — a frozen model must not expose a mutable dict."""
+        return MappingProxyType(dict(value))
+
+    @field_serializer("role_counts")
+    def _serialize_role_counts(self, value: Mapping[StaffRole, int]) -> dict[StaffRole, int]:
+        return dict(value)
 
 
 class StaffingSpec(FrozenModel):
     """Static staffing input: explicit shift blocks plus a default coverage level."""
 
     blocks: tuple[ShiftBlock, ...] = ()
-    default_counts: Mapping[StaffRole, int] = {}
+    default_counts: Mapping[StaffRole, _HeadCount] = {}
+
+    @field_validator("default_counts", mode="after")
+    @classmethod
+    def _freeze_default_counts(cls, value: Mapping[StaffRole, int]) -> Mapping[StaffRole, int]:
+        """Store a read-only copy — a frozen model must not expose a mutable dict."""
+        return MappingProxyType(dict(value))
+
+    @field_serializer("default_counts")
+    def _serialize_default_counts(self, value: Mapping[StaffRole, int]) -> dict[StaffRole, int]:
+        return dict(value)
 
 
 class DisruptionEvent(FrozenModel):
@@ -155,7 +209,9 @@ class DisruptionEvent(FrozenModel):
     kind: Literal["surge", "staff_absence", "zone_closure", "imaging_outage"]
     at: SimTime
     duration: Duration
-    magnitude: float | None = None
+    # A surge λ-multiplier is a rate: it must be finite (an ``.inf`` magnitude
+    # would spin the surge sampler forever, exactly like an infinite base rate).
+    magnitude: float | None = Field(default=None, allow_inf_nan=False)
     target: str | None = None
 
 
