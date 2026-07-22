@@ -1,0 +1,336 @@
+"""CP-SAT bay/zone assignment — the exact placement backend (doc 03 §4.3, PLAN §5.1).
+
+``x[p,b] ∈ {0,1}`` minimizes a linear restriction of ``weighted_total`` plus an
+unplaced-wait penalty; warm-started, time-capped, and **self-validated** before
+return (doc 00 §5 rule 5). Key disciplines:
+
+* ``compat[p,b]`` is evaluated by the *same* rule predicates
+  :func:`hospital.core.validation.validate` uses, so the model and the validator
+  cannot drift; only compatible vars are created (``(C3)`` by omission).
+* The model is **always feasible** — the all-unplaced solution costs
+  ``Σ_p wait_penalty[p]``. Scarcity surfaces as unplaced patients (penalized,
+  ranked by ``u·waited``), never a crash. ``unplaced_wait_penalty`` is a big-M so
+  the objective is effectively lexicographic: place-first, then minimize travel.
+* Determinism: fixed ``random_seed``, ``num_search_workers = 1``, and sorted
+  model-build order → byte-reproducible solves for CRN / golden traces.
+
+``ortools`` is imported lazily *inside* ``solve`` so importing this module (e.g.
+for the shared helpers the heuristic reuses) never pulls OR-Tools.
+
+Formulation note (deviation from the doc's strict ``wait_penalty · waited``): the
+unplaced penalty uses ``wait_penalty · (waited_seconds + 1)``. The ``+1`` second
+base guarantees the placement reward is strictly positive even for a just-arrived
+patient (``waited == 0``), so the lexicographic place-first property holds for
+*every* patient rather than silently declining to place a zero-wait one.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING, ClassVar
+
+from hospital.core import (
+    MICROS_PER_SEC,
+    Bay,
+    BayId,
+    BayStatus,
+    CompiledRules,
+    DecisionInput,
+    Duration,
+    InfeasiblePlan,
+    NodeId,
+    Patient,
+    PatientId,
+    Plan,
+    PlanItem,
+    ValidationContext,
+    ZoneType,
+    seconds,
+    validate,
+)
+from hospital.solver.objective import AssignmentCoeffs, ObjectiveConfig, assignment_coeffs
+from hospital.solver.protocol import RoutingOracle, SolveResult, SolverStatus
+
+if TYPE_CHECKING:
+    from collections.abc import Container
+
+    from hospital.core import FloorLayout, ZoneId
+
+# Stages of ``WaitingPatient.stage`` that mean "awaiting a bay". The exact stage
+# vocabulary is not fixed in ``core.seam`` yet; this is the placement convention.
+NEEDS_BAY_STAGES: frozenset[str] = frozenset({"needs_bay", "awaiting_bay", "waiting_for_bay"})
+
+# Default real-time solve budget (doc 03 §4.3 example); small so tests stay fast.
+DEFAULT_TIME_CAP: Duration = seconds(0.05)
+
+_CandidateSet = tuple[list[Patient], list[Bay], set[tuple[PatientId, BayId]]]
+
+
+def _needs_bay(stage: str) -> bool:
+    return stage in NEEDS_BAY_STAGES
+
+
+def compat_pair(patient: Patient, bay: Bay, rules: CompiledRules) -> bool:
+    """``compat[p,b]`` — the same predicates the validator applies (doc 03 §4.3)."""
+    if bay.zone_type not in rules.zone_types_for(patient.esi):
+        return False
+    if rules.equipment_for(patient.esi) - bay.equipment:
+        return False
+    return not (
+        rules.isolation_enforced and patient.isolation_required and not bay.isolation_capable
+    )
+
+
+def candidates(di: DecisionInput, rules: CompiledRules) -> _CandidateSet:
+    """Patients needing a bay, FREE bays, and the sparse compatible ``(p,b)`` set.
+
+    Both lists are sorted by id so the CP-SAT model build is byte-stable.
+    """
+    static_bays = {b.id: b for b in di.layout.bays}
+    patients = sorted(
+        (wp.patient for wp in di.waiting if _needs_bay(wp.stage)), key=lambda p: p.id.root
+    )
+    free_bays = sorted(
+        (
+            static_bays[bs.bay]
+            for bs in di.bays
+            if bs.status == BayStatus.FREE and bs.bay in static_bays
+        ),
+        key=lambda b: b.id.root,
+    )
+    compat = {(p.id, b.id) for p in patients for b in free_bays if compat_pair(p, b, rules)}
+    return patients, free_bays, compat
+
+
+def _seconds(duration: Duration) -> int:
+    """Floor a µs :class:`Duration` to whole seconds (doc 03 §4.1)."""
+    return duration.root // MICROS_PER_SEC
+
+
+def _nearest(src: NodeId, nodes: tuple[NodeId, ...], oracle: RoutingOracle) -> NodeId | None:
+    """The node in ``nodes`` minimizing oracle distance from ``src`` (or ``None``)."""
+    if not nodes:
+        return None
+    return min(nodes, key=lambda n: oracle.distance(src, n).root)
+
+
+def travel_weight(
+    patient: Patient, bay: Bay, oracle: RoutingOracle, layout: FloorLayout, coeffs: AssignmentCoeffs
+) -> int:
+    """``w[p,b]`` — expected downstream travel via the oracle (doc 03 §4.3).
+
+    ``caregiver + imaging + lab`` round-trip seconds, scaled by the acuity travel
+    weight. This is a placement *proxy*, not a physics prediction: the ``2*``
+    round-trip over-counts caregiver travel (dispatch batching amortizes returns),
+    which only *biases* which valid bay is chosen — it never makes a plan infeasible.
+    """
+
+    def round_trip(a: NodeId, b: NodeId) -> int:
+        return _seconds(oracle.distance(a, b)) + _seconds(oracle.distance(b, a))
+
+    node = bay.node
+    caregiver = (patient.workup.provider_visits + patient.workup.nurse_visits) * round_trip(
+        bay.serving_station, node
+    )
+    imaging = 0
+    for _modality in patient.workup.imaging:
+        target = _nearest(node, layout.imaging_nodes, oracle)
+        if target is not None:
+            imaging += round_trip(node, target)
+    lab = 0
+    if patient.workup.labs:
+        target = _nearest(node, layout.lab_nodes, oracle)
+        if target is not None:
+            lab += patient.workup.labs * round_trip(node, target)
+    return coeffs.travel_weight * (caregiver + imaging + lab)
+
+
+def occupied_by_zone_type(di: DecisionInput) -> dict[ZoneType, int]:
+    """Count of currently-OCCUPIED bays per zone type (matches the validator's count)."""
+    static_bays = {b.id: b for b in di.layout.bays}
+    counts: dict[ZoneType, int] = {}
+    for bs in di.bays:
+        bay = static_bays.get(bs.bay)
+        if bay is not None and bs.status == BayStatus.OCCUPIED:
+            counts[bay.zone_type] = counts.get(bay.zone_type, 0) + 1
+    return counts
+
+
+def zone_remaining(di: DecisionInput) -> dict[ZoneId, int]:
+    """Per-``ZoneId`` remaining ``= Zone.capacity - |OCCUPIED or CLEANING|`` (doc 03 §4.3).
+
+    Never negative: an already-over-capacity zone clamps to ``0`` rather than
+    making the model infeasible.
+    """
+    static_bays = {b.id: b for b in di.layout.bays}
+    used: dict[ZoneId, int] = {}
+    for bs in di.bays:
+        bay = static_bays.get(bs.bay)
+        if bay is not None and bs.status in (BayStatus.OCCUPIED, BayStatus.CLEANING):
+            used[bay.zone] = used.get(bay.zone, 0) + 1
+    return {zone.id: max(0, zone.capacity - used.get(zone.id, 0)) for zone in di.layout.zones}
+
+
+def _waited_seconds(di: DecisionInput) -> dict[PatientId, int]:
+    return {wp.patient.id: _seconds(wp.waited) for wp in di.waiting}
+
+
+class CpSatPlacement:
+    """The CP-SAT bay/zone assignment backend (implements ``Solver``)."""
+
+    name: ClassVar[str] = "placement_cpsat"
+    version: ClassVar[str] = "1.0.0"
+
+    def solve(
+        self,
+        di: DecisionInput,
+        oracle: RoutingOracle,
+        *,
+        config: ObjectiveConfig,
+        rules: CompiledRules,
+        time_cap: Duration | None = None,
+        warm_start: Plan | None = None,
+    ) -> SolveResult:
+        from ortools.sat.python import cp_model
+
+        started_ns = time.perf_counter_ns()
+        patients, bays, compat = candidates(di, rules)
+        layout = di.layout
+        patient_by_id = {p.id: p for p in patients}
+        bay_by_id = {b.id: b for b in bays}
+        waited = _waited_seconds(di)
+        coeffs = {esi: assignment_coeffs(config, esi) for esi in {p.esi for p in patients}}
+
+        model = cp_model.CpModel()
+        x: dict[tuple[PatientId, BayId], cp_model.IntVar] = {
+            (p.id, b.id): model.new_bool_var(f"x_{p.id.root}_{b.id.root}")
+            for p in patients
+            for b in bays
+            if (p.id, b.id) in compat
+        }
+        weight = {
+            (pid, bid): travel_weight(
+                patient_by_id[pid], bay_by_id[bid], oracle, layout, coeffs[patient_by_id[pid].esi]
+            )
+            for (pid, bid) in x
+        }
+        wait_penalty = {
+            p.id: coeffs[p.esi].wait_penalty * (waited.get(p.id, 0) + 1) for p in patients
+        }
+
+        # Objective: Σ w[p,b]·x + Σ wait_penalty[p]·(1 - Σ_b x[p,b]).
+        objective: list[cp_model.LinearExprT] = [weight[k] * x[k] for k in x]
+        for p in patients:
+            placed = [x[(p.id, b.id)] for b in bays if (p.id, b.id) in x]
+            objective.append(wait_penalty[p.id])
+            objective.extend(-wait_penalty[p.id] * var for var in placed)
+        model.minimize(sum(objective))
+
+        # (C1) each patient at most one bay.
+        for p in patients:
+            vars_p = [x[(p.id, b.id)] for b in bays if (p.id, b.id) in x]
+            if vars_p:
+                model.add(sum(vars_p) <= 1)
+        # (C2) each bay at most one patient.
+        for b in bays:
+            vars_b = [x[(p.id, b.id)] for p in patients if (p.id, b.id) in x]
+            if vars_b:
+                model.add(sum(vars_b) <= 1)
+        # (C4a) per-zone-type rule capacity (matches the validator's OCCUPIED count).
+        occupied_zt = occupied_by_zone_type(di)
+        for zone_type in {b.zone_type for b in bays}:
+            cap = rules.capacity_for(zone_type)
+            if cap is None:
+                continue
+            vars_zt = [
+                x[(p.id, b.id)] for (p, b) in _pairs(patients, bays, x) if b.zone_type == zone_type
+            ]
+            if vars_zt:
+                model.add(sum(vars_zt) <= max(0, cap - occupied_zt.get(zone_type, 0)))
+        # (C4b) per-zone entity capacity (staffing-limited zones, doc 03 §4.3).
+        remaining = zone_remaining(di)
+        for zone in layout.zones:
+            vars_z = [x[(p.id, b.id)] for (p, b) in _pairs(patients, bays, x) if b.zone == zone.id]
+            if vars_z:
+                model.add(sum(vars_z) <= remaining.get(zone.id, zone.capacity))
+
+        # Warm start: hint the still-valid x[p,b] toward the prior assignment.
+        if warm_start is not None:
+            for item in warm_start.items:
+                if item.kind == "assign_bay" and item.patient is not None and item.bay is not None:
+                    key = (item.patient, item.bay)
+                    if key in x:
+                        model.add_hint(x[key], 1)
+
+        solver = cp_model.CpSolver()
+        cap_dur = time_cap if time_cap is not None else DEFAULT_TIME_CAP
+        solver.parameters.max_time_in_seconds = cap_dur.root / MICROS_PER_SEC
+        solver.parameters.random_seed = 0
+        solver.parameters.num_search_workers = 1
+        status = solver.solve(model)
+
+        assignments: list[tuple[PatientId, BayId]] = []
+        objective_value: int | None
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            assignments = [k for k, var in x.items() if solver.value(var) == 1]
+            objective_value = int(solver.objective_value)
+            solver_status = (
+                SolverStatus.OPTIMAL if status == cp_model.OPTIMAL else SolverStatus.FEASIBLE
+            )
+        else:
+            # The model is always feasible (all-unplaced); this branch is defensive.
+            objective_value = None
+            solver_status = SolverStatus.FEASIBLE
+
+        assignments.sort(key=lambda pb: (pb[0].root, pb[1].root))
+        plan = Plan(
+            items=tuple(
+                PlanItem(stable_id=f"assign:{pid.root}", kind="assign_bay", patient=pid, bay=bid)
+                for pid, bid in assignments
+            )
+        )
+        self_validate(plan, di, rules)
+        elapsed_us = (time.perf_counter_ns() - started_ns) // 1000
+        return SolveResult(
+            plan=plan,
+            status=solver_status,
+            objective_value=objective_value,
+            solve_wall_us=elapsed_us,
+            backend=self.name,
+        )
+
+
+def _pairs(
+    patients: list[Patient],
+    bays: list[Bay],
+    keys: Container[tuple[PatientId, BayId]],
+) -> list[tuple[Patient, Bay]]:
+    """The ``(patient, bay)`` pairs that have a decision variable (compatible only)."""
+    return [(p, b) for p in patients for b in bays if (p.id, b.id) in keys]
+
+
+def self_validate(plan: Plan, di: DecisionInput, rules: CompiledRules) -> None:
+    """Independent cross-check (doc 00 §5 rule 5) — never repair, raise instead."""
+    ctx = ValidationContext(
+        layout=di.layout,
+        bays=di.bays,
+        staff=di.staff,
+        rules=rules,
+        patients=tuple(wp.patient for wp in di.waiting),
+    )
+    violations = validate(plan, ctx)
+    if violations:
+        raise InfeasiblePlan(violations)
+
+
+__all__ = [
+    "DEFAULT_TIME_CAP",
+    "NEEDS_BAY_STAGES",
+    "CpSatPlacement",
+    "candidates",
+    "compat_pair",
+    "occupied_by_zone_type",
+    "self_validate",
+    "travel_weight",
+    "zone_remaining",
+]
