@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from _analysis_fixtures import build_sample_log, tiny_layout, tiny_roster
@@ -39,6 +40,32 @@ def test_fold_arm_and_build_metrics_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "metrics.json"
     write_metrics(metrics, path)
     assert path.read_text() == text
+
+
+def test_metrics_json_serializes_nan_as_null() -> None:
+    """Regression (finding #1): empty ESI strata and <2-pair contrasts are NaN
+    in memory (D8) but must serialize as JSON ``null`` — a bare ``NaN`` token
+    makes ``JSON.parse`` reject the whole metrics.json artifact."""
+    layout = tiny_layout()
+    roster = tiny_roster()
+    logs = [build_sample_log()]  # single replication -> n_pairs=1 -> NaN CIs
+    arm = fold_arm(logs, layout, roster, warmup=hours(0))
+    raw = [compute_kpis(log, layout, roster, warmup=hours(0)) for log in logs]
+    comparison = paired_bootstrap(raw, raw, n_boot=20, seed=1)
+    metrics = build_metrics("s", 1, arm, arm, comparison)
+
+    text = metrics.to_json()
+    assert "NaN" not in text
+    assert "Infinity" not in text
+
+    def _reject_constant(name: str) -> float:
+        raise AssertionError(f"non-JSON constant in metrics.json: {name}")
+
+    parsed = json.loads(text, parse_constant=_reject_constant)
+    # A known-empty stratum (no ESI-1 patients in the sample log) is null...
+    assert parsed["arms"]["baseline"]["kpis"]["values"]["los_s_mean_by_esi_1"] is None
+    # ...and so is a <2-pair contrast CI.
+    assert parsed["contrasts"]["completions_per_week"]["ci_lo"] is None
 
 
 def test_acuity_weighted_headline_only_when_weights_passed(tmp_path: Path) -> None:

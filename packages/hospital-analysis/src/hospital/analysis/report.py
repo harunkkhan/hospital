@@ -15,6 +15,7 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 from hospital.analysis._index import build_index
 from hospital.analysis._stats import DEFAULT_WARMUP, DEFAULT_WINDOW
@@ -231,9 +232,28 @@ class Metrics(FrozenModel):
         return _dump_json(self)
 
 
+def _jsonify(value: object) -> object:
+    """Map non-finite floats (NaN/Inf) to ``None`` at the serialization boundary.
+
+    The in-memory NaN convention (D8: empty strata are NaN, never omitted) is
+    untouched — but a bare ``NaN`` token in ``metrics.json`` is not JSON and
+    ``JSON.parse`` rejects the whole file, so NaN/Inf become ``null`` on disk.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        mapping = cast("dict[str, object]", value)
+        return {key: _jsonify(val) for key, val in mapping.items()}
+    if isinstance(value, list):
+        return [_jsonify(val) for val in cast("list[object]", value)]
+    return value
+
+
 def _dump_json(metrics: Metrics) -> str:
-    data = metrics.model_dump(mode="json")
-    return json.dumps(data, sort_keys=True, indent=2) + "\n"
+    data = _jsonify(metrics.model_dump(mode="json"))
+    # allow_nan=False: if a non-finite value ever slips past _jsonify again,
+    # raise loudly rather than emit a file JSON.parse cannot read.
+    return json.dumps(data, sort_keys=True, indent=2, allow_nan=False) + "\n"
 
 
 def fold_arm(
