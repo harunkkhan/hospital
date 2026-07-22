@@ -158,3 +158,23 @@ def test_dump_reload_maps_draws_identically_regardless_of_mapping_order(
     original_week = generate_workload(scenario.workload, RandomStreams(scenario.seed))
     reloaded_week = generate_workload(reloaded.workload, RandomStreams(scenario.seed))
     assert original_week == reloaded_week
+
+
+# Finding 4: a surge overlapping an hour only partially must confine its extra
+# arrivals to [at, at + duration), not spray them across the whole hour.
+def test_surge_arrivals_are_confined_to_the_event_window() -> None:
+    spec = small_workload()
+    at = SimTime(10 * 3_600_000_000 + 1_800_000_000)  # 10:30
+    duration = Duration(600 * 1_000_000)  # 10 minutes
+    disruptions = DisruptionSpec(
+        events=(DisruptionEvent(kind="surge", at=at, duration=duration, magnitude=50.0),)
+    )
+    arrivals = generate_workload(spec, RandomStreams(21), disruptions=disruptions)
+    surge_times = [
+        a.patient.arrival_time.root for a in arrivals if a.patient.id.root.startswith("s")
+    ]
+    # Expected extras ~ 4/hr * 49 * (1/6 hr) ~ 33, so an empty surge would
+    # itself be a failure (and would make the window assertion vacuous).
+    assert surge_times
+    end = at.root + duration.root
+    assert all(at.root <= t < end for t in surge_times)

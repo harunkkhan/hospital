@@ -145,9 +145,17 @@ def _surge_arrivals(
         extra_factor = max(0.0, (ev.magnitude if ev.magnitude is not None else 1.0) - 1.0)
         if extra_factor <= 0.0:
             continue
+        ev_end = ev.at + ev.duration
         for h in _hours_overlapping(spec.horizon, ev.at, ev.duration, num_hours):
             g = streams.substream("workload", "surge", i, h)
-            window = _hour_window(spec.horizon, h)
+            hour = _hour_window(spec.horizon, h)
+            # Sample only the intersection [ev.at, ev.at + ev.duration) ∩ hour —
+            # a surge starting or ending mid-hour must not spill extra arrivals
+            # across the whole overlapping hour.
+            window = TimeWindow(
+                start=SimTime(max(hour.start.root, ev.at.root)),
+                end=SimTime(min(hour.end.root, ev_end.root)),
+            )
             lam = _lambda(spec, h) * extra_factor
             times = sample_poisson_arrivals(g, rate_per_hour=lam, window=window)
             for k, t in enumerate(times):
