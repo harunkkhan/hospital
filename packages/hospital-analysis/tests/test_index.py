@@ -7,12 +7,21 @@ from _analysis_fixtures import (
     NURSE,
     PHYSICIAN,
     build_sample_log,
+    t,
     tiny_layout,
     tiny_roster,
 )
 
 from hospital.analysis._index import build_index
-from hospital.core import BayId, DispositionKind, EsiAcuity, PatientId
+from hospital.core import (
+    BayId,
+    DispositionKind,
+    EsiAcuity,
+    EventLog,
+    PatientId,
+    TriageCompleted,
+    TriageStarted,
+)
 
 
 def test_patient_milestones_reconstructed_correctly() -> None:
@@ -62,6 +71,21 @@ def test_bay_cycle_reconstruction() -> None:
     bay2_cycles = idx.bays[BayId("bay-2")]
     assert len(bay2_cycles) == 1
     assert bay2_cycles[0].clean_start is None  # never cleaned (still WIP)
+
+
+def test_sliced_log_anchors_synthetic_trace_at_first_observed_event() -> None:
+    """Regression (finding #4): a log slice that starts after a patient's
+    ``PatientArrived`` must anchor the synthesized trace at the first event
+    actually observed — anchoring at SimTime(0) fabricates pre-slice waiting
+    time and inflates every LOS/cycle measure."""
+    log = EventLog()
+    patient = PatientId("pre-slice")
+    log.append(TriageStarted(occurred_at=t(5000), patient=patient, staff=NURSE))
+    log.append(TriageCompleted(occurred_at=t(5100), patient=patient, esi=EsiAcuity.ESI3))
+
+    idx = build_index(log, tiny_layout(), tiny_roster())
+    trace = idx.patients[patient]
+    assert trace.arrival.root == 5000 * 1_000_000  # first observed event, not epoch
 
 
 def test_staff_traces_present_for_whole_roster() -> None:

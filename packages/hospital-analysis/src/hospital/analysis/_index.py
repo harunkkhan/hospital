@@ -230,14 +230,16 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
     open_doc: dict[PatientId, list[tuple[SimTime, StaffId]]] = defaultdict(list)
     open_test: dict[tuple[PatientId, Activity], list[SimTime]] = defaultdict(list)
 
-    def patient_of(pid: PatientId) -> _MutablePatient:
+    def patient_of(pid: PatientId, observed_at: SimTime) -> _MutablePatient:
         p = patients.get(pid)
         if p is None:
             # A visit/attribute event for a patient never explicitly "arrived" in
             # this log slice (e.g. arrival before the log window). Synthesize a
-            # trace anchored at this instant so downstream code has a milestone
-            # to branch on rather than crashing on a missing key.
-            p = _MutablePatient(patient=pid, arrival=SimTime(0))
+            # trace anchored at this instant — the first OBSERVED event — so
+            # downstream code has a milestone to branch on rather than crashing
+            # on a missing key. Anchoring at SimTime(0) instead would fabricate
+            # pre-slice waiting time and inflate every LOS/cycle measure.
+            p = _MutablePatient(patient=pid, arrival=observed_at)
             patients[pid] = p
         return p
 
@@ -248,19 +250,19 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
         if isinstance(e, PatientArrived):
             patients[e.patient] = _MutablePatient(patient=e.patient, arrival=t)
         elif isinstance(e, TriageStarted):
-            p = patient_of(e.patient)
+            p = patient_of(e.patient, t)
             p.triage_start = t
             p.triage_staff = e.staff
         elif isinstance(e, TriageCompleted):
-            p = patient_of(e.patient)
+            p = patient_of(e.patient, t)
             p.triage_end = t
             p.esi = e.esi
         elif isinstance(e, BayRequested):
-            p = patient_of(e.patient)
+            p = patient_of(e.patient, t)
             if p.bay_requested_at is None:
                 p.bay_requested_at = t
         elif isinstance(e, BayAssigned):
-            p = patient_of(e.patient)
+            p = patient_of(e.patient, t)
             p.bay = e.bay
             p.bay_ready = t
             current_cycle[e.bay] = _MutableBayCycle(
@@ -274,7 +276,7 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
                 if cyc is not None and cyc.occupant == e.patient:
                     cyc.bay_arrival = t
         elif isinstance(e, ProviderVisitStarted):
-            p = patient_of(e.patient)
+            p = patient_of(e.patient, t)
             if p.provider_start is None:
                 p.provider_start = t
             open_provider[e.patient].append((t, e.staff))
@@ -282,11 +284,11 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
             stack = open_provider[e.patient]
             if stack:
                 start, staff = stack.pop()
-                patient_of(e.patient).provider_intervals.append(
+                patient_of(e.patient, t).provider_intervals.append(
                     ServiceInterval(kind="provider_visit", start=start, end=t, staff=staff)
                 )
         elif isinstance(e, NurseVisitStarted):
-            p = patient_of(e.patient)
+            p = patient_of(e.patient, t)
             if p.nurse_start is None:
                 p.nurse_start = t
             open_nurse[e.patient].append((t, e.staff))
@@ -294,7 +296,7 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
             stack = open_nurse[e.patient]
             if stack:
                 start, staff = stack.pop()
-                patient_of(e.patient).nurse_intervals.append(
+                patient_of(e.patient, t).nurse_intervals.append(
                     ServiceInterval(kind="nurse_visit", start=start, end=t, staff=staff)
                 )
         elif isinstance(e, DocumentationStarted):
@@ -303,7 +305,7 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
             stack = open_doc[e.patient]
             if stack:
                 start, staff = stack.pop()
-                patient_of(e.patient).documentation_intervals.append(
+                patient_of(e.patient, t).documentation_intervals.append(
                     ServiceInterval(kind="documentation", start=start, end=t, staff=staff)
                 )
         elif isinstance(e, TestOrdered):
@@ -312,19 +314,19 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
             stack = open_test[(e.patient, e.activity)]
             if stack:
                 start = stack.pop()
-                patient_of(e.patient).test_intervals.append(
+                patient_of(e.patient, t).test_intervals.append(
                     TestInterval(activity=e.activity, start=start, end=t)
                 )
         elif isinstance(e, DispositionDecided):
-            p = patient_of(e.patient)
+            p = patient_of(e.patient, t)
             p.disposition_time = t
             p.disposition = e.disposition
             if p.bay is not None and (cyc := current_cycle.get(p.bay)) is not None:
                 cyc.disposition_time = t
         elif isinstance(e, DischargeStarted):
-            patient_of(e.patient).discharge_start = t
+            patient_of(e.patient, t).discharge_start = t
         elif isinstance(e, DischargeCompleted):
-            p = patient_of(e.patient)
+            p = patient_of(e.patient, t)
             p.exit = t
             if p.bay is not None and (cyc := current_cycle.get(p.bay)) is not None:
                 cyc.exit = t
