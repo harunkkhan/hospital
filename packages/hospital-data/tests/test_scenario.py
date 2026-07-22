@@ -78,6 +78,37 @@ def test_load_arm_applies_overlay_onto_base(tmp_path: Path) -> None:
     assert arm.seed == base.seed
 
 
+# Finding 13: a list/scalar overlay root must raise, never silently run the
+# baseline in place of the requested arm. Only null/empty-mapping means "no
+# changes".
+def test_load_arm_rejects_non_mapping_overlay_root(tmp_path: Path) -> None:
+    base = small_scenario()
+    base_path = tmp_path / "base.yaml"
+    dump_scenario(base, base_path)
+
+    list_overlay = tmp_path / "list.yaml"
+    list_overlay.write_text("- kind: surge\n")
+    with pytest.raises(ValueError, match="overlay root must be a mapping"):
+        load_arm(base_path, list_overlay)
+
+    scalar_overlay = tmp_path / "scalar.yaml"
+    scalar_overlay.write_text("42\n")
+    with pytest.raises(ValueError, match="overlay root must be a mapping"):
+        load_arm(base_path, scalar_overlay)
+
+    empty_overlay = tmp_path / "empty.yaml"
+    empty_overlay.write_text("")
+    assert load_arm(base_path, empty_overlay) == base
+
+    null_overlay = tmp_path / "null.yaml"
+    null_overlay.write_text("null\n")
+    assert load_arm(base_path, null_overlay) == base
+
+    empty_mapping_overlay = tmp_path / "mapping.yaml"
+    empty_mapping_overlay.write_text("{}\n")
+    assert load_arm(base_path, empty_mapping_overlay) == base
+
+
 def test_hourly_profile_wrong_length_rejected() -> None:
     with pytest.raises(ValidationError):
         small_workload(hourly_profile=tuple([1.0] * 23))
@@ -274,3 +305,27 @@ def test_realize_staff_uses_overlapping_block_over_default() -> None:
     )
     staff = realize_staff(staffing, layout, day_window)
     assert len(staff) == 5
+
+
+# Finding 6: defaults fill in ONLY roles that no overlapping block supplies —
+# a block explicitly scheduling 2 nurses realizes 2, never a higher default.
+def test_realize_staff_defaults_only_fill_roles_absent_from_blocks() -> None:
+    facility = small_facility()
+    layout = generate_floor(facility)
+    day_window = TimeWindow(start=SimTime(0), end=SimTime(12 * 3_600_000_000))
+    staffing = StaffingSpec(
+        blocks=(
+            ShiftBlock(
+                window=TimeWindow(start=SimTime(0), end=SimTime(6 * 3_600_000_000)),
+                role_counts={StaffRole.NURSE: 2},
+            ),
+        ),
+        default_counts={StaffRole.NURSE: 10, StaffRole.TECH: 3},
+    )
+    staff = realize_staff(staffing, layout, day_window)
+    nurses = [m for m in staff if m.role is StaffRole.NURSE]
+    techs = [m for m in staff if m.role is StaffRole.TECH]
+    # The overlapping block supplies nurses, so the default of 10 must not win.
+    assert len(nurses) == 2
+    # No block supplies techs, so the default fills that role in.
+    assert len(techs) == 3

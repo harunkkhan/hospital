@@ -276,13 +276,23 @@ def apply_overlay(base: Scenario, overlay: Mapping[str, object]) -> Scenario:
 
 
 def load_arm(base_path: str | Path, overlay_path: str | Path) -> Scenario:
-    """Load ``base_path`` and apply the overlay YAML at ``overlay_path`` onto it."""
+    """Load ``base_path`` and apply the overlay YAML at ``overlay_path`` onto it.
+
+    Only a ``null`` root (an empty file) or a mapping root is a valid overlay —
+    an empty mapping means "no changes". Any other root type (a list, a scalar)
+    is a malformed arm file and raises rather than silently running the
+    baseline in place of the requested arm.
+    """
     base = load_scenario(base_path)
     raw = yaml.safe_load(Path(overlay_path).read_text())
-    overlay: Mapping[str, object] = (
-        cast("Mapping[str, object]", raw) if isinstance(raw, dict) else {}
-    )
-    return apply_overlay(base, overlay)
+    if raw is None:
+        return base
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"arm overlay root must be a mapping or empty (got {type(raw).__name__} "
+            f"in {overlay_path})"
+        )
+    return apply_overlay(base, cast("Mapping[str, object]", raw))
 
 
 def _windows_overlap(a: TimeWindow, b: TimeWindow) -> bool:
@@ -296,20 +306,24 @@ def realize_staff(
     """Materialize concrete ``StaffMember``s on duty during ``window``.
 
     Role headcounts come from any ``ShiftBlock`` whose window overlaps
-    ``window`` (the max per role across overlapping blocks); a role with no
-    overlapping block falls back to ``default_counts``. Home stations are
-    assigned by deterministic round-robin over ``layout.stations`` — the
-    k-th staff member of a role homes to ``stations[k % len(stations)]``.
-    No randomness: staff placement is construction, not sampling.
+    ``window`` (the max per role across overlapping blocks); ``default_counts``
+    fills in **only** the roles that no overlapping block supplies — a block
+    that explicitly schedules 2 nurses realizes 2 nurses, never a higher
+    default. Home stations are assigned by deterministic round-robin over
+    ``layout.stations`` — the k-th staff member of a role homes to
+    ``stations[k % len(stations)]``. No randomness: staff placement is
+    construction, not sampling.
     """
     if not layout.stations:
         raise ValueError("layout has no stations to home staff to")
 
-    role_counts: dict[StaffRole, int] = dict(spec.default_counts)
+    role_counts: dict[StaffRole, int] = {}
     for block in spec.blocks:
         if _windows_overlap(block.window, window):
             for role, count in block.role_counts.items():
                 role_counts[role] = max(role_counts.get(role, 0), count)
+    for role, count in spec.default_counts.items():
+        role_counts.setdefault(role, count)
 
     stations = layout.stations
     staff: list[StaffMember] = []
