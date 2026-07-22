@@ -171,37 +171,61 @@ def _place_zone_bays(
 def _place_stations(
     builds: tuple[_ZoneBuild, ...], spine: tuple[RouteNode, ...], room_depth_cm: int
 ) -> tuple[tuple[_StationBuild, ...], dict[BayId, NodeId]]:
-    """One station per zone (split when ``bays > max_bays_per_station``), nearest-in-zone."""
+    """One station per zone (split when ``bays > max_bays_per_station``), nearest-in-zone.
+
+    ``max_bays_per_station`` is a hard cap: the zone always gets the full
+    ``ceil(bays / max_bays_per_station)`` stations, and coverage assignment is
+    capacity-limited so no station ever serves more bays than the cap. When a
+    zone needs more stations than it has columns, the second station on a
+    column sits on the *north* stub (``spine_y - stub``) — a distinct
+    coordinate layer, never a coincident node. Two per column always suffices:
+    ``ceil(bays / cap) <= bays <= 2 * col_count`` for ``cap >= 1``.
+    """
     stub = max(1, room_depth_cm // _STATION_STUB_DIVISOR)
     stations: list[_StationBuild] = []
     serving: dict[BayId, NodeId] = {}
     for build in builds:
         if not build.bays:
             continue
-        # Capped at col_count: a station is anchored to a distinct column, and asking
-        # for more stations than columns would force two stations onto one column
-        # (identical coordinates). With num_stations <= col_count this integer
-        # bucketing is strictly increasing, so every station gets a distinct column.
-        num_stations = min(
-            build.col_count, max(1, math.ceil(len(build.bays) / build.max_bays_per_station))
-        )
+        num_stations = max(1, math.ceil(len(build.bays) / build.max_bays_per_station))
         cols = [
             build.col_start + (s * build.col_count) // num_stations for s in range(num_stations)
         ]
         zone_stations: list[_StationBuild] = []
+        stations_on_col: dict[int, int] = {}
         for s, col in enumerate(cols):
             junction = spine[col]
+            occupied = stations_on_col.get(col, 0)
+            if occupied >= 2:  # pragma: no cover - unreachable: bays <= 2 * col_count
+                raise LayoutError(
+                    f"zone {build.zone.id.root} needs more than two stations on one column"
+                )
+            stations_on_col[col] = occupied + 1
+            side_sign = 1 if occupied == 0 else -1
             station_node = RouteNode(
                 id=NodeId(f"station_{build.zone.id.root}_{s:02d}"),
                 label="station",
                 x_cm=junction.x_cm,
-                y_cm=junction.y_cm + stub,
+                y_cm=junction.y_cm + side_sign * stub,
             )
             zone_stations.append(_StationBuild(node=station_node, anchor_col=col))
         stations.extend(zone_stations)
+        # Nearest-in-zone by column, but capacity-limited: a full station passes
+        # the bay to the next-nearest one, so the cap is never silently exceeded.
+        # Total capacity num_stations * cap >= bays by construction.
+        loads = [0] * len(zone_stations)
         for draft in build.bays:
-            nearest = min(range(len(cols)), key=lambda idx: abs(cols[idx] - draft.col))
-            serving[draft.id] = zone_stations[nearest].node.id
+            order = sorted(
+                range(len(cols)),
+                key=lambda idx, col=draft.col: (abs(cols[idx] - col), idx),
+            )
+            chosen = next((idx for idx in order if loads[idx] < build.max_bays_per_station), None)
+            if chosen is None:  # pragma: no cover - unreachable by construction
+                raise LayoutError(
+                    f"zone {build.zone.id.root} has no station capacity left for {draft.id.root}"
+                )
+            loads[chosen] += 1
+            serving[draft.id] = zone_stations[chosen].node.id
     return tuple(stations), serving
 
 

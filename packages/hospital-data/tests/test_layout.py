@@ -132,6 +132,36 @@ def test_every_entrance_reaches_every_bay_and_imaging_and_lab(facility: Facility
         assert path.total.root >= 0
 
 
+# Finding 7: max_bays_per_station is a hard cap. A zone with more required
+# stations than spine columns (2 bays, cap 1 -> 1 column) must still get its
+# full station count — at distinct coordinates — and no station may ever
+# serve more bays than the cap.
+def test_max_bays_per_station_cap_is_honored() -> None:
+    facility = small_facility(
+        zones=(ZoneQuota(zone_type=ZoneType.GENERAL, bays=2, max_bays_per_station=1),),
+    )
+    layout = generate_floor(facility)
+    assert len(layout.stations) == 2
+    served: dict[str, int] = {}
+    for bay in layout.bays:
+        served[bay.serving_station.root] = served.get(bay.serving_station.root, 0) + 1
+    assert all(count <= 1 for count in served.values())
+    # The doubled-up column still yields distinct node coordinates.
+    coords = [(n.x_cm, n.y_cm) for n in layout.graph.nodes]
+    assert len(coords) == len(set(coords))
+
+
+def test_station_coverage_never_exceeds_the_cap_even_with_nearest_ties() -> None:
+    # 6 bays over 3 columns with cap 1 -> 6 stations, each serving exactly one bay.
+    facility = small_facility(
+        zones=(ZoneQuota(zone_type=ZoneType.GENERAL, bays=6, max_bays_per_station=1),),
+    )
+    layout = generate_floor(facility)
+    assert len(layout.stations) == 6
+    served = [bay.serving_station for bay in layout.bays]
+    assert len(served) == len(set(served))
+
+
 def test_malformed_facility_spec_raises_layout_error() -> None:
     # An absurdly tiny footprint with many bays drives the derived pitch to <= 0.
     facility = small_facility(
