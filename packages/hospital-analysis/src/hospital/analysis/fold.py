@@ -52,9 +52,13 @@ def compute_kpis(
 
     values: dict[str, float] = {}
 
-    # 1-2: full-window counts (deliberately NOT clipped to M, doc nuance 5.3).
-    arrivals_by_end = sum(1 for p in patients if p.arrival <= window.end)
-    completions_by_end = sum(1 for p in patients if p.exit is not None and p.exit <= window.end)
+    # 1-2: full-window counts (deliberately NOT clipped to M, doc nuance 5.3),
+    # under the half-open [start, end) convention applied CONSISTENTLY: an
+    # arrival or exit at exactly window.end is outside the week — excluded from
+    # completions_per_week (via window.contains) AND from these counts, so flow
+    # conservation (arrivals == completions + wip) holds at the boundary.
+    arrivals_by_end = sum(1 for p in patients if p.arrival < window.end)
+    completions_by_end = sum(1 for p in patients if p.exit is not None and p.exit < window.end)
     values["completions_per_week"] = float(
         sum(1 for p in patients if p.exit is not None and window.contains(p.exit))
     )

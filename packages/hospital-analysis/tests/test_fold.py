@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import math
 
-from _analysis_fixtures import build_sample_log, tiny_layout, tiny_roster
+from _analysis_fixtures import build_sample_log, t, tiny_layout, tiny_roster
 
 from hospital.analysis.fold import compute_kpis
-from hospital.core import KPI_KEYS, EventLog, hours
+from hospital.core import (
+    KPI_KEYS,
+    DischargeCompleted,
+    EventLog,
+    OperatingWeek,
+    PatientArrived,
+    PatientId,
+    hours,
+)
+from hospital.core.enums import ArrivalMode
 
 
 def test_emits_exactly_kpi_keys() -> None:
@@ -75,6 +84,36 @@ def test_arrivals_equal_completions_plus_wip() -> None:
     v = vec.values
     arrivals = 2.0  # p1 + p2
     assert arrivals == v["completions_per_week"] + v["wip_end_of_week"]
+
+
+def test_exit_at_exactly_window_end_stays_wip() -> None:
+    """Regression (finding #3): the half-open [start, end) horizon applies to
+    the WIP boundary too — a DischargeCompleted at exactly window.end is not a
+    completion (window.contains already excludes it) and the patient must
+    therefore still count as WIP, keeping arrivals == completions + wip."""
+    week = OperatingWeek.one_week()
+    log = EventLog()
+    patient = PatientId("edge")
+    log.append(PatientArrived(occurred_at=t(0), patient=patient, mode=ArrivalMode.WALK_IN))
+    log.append(DischargeCompleted(occurred_at=week.end, patient=patient))
+
+    v = compute_kpis(log, tiny_layout(), tiny_roster(), window=week, warmup=hours(0)).values
+    assert v["completions_per_week"] == 0.0
+    assert v["wip_end_of_week"] == 1.0  # arrivals(1) == completions(0) + wip(1)
+
+
+def test_arrival_at_exactly_window_end_is_outside_the_week() -> None:
+    """Regression (finding #3): an arrival at exactly window.end is outside the
+    half-open week — it must not be counted into WIP."""
+    week = OperatingWeek.one_week()
+    log = EventLog()
+    log.append(
+        PatientArrived(occurred_at=week.end, patient=PatientId("late"), mode=ArrivalMode.WALK_IN)
+    )
+
+    v = compute_kpis(log, tiny_layout(), tiny_roster(), window=week, warmup=hours(0)).values
+    assert v["completions_per_week"] == 0.0
+    assert v["wip_end_of_week"] == 0.0
 
 
 def test_empty_log_all_nan_or_zero_without_raising() -> None:
