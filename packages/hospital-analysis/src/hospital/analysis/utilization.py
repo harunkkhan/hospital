@@ -14,7 +14,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from typing import Final
 
-from hospital.analysis._index import EventIndex, build_index
+from hospital.analysis._index import EventIndex, ServiceInterval, build_index
 from hospital.analysis._stats import (
     DEFAULT_WARMUP,
     DEFAULT_WINDOW,
@@ -31,6 +31,7 @@ from hospital.core import (
     StaffId,
     StaffMember,
     StaffRole,
+    TimeWindow,
 )
 from hospital.core.kpi import STAFF_FRAC_KEYS
 
@@ -90,6 +91,17 @@ class UtilizationReport(FrozenModel):
     util_by_role: Mapping[str, float]  # "provider_util", "nurse_util", ...
 
 
+def _service_seconds(iv: ServiceInterval, m: TimeWindow) -> float:
+    """Clipped seconds of a service interval within ``m``.
+
+    An OPEN interval (``end=None`` — service still in progress at the end of
+    the log) is measured through to the measurement horizon ``m.end``: staff
+    mid-service at a censored run end are working, not idle.
+    """
+    end = iv.end if iv.end is not None else m.end
+    return clip_seconds(iv.start, end, m)
+
+
 def classify_staff_seconds(
     index: EventIndex,
     roster: tuple[StaffMember, ...],
@@ -111,13 +123,13 @@ def classify_staff_seconds(
     for trace in index.patients.values():
         triage_iv = trace.triage_interval
         if triage_iv is not None and triage_iv.staff is not None:
-            direct_care[triage_iv.staff] += clip_seconds(triage_iv.start, triage_iv.end, m)
+            direct_care[triage_iv.staff] += _service_seconds(triage_iv, m)
         for iv in (*trace.provider_intervals, *trace.nurse_intervals):
             if iv.staff is not None:
-                direct_care[iv.staff] += clip_seconds(iv.start, iv.end, m)
+                direct_care[iv.staff] += _service_seconds(iv, m)
         for iv in trace.documentation_intervals:
             if iv.staff is not None:
-                documentation[iv.staff] += clip_seconds(iv.start, iv.end, m)
+                documentation[iv.staff] += _service_seconds(iv, m)
         # NOTE: DischargeStarted/DischargeCompleted carry no `staff` field in
         # the current core.events schema, so discharge paperwork cannot be
         # staff-attributed here; only `Documentation*` feeds documentation_s

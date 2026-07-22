@@ -13,11 +13,11 @@ order.
 Start/complete pairing is a per-``(patient, activity)`` open-stack: push on
 ``*_started``/``*_ordered``, pop on the matching ``*_completed``/``*_resulted``
 (never positional). An unmatched ``*_started`` still open at the end of the log
-is a legitimate WIP service interval and is simply left out of the closed
-interval list (callers clip open work at the horizon where relevant); a
-``*_completed`` with no matching open ``*_started`` is a causally-impossible,
-corrupt log and raises :class:`~hospital.core.errors.ZeroTimeCycle`... no wait
-see module docstring below for the actual guard.
+is a legitimate WIP service interval: it is preserved as an OPEN interval
+(``end=None``) so downstream clips it at the measurement horizon rather than
+mistaking in-progress service for idle time. A ``*_completed`` with no matching
+open ``*_started`` is a causally-impossible, corrupt log and raises
+:class:`~hospital.core.errors.ZeroTimeCycle`.
 """
 
 from __future__ import annotations
@@ -76,11 +76,15 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class ServiceInterval:
-    """A closed ``[start, end]`` service interval, optionally staff-attributed."""
+    """A ``[start, end]`` service interval, optionally staff-attributed.
+
+    ``end is None`` marks a service still OPEN at the end of the log (WIP at
+    the horizon); consumers clip such intervals at the measurement-window end.
+    """
 
     kind: str  # "triage" | "provider_visit" | "nurse_visit" | "documentation"
     start: SimTime
-    end: SimTime
+    end: SimTime | None
     staff: StaffId | None
 
 
@@ -358,6 +362,25 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
     # (patient/bay still mid-cycle at the horizon) — keep it, un-cleaned.
     for cyc in current_cycle.values():
         bay_cycles[cyc.bay].append(cyc.freeze())
+
+    # Likewise, a provider/nurse/documentation service still open at the end of
+    # the log is legitimate WIP service, not idle time: preserve it as an OPEN
+    # interval (end=None) for downstream to clip at the measurement horizon.
+    for pid, open_stack in open_provider.items():
+        for start, staff in open_stack:
+            patients[pid].provider_intervals.append(
+                ServiceInterval(kind="provider_visit", start=start, end=None, staff=staff)
+            )
+    for pid, open_stack in open_nurse.items():
+        for start, staff in open_stack:
+            patients[pid].nurse_intervals.append(
+                ServiceInterval(kind="nurse_visit", start=start, end=None, staff=staff)
+            )
+    for pid, open_stack in open_doc.items():
+        for start, staff in open_stack:
+            patients[pid].documentation_intervals.append(
+                ServiceInterval(kind="documentation", start=start, end=None, staff=staff)
+            )
 
     # ba fallback: if bay-arrival couldn't be resolved from PatientMoved, fall
     # back to the BayAssigned decision instant (slightly overstates occupancy).

@@ -39,7 +39,11 @@ def test_patient_milestones_reconstructed_correctly() -> None:
     assert p2.exit is None  # still WIP
     assert p2.disposition is None
     assert p2.provider_start is not None  # started but not completed
-    assert len(p2.provider_intervals) == 0  # unmatched *_started -> not a closed interval
+    # Regression (finding #2): a *_started still open at the end of the log is
+    # WIP service — preserved as an OPEN interval (end=None), never dropped.
+    assert len(p2.provider_intervals) == 1
+    assert p2.provider_intervals[0].end is None
+    assert p2.provider_intervals[0].start.root == 2300 * 1_000_000
 
 
 def test_bay_cycle_reconstruction() -> None:

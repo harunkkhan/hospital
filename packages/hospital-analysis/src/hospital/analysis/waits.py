@@ -116,7 +116,9 @@ def _tile_patient(p: PatientTrace) -> PatientWaitProfile | None:
 
     workup_service = 0.0
     for iv in (*p.provider_intervals, *p.nurse_intervals):
-        if iv.start >= p.provider_start and iv.end <= p.disposition_time:
+        # iv.end is None = interval still open at the horizon; it cannot fall
+        # inside [pv, dd] of a COMPLETED patient, so it never joins the tiling.
+        if iv.end is not None and iv.start >= p.provider_start and iv.end <= p.disposition_time:
             workup_service += (iv.end - iv.start).to_seconds()
     workup_wait = (p.disposition_time - p.provider_start).to_seconds() - workup_service
     paperwork_or_boarding = (p.exit - p.disposition_time).to_seconds()
