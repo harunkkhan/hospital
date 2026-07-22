@@ -61,11 +61,16 @@ _ESI_MEAN_SCALE: Final[dict[EsiAcuity, float]] = {
     EsiAcuity.ESI5: 0.7,
 }
 
-# Post-service result turnaround (seconds, cv): radiology read / lab analyzer.
+# Post-service result turnaround (seconds, cv): radiology read / lab reporting.
+# This time elapses OFF the machine — holding a resource for it would turn the
+# 2-station lab into the floor's binding constraint at reference load.
 _RESULT_DELAY_MEAN_CV: Final[dict[Activity, tuple[float, float]]] = {
     Activity.IMAGING: (1_500.0, 0.35),
     Activity.LAB: (2_400.0, 0.35),
 }
+
+# How long a lab sample physically occupies an analyzer station (seconds, cv).
+_ANALYZER_MEAN_CV: Final[tuple[float, float]] = (600.0, 0.30)
 
 # 🟡 A5 — the disposition mix per acuity (kind-sorted so the categorical draw is
 # a pure function of content, never of mapping construction order).
@@ -153,7 +158,7 @@ class ServiceTimes:
         return sample_lognormal(g, mean_s, cv)
 
     def result_delay(self, activity: Activity, *, patient: PatientId, index: int = 0) -> Duration:
-        """Turnaround from service end to ``TestResulted`` (imaging read / lab run)."""
+        """Off-machine turnaround from service end to ``TestResulted`` (read/reporting)."""
         row = _RESULT_DELAY_MEAN_CV.get(activity)
         if row is None:
             raise KeyError(f"no result-delay row for {activity.value}")
@@ -161,6 +166,12 @@ class ServiceTimes:
             "world", "result_delay", str(patient), activity.value, int(index)
         )
         mean_s, cv = row
+        return sample_lognormal(g, mean_s, cv)
+
+    def analyzer_time(self, *, patient: PatientId, index: int = 0) -> Duration:
+        """How long one sample holds a lab analyzer station (its own CRN domain)."""
+        g = self._streams.substream("world", "lab_analyzer", str(patient), int(index))
+        mean_s, cv = _ANALYZER_MEAN_CV
         return sample_lognormal(g, mean_s, cv)
 
 

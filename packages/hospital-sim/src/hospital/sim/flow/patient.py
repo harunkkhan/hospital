@@ -315,11 +315,14 @@ def _lab(
     priority: int,
     service_times: ServiceTimes,
 ) -> Generator[simpy.Event, object]:
-    """One lab round: order -> bedside nurse draw -> analyzer queue -> result.
+    """One lab round: order -> bedside draw -> analyzer run -> off-machine result.
 
-    The patient never moves: the *sample* goes to the lab, modeled as an
-    acquire on the analyzer plus the result delay. The draw is genuine nurse
-    direct care (NurseVisit* pair — the schema has no Lab* events).
+    The patient never moves: the *sample* goes to the lab. The analyzer station
+    is held only for the run itself; the reporting/validation tail
+    (``result_delay``) elapses off-machine — holding a station through it would
+    make the small lab the floor's binding constraint by construction. The draw
+    is genuine nurse direct care (NurseVisit* pair — the schema has no Lab*
+    events).
     """
     pid = patient.id
     event_log.append(TestOrdered(occurred_at=executor.now(), patient=pid, activity=Activity.LAB))
@@ -331,11 +334,14 @@ def _lab(
     req = yield from executor.acquire(resource, priority=priority)
     try:
         yield executor.delay(
-            service_times.result_delay(Activity.LAB, patient=pid, index=index),
-            PriorityTier.COMPLETION,
+            service_times.analyzer_time(patient=pid, index=index), PriorityTier.COMPLETION
         )
     finally:
         resource.release(req)
+    yield executor.delay(
+        service_times.result_delay(Activity.LAB, patient=pid, index=index),
+        PriorityTier.COMPLETION,
+    )
     event_log.append(TestResulted(occurred_at=executor.now(), patient=pid, activity=Activity.LAB))
     world.request_decision()
 
