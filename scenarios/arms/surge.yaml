@@ -1,0 +1,7 @@
+disruptions:
+  events:
+  - at: 237600000000
+    duration: 14400000000
+    kind: surge
+    magnitude: 2.5
+    target: null

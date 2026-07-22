@@ -1,0 +1,221 @@
+cost: null
+disruptions:
+  events: []
+facility:
+  aspect_ratio: 1.55
+  corridor_margin_cm: 600
+  imaging_suites: 3
+  lab_stations: 2
+  room_depth_cm: 420
+  target_area_sqft: 100000
+  triage_rooms: 6
+  walk_speed_cm_s: 120
+  zones:
+  - bays: 12
+    equipment: []
+    isolation_bays: 0
+    max_bays_per_station: 12
+    zone_type: fast_track
+  - bays: 20
+    equipment: []
+    isolation_bays: 2
+    max_bays_per_station: 12
+    zone_type: general
+  - bays: 20
+    equipment: []
+    isolation_bays: 2
+    max_bays_per_station: 12
+    zone_type: general
+  - bays: 16
+    equipment: []
+    isolation_bays: 4
+    max_bays_per_station: 12
+    zone_type: observation
+  - bays: 8
+    equipment: []
+    isolation_bays: 8
+    max_bays_per_station: 12
+    zone_type: resus_trauma
+name: er_floor
+rules: []
+seed: 20260721
+staffing:
+  blocks:
+  - role_counts:
+      housekeeping: 3
+      nurse: 14
+      physician: 6
+      porter: 3
+      tech: 6
+    window:
+      end: 68400000000
+      start: 25200000000
+  - role_counts:
+      housekeeping: 3
+      nurse: 14
+      physician: 6
+      porter: 3
+      tech: 6
+    window:
+      end: 154800000000
+      start: 111600000000
+  - role_counts:
+      housekeeping: 3
+      nurse: 14
+      physician: 6
+      porter: 3
+      tech: 6
+    window:
+      end: 241200000000
+      start: 198000000000
+  - role_counts:
+      housekeeping: 3
+      nurse: 14
+      physician: 6
+      porter: 3
+      tech: 6
+    window:
+      end: 327600000000
+      start: 284400000000
+  - role_counts:
+      housekeeping: 3
+      nurse: 14
+      physician: 6
+      porter: 3
+      tech: 6
+    window:
+      end: 414000000000
+      start: 370800000000
+  - role_counts:
+      housekeeping: 3
+      nurse: 14
+      physician: 6
+      porter: 3
+      tech: 6
+    window:
+      end: 500400000000
+      start: 457200000000
+  - role_counts:
+      housekeeping: 3
+      nurse: 14
+      physician: 6
+      porter: 3
+      tech: 6
+    window:
+      end: 586800000000
+      start: 543600000000
+  default_counts:
+    housekeeping: 1
+    nurse: 7
+    physician: 3
+    porter: 1
+    tech: 3
+workload:
+  ambulance_fraction: 0.15
+  base_rate_per_hour: 6.0
+  complaint_mix:
+    abdominal_pain: 0.18
+    chest_pain: 0.16
+    fever: 0.14
+    fracture: 0.12
+    headache: 0.14
+    laceration: 0.16
+    shortness_of_breath: 0.1
+  dow_profile:
+  - 1.0
+  - 0.95
+  - 0.95
+  - 0.98
+  - 1.05
+  - 1.15
+  - 1.1
+  esi_mix:
+    '1': 0.03
+    '2': 0.25
+    '3': 0.45
+    '4': 0.2
+    '5': 0.07
+  esi_workup_scale:
+    '1': 1.6
+    '2': 1.3
+    '3': 1.0
+    '4': 0.8
+    '5': 0.6
+  horizon:
+    end: 604800000000
+    start: 0
+  hourly_profile:
+  - 0.45
+  - 0.35
+  - 0.3
+  - 0.28
+  - 0.3
+  - 0.4
+  - 0.55
+  - 0.75
+  - 0.95
+  - 1.1
+  - 1.2
+  - 1.25
+  - 1.3
+  - 1.3
+  - 1.25
+  - 1.2
+  - 1.25
+  - 1.35
+  - 1.45
+  - 1.4
+  - 1.2
+  - 0.95
+  - 0.75
+  - 0.6
+  isolation_fraction: 0.05
+  workups:
+    abdominal_pain:
+      imaging_prob:
+        imaging: 0.5
+      labs_mean: 1.5
+      nurse_visits_mean: 2.0
+      procedure_prob: 0.05
+      provider_visits_mean: 1.8
+    chest_pain:
+      imaging_prob:
+        imaging: 0.4
+      labs_mean: 2.0
+      nurse_visits_mean: 2.5
+      procedure_prob: 0.05
+      provider_visits_mean: 2.0
+    fever:
+      imaging_prob:
+        imaging: 0.1
+      labs_mean: 1.2
+      nurse_visits_mean: 1.5
+      procedure_prob: 0.02
+      provider_visits_mean: 1.3
+    fracture:
+      imaging_prob:
+        imaging: 0.9
+      labs_mean: 0.1
+      nurse_visits_mean: 1.5
+      procedure_prob: 0.3
+      provider_visits_mean: 1.5
+    headache:
+      imaging_prob:
+        imaging: 0.15
+      labs_mean: 0.3
+      nurse_visits_mean: 1.2
+      procedure_prob: 0.01
+      provider_visits_mean: 1.2
+    laceration:
+      imaging_prob: {}
+      labs_mean: 0.05
+      nurse_visits_mean: 1.2
+      procedure_prob: 0.7
+      provider_visits_mean: 1.2
+    shortness_of_breath:
+      imaging_prob:
+        imaging: 0.45
+      labs_mean: 1.5
+      nurse_visits_mean: 2.5
+      procedure_prob: 0.1
+      provider_visits_mean: 2.0
