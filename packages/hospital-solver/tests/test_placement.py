@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+
+import pytest
 from _solver_fixtures import (
     bay_state,
     decision_input,
@@ -168,3 +171,98 @@ def test_objective_value_matches_brute_force_small_instance() -> None:
     # Must place (place-first) and pick bay-1 (nearer) -> lowest travel objective.
     assert _assignments(result.plan) == {"p3": "bay-1"}
     assert result.objective_value is not None
+
+
+def test_place_first_even_when_travel_exceeds_wait_penalty() -> None:
+    # Regression (review finding 1): with a small unplaced penalty the travel
+    # proxy (360 here) exceeded wait_penalty*(waited+1) (3 here), so the
+    # all-unplaced solution was cheaper and CP-SAT left the free bay idle.
+    # Place-first must hold for ANY config: the placement reward is scaled by
+    # an instance-derived big-B that provably dominates every travel sum.
+    di = decision_input(
+        waiting_patients=(waiting(make_patient("p3", EsiAcuity.ESI3), 0),),
+        bays=(bay_state("bay-1"),),
+    )
+    backend = get_backend("placement_cpsat")
+    oracle = GraphRoutingOracle(di.layout.graph)
+    result = backend.solve(
+        di, oracle, config=default_config(unplaced_wait_penalty=1), rules=demo_compiled()
+    )
+    assert _assignments(result.plan) == {"p3": "bay-1"}
+    assert result.status is SolverStatus.OPTIMAL
+
+
+def test_search_budget_is_deterministic_time_not_wall_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (review finding 5): max_time_in_seconds let OS scheduling pick
+    # the incumbent, so the same DecisionInput could yield different plans
+    # (breaking CRN / byte-identity). The budget must be CP-SAT deterministic
+    # time, with the wall-clock limit left at its infinite default.
+    from ortools.sat.python import cp_model
+
+    captured: list[tuple[float, float]] = []
+    original = cp_model.CpSolver.solve
+
+    def spy(
+        self: cp_model.CpSolver,
+        model: cp_model.CpModel,
+        solution_callback: cp_model.CpSolverSolutionCallback | None = None,
+    ):
+        captured.append(
+            (self.parameters.max_time_in_seconds, self.parameters.max_deterministic_time)
+        )
+        return original(self, model, solution_callback)
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", spy)
+    di = decision_input(waiting_patients=(waiting(make_patient("p3", EsiAcuity.ESI3), 30),))
+    _solve(di, time_cap=seconds(0.02))
+    [(wall, deterministic)] = captured
+    assert math.isinf(wall)  # wall clock no longer truncates the search
+    assert deterministic == pytest.approx(0.02)
+
+
+def test_repeated_capped_solves_are_identical() -> None:
+    # Regression (review finding 5): under a search cap, repeated solves of the
+    # same DecisionInput must return byte-identical plans and objective values.
+    di = decision_input(
+        waiting_patients=(
+            waiting(make_patient("p1", EsiAcuity.ESI1), 60),
+            waiting(make_patient("p2", EsiAcuity.ESI2), 50),
+            waiting(make_patient("p3", EsiAcuity.ESI3), 40),
+            waiting(make_patient("p4", EsiAcuity.ESI3), 30),
+            waiting(make_patient("p5", EsiAcuity.ESI4), 20),
+        )
+    )
+    results = [_solve(di, time_cap=seconds(0.001)) for _ in range(3)]
+    first = results[0]
+    for other in results[1:]:
+        assert other.plan.model_dump_json() == first.plan.model_dump_json()
+        assert other.objective_value == first.objective_value
+        assert other.status == first.status
+
+
+def test_no_incumbent_falls_back_to_deterministic_heuristic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (review finding 8): CP-SAT UNKNOWN (no incumbent under a tiny
+    # budget) was reported as FEASIBLE with objective_value=None, contradicting
+    # the status contract. It must return the greedy backend's plan, labeled
+    # HEURISTIC — never FEASIBLE without an incumbent.
+    from ortools.sat.python import cp_model
+
+    def unknown(
+        self: cp_model.CpSolver,
+        model: cp_model.CpModel,
+        solution_callback: cp_model.CpSolverSolutionCallback | None = None,
+    ):
+        return cp_model.UNKNOWN
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", unknown)
+    di = decision_input(waiting_patients=(waiting(make_patient("p3", EsiAcuity.ESI3), 30),))
+    result = _solve(di)
+    assert result.status is SolverStatus.HEURISTIC
+    assert result.objective_value is None
+    assert result.backend == "placement_greedy"
+    assert _assignments(result.plan) == {"p3": "bay-1"}  # the validated greedy plan
+    assert validate(result.plan, _ctx(di)) == ()

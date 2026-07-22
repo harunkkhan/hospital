@@ -8,20 +8,33 @@ return (doc 00 §5 rule 5). Key disciplines:
   :func:`hospital.core.validation.validate` uses, so the model and the validator
   cannot drift; only compatible vars are created (``(C3)`` by omission).
 * The model is **always feasible** — the all-unplaced solution costs
-  ``Σ_p wait_penalty[p]``. Scarcity surfaces as unplaced patients (penalized,
-  ranked by ``u·waited``), never a crash. ``unplaced_wait_penalty`` is a big-M so
-  the objective is effectively lexicographic: place-first, then minimize travel.
-* Determinism: fixed ``random_seed``, ``num_search_workers = 1``, and sorted
-  model-build order → byte-reproducible solves for CRN / golden traces.
+  ``Σ_p reward[p]``. Scarcity surfaces as unplaced patients (penalized, ranked
+  by ``u·waited``), never a crash. The place-first big-M is **derived from the
+  instance's own cost bounds** (see the formulation note), so the objective is
+  *provably* lexicographic: place-first, then acuity-weighted priority, then
+  minimize travel — for every instance and every config, not just tuned ones.
+* Determinism: fixed ``random_seed``, ``num_search_workers = 1``, sorted
+  model-build order, and a **deterministic-time** search budget (never a
+  wall-clock cap, whose interrupt point depends on OS scheduling) →
+  byte-reproducible solves for CRN / golden traces. If the budget expires with
+  no incumbent, the greedy backend supplies a deterministic ``HEURISTIC``
+  fallback — a result is never labeled ``FEASIBLE`` without an incumbent.
 
 ``ortools`` is imported lazily *inside* ``solve`` so importing this module (e.g.
 for the shared helpers the heuristic reuses) never pulls OR-Tools.
 
-Formulation note (deviation from the doc's strict ``wait_penalty · waited``): the
-unplaced penalty uses ``wait_penalty · (waited_seconds + 1)``. The ``+1`` second
-base guarantees the placement reward is strictly positive even for a just-arrived
-patient (``waited == 0``), so the lexicographic place-first property holds for
-*every* patient rather than silently declining to place a zero-wait one.
+Formulation note — the instance-derived place-first big-M. The unplaced penalty
+is ``reward[p] = (wait_penalty[p]·(waited_s + 1) + 1) · B`` with
+``B = Σ_p max_b w[p,b] + 1``. Since any solution's total travel is at most
+``B - 1 < B``: (1) placing one more patient always improves the objective by at
+least ``reward[p] - w[p,b] ≥ B - (B - 1) = 1``, so capacity is never left idle
+to save travel; (2) whenever two placement sets differ in
+``Σ wait_penalty·(waited+1)`` (integers, so by ≥ 1), the reward gap ``≥ B``
+dominates any travel gap ``< B``, so who gets placed under scarcity follows
+``u(esi)·waited`` exactly; (3) travel only breaks the remaining ties. The
+``+1`` second base keeps a just-arrived patient's *priority* acuity-ranked,
+and the ``+1`` reward base enforces place-first even under a degenerate config
+(``w_time`` or ``unplaced_wait_penalty`` of ``0``).
 """
 
 from __future__ import annotations
@@ -61,6 +74,8 @@ if TYPE_CHECKING:
 NEEDS_BAY_STAGES: frozenset[str] = frozenset({"needs_bay", "awaiting_bay", "waiting_for_bay"})
 
 # Default real-time solve budget (doc 03 §4.3 example); small so tests stay fast.
+# Interpreted as CP-SAT *deterministic time* (reproducible work units calibrated
+# to ~1 s of single-threaded search each), not wall-clock — see ``solve``.
 DEFAULT_TIME_CAP: Duration = seconds(0.05)
 
 _CandidateSet = tuple[list[Patient], list[Bay], set[tuple[PatientId, BayId]]]
@@ -217,13 +232,22 @@ class CpSatPlacement:
         wait_penalty = {
             p.id: coeffs[p.esi].wait_penalty * (waited.get(p.id, 0) + 1) for p in patients
         }
+        # Place-first big-M derived from THIS instance's cost bounds (module
+        # docstring): B strictly exceeds any solution's total travel (each
+        # patient occupies at most one bay, so travel ≤ Σ_p max_b w[p,b]).
+        max_weight_by_patient: dict[PatientId, int] = {}
+        for (pid, _bid), w in weight.items():
+            max_weight_by_patient[pid] = max(w, max_weight_by_patient.get(pid, 0))
+        big_b = sum(max_weight_by_patient.values()) + 1
+        reward = {p.id: (wait_penalty[p.id] + 1) * big_b for p in patients}
 
-        # Objective: Σ w[p,b]·x + Σ wait_penalty[p]·(1 - Σ_b x[p,b]).
+        # Objective: Σ w[p,b]·x + Σ reward[p]·(1 - Σ_b x[p,b]) — lexicographic
+        # place-first, then acuity-weighted priority, then travel.
         objective: list[cp_model.LinearExprT] = [weight[k] * x[k] for k in x]
         for p in patients:
             placed = [x[(p.id, b.id)] for b in bays if (p.id, b.id) in x]
-            objective.append(wait_penalty[p.id])
-            objective.extend(-wait_penalty[p.id] * var for var in placed)
+            objective.append(reward[p.id])
+            objective.extend(-reward[p.id] * var for var in placed)
         model.minimize(sum(objective))
 
         # (C1) each patient at most one bay.
@@ -264,23 +288,38 @@ class CpSatPlacement:
 
         solver = cp_model.CpSolver()
         cap_dur = time_cap if time_cap is not None else DEFAULT_TIME_CAP
-        solver.parameters.max_time_in_seconds = cap_dur.root / MICROS_PER_SEC
+        # Deterministic-time budget, NEVER max_time_in_seconds: a wall-clock cap
+        # lets OS scheduling pick the incumbent, so the same DecisionInput could
+        # yield different plans (breaking CRN / byte-identical golden traces).
+        # Deterministic time is CP-SAT's reproducible work counter, calibrated
+        # to roughly a second of single-threaded search per unit.
+        solver.parameters.max_deterministic_time = cap_dur.root / MICROS_PER_SEC
         solver.parameters.random_seed = 0
         solver.parameters.num_search_workers = 1
         status = solver.solve(model)
 
-        assignments: list[tuple[PatientId, BayId]] = []
-        objective_value: int | None
-        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            assignments = [k for k, var in x.items() if solver.value(var) == 1]
-            objective_value = int(solver.objective_value)
-            solver_status = (
-                SolverStatus.OPTIMAL if status == cp_model.OPTIMAL else SolverStatus.FEASIBLE
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            # No incumbent (UNKNOWN under a tiny budget; INFEASIBLE/MODEL_INVALID
+            # cannot occur — the all-unplaced solution is always feasible — so
+            # those are defensive). Never report FEASIBLE without an incumbent:
+            # delegate to the deterministic greedy backend, labeled honestly.
+            from hospital.solver.heuristic import HeuristicPlacement
+
+            fallback = HeuristicPlacement().solve(di, oracle, config=config, rules=rules)
+            elapsed_us = (time.perf_counter_ns() - started_ns) // 1000
+            return SolveResult(
+                plan=fallback.plan,
+                status=SolverStatus.HEURISTIC,
+                objective_value=None,
+                solve_wall_us=elapsed_us,
+                backend=fallback.backend,
             )
-        else:
-            # The model is always feasible (all-unplaced); this branch is defensive.
-            objective_value = None
-            solver_status = SolverStatus.FEASIBLE
+
+        assignments = [k for k, var in x.items() if solver.value(var) == 1]
+        objective_value: int | None = int(solver.objective_value)
+        solver_status = (
+            SolverStatus.OPTIMAL if status == cp_model.OPTIMAL else SolverStatus.FEASIBLE
+        )
 
         assignments.sort(key=lambda pb: (pb[0].root, pb[1].root))
         plan = Plan(
