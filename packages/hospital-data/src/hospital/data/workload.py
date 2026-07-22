@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import numpy as np
+
 from hospital.core import (
     Duration,
     FrozenModel,
@@ -79,9 +81,14 @@ def _draw_patient(
     mode = sample_arrival_mode(streams.substream(*key_for("mode")), spec.ambulance_fraction)
     isolation = bernoulli(streams.substream(*key_for("isolation")), spec.isolation_fraction)
     esi_scale = spec.esi_workup_scale.get(esi, 1.0)
-    workup = sample_workup(
-        streams.substream(*key_for("workup")), spec.workups[complaint], esi_scale=esi_scale
-    )
+
+    def workup_substream(component: str) -> np.random.Generator:
+        # Each workup component (provider/nurse/imaging_<zone>/labs/procedures)
+        # gets its own content-addressed key, so a profile edit to one
+        # component never shifts another component's draws for this patient.
+        return streams.substream(*key_for(f"workup_{component}"))
+
+    workup = sample_workup(workup_substream, spec.workups[complaint], esi_scale=esi_scale)
     return Patient(
         id=pid,
         arrival_time=t,

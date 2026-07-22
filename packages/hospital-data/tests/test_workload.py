@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
-from _data_fixtures import small_workload
+from _data_fixtures import small_esi_mix, small_scenario, small_workload
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from hospital.core import Duration, RandomStreams, SimTime
-from hospital.data.scenario import DisruptionEvent, DisruptionSpec
+from hospital.data.scenario import (
+    DisruptionEvent,
+    DisruptionSpec,
+    dump_scenario,
+    load_scenario,
+)
 from hospital.data.workload import generate_workload
 
 
@@ -131,3 +137,24 @@ def test_zero_rate_hour_draws_no_arrivals() -> None:
     spec = small_workload(hourly_profile=zeroed)
     arrivals = generate_workload(spec, RandomStreams(1))
     assert arrivals == ()
+
+
+# Finding 2 (headline): dump+reload of an equal scenario must map every draw to
+# the same outcome. The canonical YAML dump sorts mapping keys, so a scenario
+# built with a different insertion order must still realize the identical week.
+def test_dump_reload_maps_draws_identically_regardless_of_mapping_order(
+    tmp_path: Path,
+) -> None:
+    reversed_workload = small_workload(
+        esi_mix=dict(reversed(list(small_esi_mix().items()))),
+        complaint_mix={"laceration": 0.4, "chest_pain": 0.6},
+    )
+    scenario = small_scenario(workload=reversed_workload)
+    path = tmp_path / "reversed.yaml"
+    dump_scenario(scenario, path)
+    reloaded = load_scenario(path)
+    assert reloaded == scenario  # equal content, possibly different key order
+
+    original_week = generate_workload(scenario.workload, RandomStreams(scenario.seed))
+    reloaded_week = generate_workload(reloaded.workload, RandomStreams(scenario.seed))
+    assert original_week == reloaded_week
