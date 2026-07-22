@@ -17,7 +17,11 @@ Deviation note: ``core.seam.TaskSpec`` carries no acuity/urgency field (the doc
 §7 #13 assumption was superseded by core), so task urgency ``u(t)`` is uniform
 here and the assignment cost is ``w_travel · distance`` — still "nearest
 qualified". Staff role/skills are not in ``DecisionInput`` either, so
-``staff_members`` is supplied explicitly.
+``staff_members`` is supplied explicitly. ``assign_staff`` also takes the
+compiled ``rules``: qualification is judged on
+``task.required_skills | rules.skills_for(task.kind)`` — the SAME union
+:func:`hospital.core.validation.validate` applies — so dispatch can never emit
+a plan the one validator rejects.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from typing import TYPE_CHECKING
 
 from hospital.core import (
     MICROS_PER_SEC,
+    CompiledRules,
     DecisionInput,
     NodeId,
     PlanItem,
@@ -51,6 +56,7 @@ def assign_staff(
     oracle: RoutingOracle,
     *,
     config: ObjectiveConfig,
+    rules: CompiledRules,
     tasks: tuple[TaskSpec, ...] | None = None,
     staff_members: tuple[StaffMember, ...] = (),
 ) -> tuple[PlanItem, ...]:
@@ -67,7 +73,10 @@ def assign_staff(
         if member is None:
             continue
         for task in task_list:
-            if member.role == task.required_role and task.required_skills <= member.skills:
+            # The SAME union the validator's SkillRule check applies (rule 5):
+            # per-task skills plus the compiled skills for the task kind.
+            required = task.required_skills | rules.skills_for(task.kind)
+            if member.role == task.required_role and required <= member.skills:
                 dist_s = oracle.distance(ss.at, task.at).root // MICROS_PER_SEC
                 cost[(ss.staff, task.id)] = config.w_travel * dist_s
     if not cost:

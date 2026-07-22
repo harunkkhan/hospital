@@ -4,9 +4,26 @@ from __future__ import annotations
 
 import itertools
 
-from _solver_fixtures import decision_input, default_config, staff_member, staff_state, task
+from _solver_fixtures import (
+    decision_input,
+    default_config,
+    demo_compiled,
+    staff_member,
+    staff_state,
+    task,
+)
 
-from hospital.core import DecisionInput, Duration, NodeId, PlanItem, RoutePath, StaffRole
+from hospital.core import (
+    DecisionInput,
+    Duration,
+    NodeId,
+    Plan,
+    PlanItem,
+    RoutePath,
+    StaffRole,
+    ValidationContext,
+    validate,
+)
 from hospital.solver.dispatch import assign_staff, route_visits
 from hospital.solver.oracle import EMPTY_MASK, GraphRoutingOracle, RouteMask
 
@@ -44,7 +61,12 @@ def test_single_task_nearest_qualified() -> None:
     )
     t = task("t1", "provider_visit", at="b1", role=StaffRole.PHYSICIAN, skills=frozenset({"md"}))
     items = assign_staff(
-        di, _oracle(di), config=default_config(), tasks=(t,), staff_members=members
+        di,
+        _oracle(di),
+        config=default_config(),
+        rules=demo_compiled(),
+        tasks=(t,),
+        staff_members=members,
     )
     assert _matching(items) == {"t1": "s-near"}  # gstat->b1 shorter than b2->b1
 
@@ -55,7 +77,12 @@ def test_unqualified_staff_never_dispatched() -> None:
     # Task needs a physician with md -> the lone nurse cannot take it.
     t = task("t1", "provider_visit", at="b1", role=StaffRole.PHYSICIAN, skills=frozenset({"md"}))
     items = assign_staff(
-        di, _oracle(di), config=default_config(), tasks=(t,), staff_members=members
+        di,
+        _oracle(di),
+        config=default_config(),
+        rules=demo_compiled(),
+        tasks=(t,),
+        staff_members=members,
     )
     assert items == ()
 
@@ -73,7 +100,14 @@ def test_multi_task_assignment_is_optimal() -> None:
         task("tB", "provider_visit", at="b4", role=StaffRole.PHYSICIAN, skills=frozenset({"md"})),
     )
     oracle = _oracle(di)
-    items = assign_staff(di, oracle, config=default_config(), tasks=tasks, staff_members=members)
+    items = assign_staff(
+        di,
+        oracle,
+        config=default_config(),
+        rules=demo_compiled(),
+        tasks=tasks,
+        staff_members=members,
+    )
     matching = _matching(items)
     assert len(matching) == 2  # both tasks covered
 
@@ -113,9 +147,43 @@ def test_assignment_never_strands_a_coverable_task() -> None:
         ),
     )
     items = assign_staff(
-        di, _oracle(di), config=default_config(), tasks=tasks, staff_members=members
+        di,
+        _oracle(di),
+        config=default_config(),
+        rules=demo_compiled(),
+        tasks=tasks,
+        staff_members=members,
     )
     assert _matching(items) == {"t1": "s2", "t2": "s1"}  # both covered, min travel
+
+
+def test_rule_skills_unioned_with_task_skills() -> None:
+    # Regression (review finding 2): qualification used only TaskSpec.required_skills,
+    # while the validator unions rules.skills_for(task.kind) — so dispatch could
+    # emit plans the validator rejects. demo rules require {"md"} for
+    # provider_visit; the task itself asks for nothing, and the NEAREST idle
+    # physician lacks "md". Dispatch must skip them, exactly as validate() would.
+    di = decision_input(staff=(staff_state("s-md", at="b2"), staff_state("s-plain", at="gstat")))
+    members = (
+        staff_member("s-md", StaffRole.PHYSICIAN, skills=frozenset({"md"})),
+        staff_member("s-plain", StaffRole.PHYSICIAN, skills=frozenset()),
+    )
+    t = task("t1", "provider_visit", at="b1", role=StaffRole.PHYSICIAN)  # no explicit skills
+    rules = demo_compiled()
+    items = assign_staff(
+        di, _oracle(di), config=default_config(), rules=rules, tasks=(t,), staff_members=members
+    )
+    assert _matching(items) == {"t1": "s-md"}  # nearer-but-unqualified s-plain skipped
+    # And the emitted plan passes the one validator (the drift this guards against).
+    ctx = ValidationContext(
+        layout=di.layout,
+        bays=di.bays,
+        staff=di.staff,
+        rules=rules,
+        staff_members=members,
+        tasks=(t,),
+    )
+    assert validate(Plan(items=items), ctx) == ()
 
 
 def _brute_open_path(start: NodeId, stops: list[NodeId], oracle: GraphRoutingOracle) -> int:
@@ -193,5 +261,7 @@ def test_every_spatial_cost_from_oracle() -> None:
     members = (staff_member("s1", StaffRole.PHYSICIAN, skills=frozenset({"md"})),)
     t = task("t1", "provider_visit", at="b1", role=StaffRole.PHYSICIAN, skills=frozenset({"md"}))
     spy = SpyOracle(_oracle(di))
-    assign_staff(di, spy, config=default_config(), tasks=(t,), staff_members=members)
+    assign_staff(
+        di, spy, config=default_config(), rules=demo_compiled(), tasks=(t,), staff_members=members
+    )
     assert spy.distance_calls >= 1  # dispatch sourced its cost from the oracle
