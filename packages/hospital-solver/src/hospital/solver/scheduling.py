@@ -6,6 +6,12 @@ they cover the operating week and emits ``kind="staffing"`` plan items. It
 deliberately does **not** import ``data.StaffingSpec`` — that would be a forbidden
 sideways ``solver → data`` import. *You set staffing; we measure.*
 
+Each item **carries its shift ``TimeWindow``** — rosters with different shift
+boundaries must produce different payloads. ``core.seam.PlanItem`` has no time
+fields, so the window rides in the ``order`` payload channel as canonical
+integer-µs strings ``(str(start), str(end))``; :func:`staffing_window` is the
+one decoder, so no consumer parses by hand.
+
 Coverage gaps are *surfaced*, not filled (never-repair applied to inputs): a week
 the supplied windows do not span raises ``ValueError``.
 
@@ -22,6 +28,7 @@ from hospital.core import (
     FrozenModel,
     OperatingWeek,
     PlanItem,
+    SimTime,
     StaffId,
     StaffMember,
     StaffRole,
@@ -66,15 +73,30 @@ def load_roster(
         )
     items: list[PlanItem] = []
     for member in sorted(staff, key=lambda m: m.id.root):
-        for index, _window in enumerate(windows.get(member.id, ())):
+        for index, window in enumerate(windows.get(member.id, ())):
             items.append(
                 PlanItem(
                     stable_id=f"staffing:{member.id.root}:{index}",
                     kind="staffing",
                     staff=member.id,
+                    # The shift window, in the order payload channel (module
+                    # docstring); decode with staffing_window().
+                    order=(str(window.start.root), str(window.end.root)),
                 )
             )
     return tuple(items)
+
+
+def staffing_window(item: PlanItem) -> TimeWindow:
+    """Recover the shift :class:`TimeWindow` a ``staffing`` item carries.
+
+    The single decoder for the ``order``-channel encoding ``load_roster`` emits;
+    a non-staffing item or one without a window payload is a caller error.
+    """
+    if item.kind != "staffing" or item.order is None or len(item.order) != 2:
+        raise ValueError(f"plan item {item.stable_id!r} carries no staffing window")
+    start, end = item.order
+    return TimeWindow(start=SimTime(int(start)), end=SimTime(int(end)))
 
 
 def solve_coverage(
@@ -89,4 +111,4 @@ def solve_coverage(
     )
 
 
-__all__ = ["ShiftAssignment", "load_roster", "solve_coverage"]
+__all__ = ["ShiftAssignment", "load_roster", "solve_coverage", "staffing_window"]

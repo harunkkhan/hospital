@@ -20,7 +20,12 @@ from hospital.core import (
     hours,
     validate,
 )
-from hospital.solver.scheduling import ShiftAssignment, load_roster, solve_coverage
+from hospital.solver.scheduling import (
+    ShiftAssignment,
+    load_roster,
+    solve_coverage,
+    staffing_window,
+)
 
 
 def _week() -> OperatingWeek:
@@ -65,6 +70,27 @@ def test_deterministic_regardless_of_input_order() -> None:
     assert load_roster(staff, windows, _week()) == load_roster(
         tuple(reversed(staff)), reordered, _week()
     )
+
+
+def test_staffing_items_carry_their_shift_windows() -> None:
+    # Regression (review finding 4): the shift TimeWindow was discarded, so
+    # rosters with different shift boundaries produced identical payloads.
+    # Every item must carry its window, recoverable via the one decoder.
+    staff, windows = _roster()
+    items = load_roster(staff, windows, _week())
+    carried = {item.stable_id: staffing_window(item) for item in items}
+    assert carried == {
+        "staffing:md-1:0": _window(0, 84),
+        "staffing:rn-1:0": _window(84, 168),
+        "staffing:rn-1:1": _window(0, 12),
+    }
+    # Different shift boundaries -> different plan payloads.
+    md, rn = staff
+    shifted = {md.id: (_window(0, 96),), rn.id: windows[rn.id]}
+    assert load_roster(staff, shifted, _week()) != items
+    # Decoding a window-less item is a caller error, surfaced loudly.
+    with pytest.raises(ValueError, match="no staffing window"):
+        staffing_window(items[0].model_copy(update={"order": None}))
 
 
 def test_coverage_gap_raises_never_repairs() -> None:
