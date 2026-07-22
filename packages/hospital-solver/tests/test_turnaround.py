@@ -7,13 +7,21 @@ from _solver_fixtures import (
     decision_input,
     default_config,
     demo_compiled,
+    demo_rules,
     make_patient,
     staff_member,
     staff_state,
     waiting,
 )
 
-from hospital.core import BayStatus, DecisionInput, EsiAcuity, StaffRole
+from hospital.core import (
+    BayStatus,
+    DecisionInput,
+    EsiAcuity,
+    SkillRule,
+    StaffRole,
+    compile_rules,
+)
 from hospital.solver.oracle import GraphRoutingOracle
 from hospital.solver.turnaround import prioritize_cleaning
 
@@ -80,6 +88,49 @@ def test_one_housekeeper_per_bay_and_one_bay_per_housekeeper() -> None:
     assert len(bays) == len(set(bays))  # each bay cleaned at most once
     assert len(staff) == len(set(staff))  # each housekeeper assigned at most once
     assert set(bays) == {"bay-1", "bay-3"}
+
+
+def test_housekeeper_without_compiled_cleaning_skills_not_assigned() -> None:
+    # Regression (review finding 6): the candidate filter was role-only,
+    # ignoring rules.skills_for("cleaning") — so a hazmat-requiring rule set
+    # could emit a clean the validator would reject. The NEARER housekeeper
+    # here lacks hazmat; only the qualified one may be assigned.
+    rules = compile_rules(
+        (*demo_rules(), SkillRule(task_kind="cleaning", required_skills=frozenset({"hazmat"})))
+    )
+    di = decision_input(
+        waiting_patients=(waiting(make_patient("p1", EsiAcuity.ESI1), 60),),
+        bays=(bay_state("bay-3", BayStatus.CLEANING),),
+        staff=(staff_state("hk-haz", at="b2"), staff_state("hk-plain", at="gstat")),
+    )
+    plain = staff_member("hk-plain", StaffRole.HOUSEKEEPING)
+    haz = staff_member("hk-haz", StaffRole.HOUSEKEEPING, skills=frozenset({"hazmat"}))
+    items = prioritize_cleaning(
+        di, _oracle(di), config=CONFIG, rules=rules, staff_members=(plain, haz)
+    )
+    assert [
+        (i.staff.root, i.bay.root) for i in items if i.staff is not None and i.bay is not None
+    ] == [("hk-haz", "bay-3")]
+    # An unqualified-only pool cleans nothing (feasible partial, never a breach).
+    alone = prioritize_cleaning(di, _oracle(di), config=CONFIG, rules=rules, staff_members=(plain,))
+    assert alone == ()
+
+
+def test_unblock_demand_counts_only_bay_waiting_stages() -> None:
+    # Regression (review finding 9): value(b) summed ALL waiting patients,
+    # including post-placement stages (waiting for providers/labs/docs) that a
+    # clean does not unblock. A lone ESI-1 waiting for labs is NOT bay demand:
+    # the clean has no net value and no assignment is emitted.
+    di = decision_input(
+        waiting_patients=(waiting(make_patient("p1", EsiAcuity.ESI1), 60, stage="awaiting_labs"),),
+        bays=(bay_state("bay-3", BayStatus.CLEANING),),
+        staff=(staff_state("hk1", at="gstat"),),
+    )
+    members = (staff_member("hk1", StaffRole.HOUSEKEEPING),)
+    items = prioritize_cleaning(
+        di, _oracle(di), config=CONFIG, rules=demo_compiled(), staff_members=members
+    )
+    assert items == ()
 
 
 def test_only_housekeeping_role_assigned() -> None:

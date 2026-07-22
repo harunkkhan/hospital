@@ -12,6 +12,11 @@ critical-patient bay" is priced in the same currency as everything else -- the
 The valuation is myopic (currently-waiting compatible patients only; no arrivals
 lookahead) and ``compat``-coupled — a bay no waiting patient is compatible with
 scores ``0`` and is deprioritized. Acceptable under M1; recomputed every re-solve.
+Only patients actually waiting *for a bay* (``NEEDS_BAY_STAGES``) count as
+demand — a placed patient waiting for a provider/lab/documentation is not
+unblocked by a clean. Housekeeper candidates are filtered against
+``rules.skills_for("cleaning")`` (e.g. hazmat), the same union the validator's
+SkillRule check applies, in addition to the HOUSEKEEPING role.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from hospital.core import (
     StaffState,
 )
 from hospital.solver.objective import ObjectiveConfig, acuity_urgency
-from hospital.solver.placement import compat_pair
+from hospital.solver.placement import NEEDS_BAY_STAGES, compat_pair
 from hospital.solver.protocol import RoutingOracle
 
 
@@ -53,6 +58,9 @@ def prioritize_cleaning(
         key=lambda b: b.id.root,
     )
     members = {m.id: m for m in staff_members}
+    # Qualification = HOUSEKEEPING role AND the compiled cleaning skills (the
+    # same rules.skills_for union the validator applies to a cleaning task).
+    cleaning_skills = rules.skills_for("cleaning")
     housekeepers: list[StaffState] = sorted(
         (
             ss
@@ -61,17 +69,20 @@ def prioritize_cleaning(
             and ss.busy_until is None
             and ss.staff in members
             and members[ss.staff].role == StaffRole.HOUSEKEEPING
+            and cleaning_skills <= members[ss.staff].skills
         ),
         key=lambda ss: ss.staff.root,
     )
     if not dirty or not housekeepers:
         return ()
 
+    # Demand a clean unblocks = patients waiting FOR A BAY only; post-placement
+    # stages (awaiting provider/labs/documentation) are not freed by a clean.
     value = {
         bay.id: sum(
             acuity_urgency(config, wp.patient.esi)
             for wp in di.waiting
-            if compat_pair(wp.patient, bay, rules)
+            if wp.stage in NEEDS_BAY_STAGES and compat_pair(wp.patient, bay, rules)
         )
         for bay in dirty
     }
