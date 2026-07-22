@@ -15,6 +15,18 @@ Two coupled levers:
 comparison — they never enter the integer objective, so they cannot flap a
 golden hash. The ``gamma·boarding_seconds`` term of the doc is omitted: ``DecisionInput``
 carries no boarding clock, so ``value(d)`` is the unblock-demand term alone (M1).
+Only patients waiting *for a bay* (``NEEDS_BAY_STAGES``) count toward the
+unblock value — a placed patient waiting for providers/labs/documentation is
+not freed by a discharge.
+
+Representation note: ``core.seam.PlanItemKind`` has no ``documentation`` kind,
+so documentation items are emitted as ``kind="discharge"`` — but they retain
+their task identity: ``task=TaskSpec.id`` is carried on every item, and the
+``stable_id`` prefix discriminates (``discharge:<task>`` vs
+``documentation:<task>``). A consumer distinguishes paperwork from an actual
+discharge by the prefix, or by resolving ``item.task`` to its ``TaskSpec.kind``
+in ``DecisionInput.pending_tasks``. This is the strongest representation the
+existing core contract allows without a core change (forbidden from here).
 """
 
 from __future__ import annotations
@@ -29,7 +41,7 @@ from hospital.core import (
 )
 from hospital.core.models import FrozenModel
 from hospital.solver.objective import ObjectiveConfig, acuity_urgency
-from hospital.solver.placement import compat_pair
+from hospital.solver.placement import NEEDS_BAY_STAGES, compat_pair
 from hospital.solver.protocol import RoutingOracle
 
 # Above this provider/nurse utilization, documentation is demoted (doc 03 §4.7).
@@ -74,10 +86,12 @@ def prioritize_discharge(
         bay = bay_by_occupant.get(task.patient)
         if bay is None:
             return 0
+        # Only bay-waiting stages count: a discharge frees a BAY, so demand from
+        # post-placement stages (providers/labs/documentation) is not unblocked.
         return sum(
             acuity_urgency(config, wp.patient.esi)
             for wp in di.waiting
-            if compat_pair(wp.patient, bay, rules)
+            if wp.stage in NEEDS_BAY_STAGES and compat_pair(wp.patient, bay, rules)
         )
 
     discharge_tasks = [
@@ -91,18 +105,23 @@ def prioritize_discharge(
             stable_id=f"discharge:{t.id.root}",
             kind="discharge",
             patient=t.patient,
+            task=t.id,
             priority=rank,
         )
         for rank, t in enumerate(ranked)
     ]
 
+    # Documentation keeps its task identity: kind must be "discharge" (no
+    # documentation PlanItemKind in core), but the stable_id prefix and the
+    # carried task id make paperwork distinguishable from an actual discharge.
     doc_band = _DOC_DEMOTE_BAND if load.is_peak() else _DOC_PROMOTE_BAND
     for offset, t in enumerate(sorted(doc_tasks, key=lambda t: t.id.root)):
         items.append(
             PlanItem(
-                stable_id=f"discharge:{t.id.root}",
+                stable_id=f"documentation:{t.id.root}",
                 kind="discharge",
                 patient=t.patient,
+                task=t.id,
                 priority=doc_band + offset,
             )
         )
