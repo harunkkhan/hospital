@@ -102,6 +102,67 @@ class TestConservation:
         assert 0 <= completions <= arrivals
 
 
+def test_rejected_plan_triggers_a_resolve_and_mutates_nothing() -> None:
+    """The tick's reject-then-re-solve path: InfeasiblePlan is caught, state is
+    untouched, and a fresh decision runs against the now-current world."""
+    from dataclasses import dataclass, field
+
+    from _sim_fixtures import build_physics, make_patient, tiny_rules
+
+    from hospital.core import DecisionInput, EsiAcuity, PlanItem
+    from hospital.sim.experiment.replication import (
+        _make_tick,  # pyright: ignore[reportPrivateUsage]
+    )
+    from hospital.sim.policies.factory import make_policies
+    from hospital.sim.policies.protocols import PolicySet
+    from hospital.solver import GraphRoutingOracle, RoutingOracle
+
+    h = build_physics()
+    rules = tiny_rules()
+    oracle = GraphRoutingOracle(h.layout.graph)
+    p = make_patient("p1", esi=EsiAcuity.ESI5)  # ESI5 may not enter resus
+    h.world.register_patient(p)
+    h.world.request_bay(p, stage="triage->bay")
+    resus_bay = next(b.id for b in h.layout.bays if b.zone_type.value == "resus_trauma")
+
+    @dataclass
+    class InfeasibleOncePlacement:
+        calls: list[int] = field(default_factory=list[int])
+
+        def place(self, di: DecisionInput, oracle: RoutingOracle) -> tuple[PlanItem, ...]:
+            self.calls.append(int(di.now.root))
+            if len(self.calls) == 1:  # a stale/buggy first answer
+                return (
+                    PlanItem(stable_id="assign:p1", kind="assign_bay", patient=p.id, bay=resus_bay),
+                )
+            return ()
+
+    placement = InfeasibleOncePlacement()
+    baseline = make_policies("baseline", oracle=oracle, rules=rules, roster=h.roster)
+    policies = PolicySet(
+        placement=placement,
+        sequencing=baseline.sequencing,
+        dispatch=baseline.dispatch,
+        turnaround=baseline.turnaround,
+        discharge=baseline.discharge,
+        staffing=baseline.staffing,
+        origin="baseline",
+    )
+    from hospital.sim.experiment.replication import (
+        _TapEventLog,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    tap = _TapEventLog()
+    h.world.set_decision_hook(_make_tick(h.world, oracle, policies, rules, h.executor, tap))
+    before = h.world.snapshot_bays()
+    h.world.request_decision()
+    h.env.run(until=1)
+
+    assert len(placement.calls) == 2  # rejected once, re-solved same instant
+    assert h.world.snapshot_bays() == before  # nothing was applied
+    assert h.world.waiting_for_bay()  # the patient still waits (honest backlog)
+
+
 def test_default_rules_cover_every_acuity() -> None:
     from hospital.core import EsiAcuity, compile_rules
 
