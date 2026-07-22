@@ -211,10 +211,11 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
     """The one linear pass: ``EventLog`` -> per-patient/bay/staff traces.
 
     Raises :class:`~hospital.core.errors.ZeroTimeCycle` for a causally
-    impossible bay cycle (``BayCleaningCompleted`` before its own
-    ``DispositionDecided``, or a negative cleaning interval) — guards a
-    malformed log at the source rather than letting a negative duration
-    silently poison every downstream sum.
+    impossible pairing: a bay cycle whose ``BayCleaningCompleted`` precedes its
+    own ``DispositionDecided`` (or a negative cleaning interval), and any
+    ``*Completed``/``TestResulted`` with no matching open start — guards a
+    malformed log at the source rather than letting a dropped or negative
+    interval silently poison every downstream sum.
     """
     bay_zone_type: dict[BayId, ZoneType] = {b.id: b.zone_type for b in layout.bays}
     bay_node: dict[BayId, NodeId] = {b.id: b.node for b in layout.bays}
@@ -282,11 +283,17 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
             open_provider[e.patient].append((t, e.staff))
         elif isinstance(e, ProviderVisitCompleted):
             stack = open_provider[e.patient]
-            if stack:
-                start, staff = stack.pop()
-                patient_of(e.patient, t).provider_intervals.append(
-                    ServiceInterval(kind="provider_visit", start=start, end=t, staff=staff)
+            if not stack:
+                # A completion with no open start is causally impossible —
+                # silently dropping it would yield plausible-but-wrong
+                # undercounts in every downstream sum (nuance 5.1).
+                raise ZeroTimeCycle(
+                    f"patient {e.patient}: ProviderVisitCompleted with no open ProviderVisitStarted"
                 )
+            start, staff = stack.pop()
+            patient_of(e.patient, t).provider_intervals.append(
+                ServiceInterval(kind="provider_visit", start=start, end=t, staff=staff)
+            )
         elif isinstance(e, NurseVisitStarted):
             p = patient_of(e.patient, t)
             if p.nurse_start is None:
@@ -294,29 +301,39 @@ def build_index(log: EventLog, layout: FloorLayout, roster: tuple[StaffMember, .
             open_nurse[e.patient].append((t, e.staff))
         elif isinstance(e, NurseVisitCompleted):
             stack = open_nurse[e.patient]
-            if stack:
-                start, staff = stack.pop()
-                patient_of(e.patient, t).nurse_intervals.append(
-                    ServiceInterval(kind="nurse_visit", start=start, end=t, staff=staff)
+            if not stack:
+                raise ZeroTimeCycle(
+                    f"patient {e.patient}: NurseVisitCompleted with no open NurseVisitStarted"
                 )
+            start, staff = stack.pop()
+            patient_of(e.patient, t).nurse_intervals.append(
+                ServiceInterval(kind="nurse_visit", start=start, end=t, staff=staff)
+            )
         elif isinstance(e, DocumentationStarted):
             open_doc[e.patient].append((t, e.staff))
         elif isinstance(e, DocumentationCompleted):
             stack = open_doc[e.patient]
-            if stack:
-                start, staff = stack.pop()
-                patient_of(e.patient, t).documentation_intervals.append(
-                    ServiceInterval(kind="documentation", start=start, end=t, staff=staff)
+            if not stack:
+                raise ZeroTimeCycle(
+                    f"patient {e.patient}: DocumentationCompleted with no open DocumentationStarted"
                 )
+            start, staff = stack.pop()
+            patient_of(e.patient, t).documentation_intervals.append(
+                ServiceInterval(kind="documentation", start=start, end=t, staff=staff)
+            )
         elif isinstance(e, TestOrdered):
             open_test[(e.patient, e.activity)].append(t)
         elif isinstance(e, TestResulted):
             stack = open_test[(e.patient, e.activity)]
-            if stack:
-                start = stack.pop()
-                patient_of(e.patient, t).test_intervals.append(
-                    TestInterval(activity=e.activity, start=start, end=t)
+            if not stack:
+                raise ZeroTimeCycle(
+                    f"patient {e.patient}: TestResulted({e.activity.value}) with no open"
+                    " TestOrdered"
                 )
+            start = stack.pop()
+            patient_of(e.patient, t).test_intervals.append(
+                TestInterval(activity=e.activity, start=start, end=t)
+            )
         elif isinstance(e, DispositionDecided):
             p = patient_of(e.patient, t)
             p.disposition_time = t

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from _analysis_fixtures import (
     HOUSEKEEPER,
     NURSE,
@@ -14,14 +15,23 @@ from _analysis_fixtures import (
 
 from hospital.analysis._index import build_index
 from hospital.core import (
+    Activity,
     BayId,
     DispositionKind,
+    DocumentationCompleted,
     EsiAcuity,
+    Event,
     EventLog,
+    NurseVisitCompleted,
     PatientId,
+    ProviderVisitCompleted,
     TriageCompleted,
     TriageStarted,
+    ZeroTimeCycle,
 )
+
+# Aliased so pytest does not try to collect the "Test*"-named event class.
+from hospital.core import TestResulted as _TestResulted
 
 
 def test_patient_milestones_reconstructed_correctly() -> None:
@@ -71,6 +81,26 @@ def test_bay_cycle_reconstruction() -> None:
     bay2_cycles = idx.bays[BayId("bay-2")]
     assert len(bay2_cycles) == 1
     assert bay2_cycles[0].clean_start is None  # never cleaned (still WIP)
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        ProviderVisitCompleted(occurred_at=t(100), patient=PatientId("ghost"), staff=PHYSICIAN),
+        NurseVisitCompleted(occurred_at=t(100), patient=PatientId("ghost"), staff=NURSE),
+        DocumentationCompleted(occurred_at=t(100), patient=PatientId("ghost"), staff=NURSE),
+        _TestResulted(occurred_at=t(100), patient=PatientId("ghost"), activity=Activity.LAB),
+    ],
+    ids=["provider", "nurse", "documentation", "test"],
+)
+def test_unmatched_completion_raises_malformed_log_error(event: Event) -> None:
+    """Regression (finding #5): a ``*Completed``/``TestResulted`` with no open
+    matching start is a causally-impossible, corrupt log — raised as a typed
+    error, never silently dropped into a plausible-but-wrong undercount."""
+    log = EventLog()
+    log.append(event)
+    with pytest.raises(ZeroTimeCycle):
+        build_index(log, tiny_layout(), tiny_roster())
 
 
 def test_sliced_log_anchors_synthetic_trace_at_first_observed_event() -> None:
