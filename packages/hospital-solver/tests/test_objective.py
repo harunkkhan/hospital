@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
 from _solver_fixtures import default_config
+from pydantic import ValidationError
 
 from hospital.core import EsiAcuity
 from hospital.solver.objective import (
@@ -86,3 +88,25 @@ def test_config_hash_is_hex_sha256() -> None:
     digest = config_hash(default_config())
     assert len(digest) == 64
     assert all(c in "0123456789abcdef" for c in digest)
+
+
+def test_config_is_hashable_with_immutable_urgency_pairs() -> None:
+    # Regression (review finding 7): acuity_urgency materialized as a mutable
+    # dict inside FrozenModel — mutable and unhashable, so the provenance
+    # surface could drift between solve and stamp. The curve must be a
+    # genuinely immutable, canonically sorted tuple of pairs.
+    config = default_config()
+    assert isinstance(hash(config), int)  # raised TypeError with a dict field
+    assert isinstance(config.acuity_urgency, tuple)
+    assert all(isinstance(pair, tuple) for pair in config.acuity_urgency)
+    # Pair input in any order canonicalizes to the same sorted pairs (a mapping
+    # is also accepted; see test_config_hash_distinct_under_any_value_change).
+    reordered = ObjectiveConfig(
+        acuity_urgency=tuple(reversed(list(default_acuity_urgency().items())))
+    )
+    assert reordered.acuity_urgency == config.acuity_urgency
+    assert hash(reordered) == hash(config)
+    assert config_hash(reordered) == config_hash(config)
+    # Duplicate acuities would make the lookup ambiguous — rejected outright.
+    with pytest.raises(ValidationError):
+        ObjectiveConfig(acuity_urgency=((EsiAcuity.ESI1, 5), (EsiAcuity.ESI1, 4)))

@@ -14,8 +14,14 @@ Two invariants baked in here:
 * **The acuity-weight sign lives in one place.** The urgency multiplier
   ``u(esi)`` defaults to :meth:`hospital.core.enums.EsiAcuity.priority_weight`
   (ESI-1 highest), so the classic sign trap — higher weight for the *lower* ESI
-  number — is never re-derived inline (DECISIONS D8). The map is stored
+  number — is never re-derived inline (DECISIONS D8). The curve is stored
   explicitly so it stays *data* (tunable) rather than a computed ``1/esi``.
+
+The urgency curve is stored as a **sorted tuple of ``(EsiAcuity, int)`` pairs**,
+never a ``dict``: ``FrozenModel`` is hashable only if every field is (doc 01
+§1.1), and a mutable mapping inside the config would let the provenance surface
+(``config_hash`` at stamp time) drift from what the solve actually used. A
+mapping is still accepted at construction and canonicalized by a validator.
 """
 
 from __future__ import annotations
@@ -24,8 +30,9 @@ import hashlib
 import json
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import cast
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from hospital.core import EsiAcuity, FrozenModel
 
@@ -38,9 +45,16 @@ def default_acuity_urgency() -> dict[EsiAcuity, int]:
 
     Building it from :meth:`EsiAcuity.priority_weight` is what keeps the acuity
     sign in exactly one place (DECISIONS D8); the result is stored as data so a
-    scenario may override the curve without re-deriving the inversion.
+    scenario may override the curve without re-deriving the inversion. (The
+    returned mapping is an *input shape*; ``ObjectiveConfig`` canonicalizes it
+    into an immutable sorted pair tuple.)
     """
     return {esi: esi.priority_weight() for esi in EsiAcuity}
+
+
+def _default_urgency_pairs() -> tuple[tuple[EsiAcuity, int], ...]:
+    """The default curve in its canonical stored shape (sorted pair tuple)."""
+    return tuple(sorted(default_acuity_urgency().items(), key=lambda pair: int(pair[0])))
 
 
 class ObjectiveConfig(FrozenModel):
@@ -50,8 +64,31 @@ class ObjectiveConfig(FrozenModel):
     scale: int = 1
     w_time: int = 1
     w_travel: int = 1
-    acuity_urgency: Mapping[EsiAcuity, int] = Field(default_factory=default_acuity_urgency)
+    # Genuinely immutable + hashable: sorted ``(esi, u)`` pairs, never a dict.
+    acuity_urgency: tuple[tuple[EsiAcuity, int], ...] = Field(
+        default_factory=_default_urgency_pairs
+    )
     unplaced_wait_penalty: int = 1000
+
+    @field_validator("acuity_urgency", mode="before")
+    @classmethod
+    def _mapping_to_pairs(cls, value: object) -> object:
+        """Accept the natural ``Mapping[EsiAcuity, int]`` construction shape."""
+        if isinstance(value, Mapping):
+            return tuple(cast("Mapping[object, object]", value).items())
+        return value
+
+    @field_validator("acuity_urgency", mode="after")
+    @classmethod
+    def _canonical_pairs(
+        cls, value: tuple[tuple[EsiAcuity, int], ...]
+    ) -> tuple[tuple[EsiAcuity, int], ...]:
+        """Sort by acuity and reject duplicates so equal curves compare/hash equal."""
+        ordered = tuple(sorted(value, key=lambda pair: int(pair[0])))
+        acuities = [acuity for acuity, _ in ordered]
+        if len(acuities) != len(set(acuities)):
+            raise ValueError("acuity_urgency has duplicate acuity entries")
+        return ordered
 
 
 class AssignmentCoeffs(FrozenModel):
@@ -63,7 +100,10 @@ class AssignmentCoeffs(FrozenModel):
 
 def acuity_urgency(config: ObjectiveConfig, esi: EsiAcuity) -> int:
     """The urgency multiplier ``u(esi)`` — the same curve every lever reads."""
-    return config.acuity_urgency[esi]
+    for acuity, urgency in config.acuity_urgency:
+        if acuity == esi:
+            return urgency
+    raise KeyError(esi)
 
 
 def assignment_coeffs(config: ObjectiveConfig, esi: EsiAcuity) -> AssignmentCoeffs:
@@ -106,9 +146,7 @@ def config_hash(config: ObjectiveConfig) -> str:
         "w_time": config.w_time,
         "w_travel": config.w_travel,
         "unplaced_wait_penalty": config.unplaced_wait_penalty,
-        "acuity_urgency": {
-            str(int(a)): config.acuity_urgency[a] for a in sorted(config.acuity_urgency, key=int)
-        },
+        "acuity_urgency": {str(int(a)): u for a, u in config.acuity_urgency},
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
