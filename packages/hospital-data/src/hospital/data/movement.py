@@ -17,6 +17,8 @@ a silently-zeroed distance.
 
 from __future__ import annotations
 
+import csv
+import io
 from collections.abc import Mapping
 from typing import Literal
 
@@ -84,25 +86,30 @@ class MovementTable(FrozenModel):
         }
 
     def to_csv(self) -> str:
-        """The golden-fixture CSV form: header + one row per movement, fixed column order."""
-        lines = [",".join(_CSV_COLUMNS)]
+        """The golden-fixture CSV form: header + one row per movement, fixed column order.
+
+        Written through the ``csv`` module (RFC 4180 quoting, ``\\n`` line
+        terminator) so an id containing a comma, quote, or newline is escaped
+        rather than corrupting the table.
+        """
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, lineterminator="\n")
+        writer.writerow(_CSV_COLUMNS)
         for r in self.rows:
-            lines.append(
-                ",".join(
-                    (
-                        r.entity,
-                        r.entity_kind,
-                        r.a.root,
-                        r.b.root,
-                        str(r.distance.root),
-                        str(r.seconds.root),
-                        str(r.occurred_at.root),
-                        str(r.sim_day),
-                        str(r.hour_of_day),
-                    )
+            writer.writerow(
+                (
+                    r.entity,
+                    r.entity_kind,
+                    r.a.root,
+                    r.b.root,
+                    r.distance.root,
+                    r.seconds.root,
+                    r.occurred_at.root,
+                    r.sim_day,
+                    r.hour_of_day,
                 )
             )
-        return "\n".join(lines)
+        return buffer.getvalue()
 
 
 def _sim_day(occurred_at: SimTime) -> int:

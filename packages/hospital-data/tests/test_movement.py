@@ -8,6 +8,9 @@ nothing to cross-check against yet.
 
 from __future__ import annotations
 
+import csv
+import io
+
 from hospital.core import (
     Distance,
     EventLog,
@@ -126,3 +129,38 @@ def test_empty_log_yields_empty_table() -> None:
     graph = _tiny_graph()
     table = export_movement_traces(EventLog(), graph)
     assert table.rows == ()
+
+
+# Finding 14: a raw string join corrupts the table when an id contains a comma,
+# quote, or newline — the CSV must escape per RFC 4180 and parse back exactly.
+def test_to_csv_escapes_ids_containing_delimiters_quotes_and_newlines() -> None:
+    graph = _tiny_graph()
+    edge = graph.edges[0]
+    tricky = 'nurse,7 "the fast"\nnight shift'
+    log = EventLog()
+    log.append(
+        StaffMoved(
+            occurred_at=SimTime(_HOUR_US),
+            staff=StaffId(tricky),
+            edge=(edge.a, edge.b),
+            seconds=edge.seconds,
+        )
+    )
+    table = export_movement_traces(log, graph)
+    parsed = list(csv.reader(io.StringIO(table.to_csv())))
+    assert len(parsed) == 2  # header + one data row, despite the embedded newline
+    header, row = parsed
+    assert header == [
+        "entity",
+        "entity_kind",
+        "a",
+        "b",
+        "distance_cm",
+        "seconds_us",
+        "occurred_at_us",
+        "sim_day",
+        "hour_of_day",
+    ]
+    assert row[0] == tricky  # round-trips exactly
+    assert row[1] == "staff"
+    assert row[4] == "500"
