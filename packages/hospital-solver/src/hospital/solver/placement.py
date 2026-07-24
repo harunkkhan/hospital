@@ -134,30 +134,48 @@ def travel_weight(
 ) -> int:
     """``w[p,b]`` — expected downstream travel via the oracle (doc 03 §4.3).
 
-    ``caregiver + imaging + lab`` round-trip seconds, scaled by the acuity travel
-    weight. This is a placement *proxy*, not a physics prediction: the ``2*``
-    round-trip over-counts caregiver travel (dispatch batching amortizes returns),
-    which only *biases* which valid bay is chosen — it never makes a plan infeasible.
+    ``arrival + caregiver + imaging`` seconds, scaled by the acuity travel
+    weight. This is a placement *proxy*, not a physics prediction — doc 03
+    flags every term as a 🟡-tunable heuristic (§4.3/§7) — and it only *biases*
+    which valid bay is chosen; it can never make a plan infeasible. The
+    composition is fitted to what the twin's physics actually walks, with three
+    documented deviations from the doc's literal formula, each toward truth:
+
+    * **arrival** (added): the round trip between the floor's arrival end
+      (``entrances[0]`` — triage sits beside it) and the bay. Both directions
+      are physically walked in-system: the patient (plus, for the
+      non-ambulatory, a porter escort) covers entrance->bay on placement, and
+      the discharge exit retraces bay->entrance at the end of the stay.
+      Omitting it prices a bay across the floor identically to one beside
+      triage — placements drift to the far end and the arrival/exit walks
+      swamp the caregiver savings.
+    * **caregiver is one-way per visit** (the doc's ``2x`` round trip): staff
+      idle in place where they finish and dispatch re-targets them from
+      wherever they stand, so the return leg mostly never happens — the doc
+      itself flags the round trip as an over-count. ``labs`` are bedside
+      draws (the patient never moves; the *sample* travels off-graph), so a
+      lab counts as one more caregiver visit, not the doc's bay<->analyzer
+      round trip that no actor walks.
+    * **imaging is doubled** (patient + escort): every imaging transport is
+      escorted, so two actors walk both legs of every bay<->modality trip.
     """
 
+    def one_way(a: NodeId, b: NodeId) -> int:
+        return _seconds(oracle.distance(a, b))
+
     def round_trip(a: NodeId, b: NodeId) -> int:
-        return _seconds(oracle.distance(a, b)) + _seconds(oracle.distance(b, a))
+        return one_way(a, b) + one_way(b, a)
 
     node = bay.node
-    caregiver = (patient.workup.provider_visits + patient.workup.nurse_visits) * round_trip(
-        bay.serving_station, node
-    )
+    arrival = round_trip(layout.entrances[0], node) if layout.entrances else 0
+    visits = patient.workup.provider_visits + patient.workup.nurse_visits + patient.workup.labs
+    caregiver = visits * one_way(bay.serving_station, node)
     imaging = 0
     for _modality in patient.workup.imaging:
         target = _nearest(node, layout.imaging_nodes, oracle)
         if target is not None:
-            imaging += round_trip(node, target)
-    lab = 0
-    if patient.workup.labs:
-        target = _nearest(node, layout.lab_nodes, oracle)
-        if target is not None:
-            lab += patient.workup.labs * round_trip(node, target)
-    return coeffs.travel_weight * (caregiver + imaging + lab)
+            imaging += 2 * round_trip(node, target)
+    return coeffs.travel_weight * (arrival + caregiver + imaging)
 
 
 def occupied_by_zone_type(di: DecisionInput) -> dict[ZoneType, int]:
