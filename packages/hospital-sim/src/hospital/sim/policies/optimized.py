@@ -1,29 +1,183 @@
 """The OPTIMIZED arm — thin adapters over ``hospital.solver`` backends (doc 04 §3.8).
 
-**Documented stub — NEXT PHASE.** This module is the factory's registration
-point for ``kind="optimized"``; the adapters themselves land with the
-optimized-policies phase (doc 08 §7 step 7). The shape they must take:
+Every policy below is a *marshaller*, never an optimizer (anti-dup rule 3): it
+hands the immutable ``DecisionInput`` (+ the read-only ``RoutingOracle``) to the
+canonical ``hospital.solver`` lever and returns that lever's ``PlanItem``s.
+No optimization math, pathfinding, RNG, event formatting, or validation lives
+here — the placement backend self-checks with the one ``validate()`` before
+returning, and the seam adapter re-checks on apply (one implementation, two
+enforcement points). The policies draw no randomness at all; the reserved
+``substream("policy", ...)`` domain stays untouched (CP-SAT is deterministic
+given its input, doc 04 §4.5).
 
-* each ``Solver*`` policy is a *marshaller*: it passes the ``DecisionInput`` +
-  ``RoutingOracle`` to a backend obtained via ``solver.registry.get_backend``,
-  ``solver.stamping.stamp``s the ``SolveResult`` with the ``ObjectiveConfig``
-  (provenance choke point: backend version + ``config_hash`` ride the wire),
-  and returns the stamped plan's items;
-* NO optimization math, pathfinding, RNG, or validation lives here (anti-dup
-  rule 3) — the solver self-checks with ``validate()`` before returning and the
-  seam adapter re-checks on apply (one implementation, two enforcement points);
-* a capped-wall-time solve may return ``HEURISTIC``/``FEASIBLE`` — the status
-  is recorded onto the scorecard, never silently treated as ``OPTIMAL``.
+Adapter-shape notes (judgment calls, recorded in the build report):
+
+* **Placement** goes through the registry backend (``placement_cpsat`` by
+  default), is warm-started from the previous stamped plan (doc 03 §4.3's
+  rolling re-solve), and every result passes ``solver.stamping.stamp`` — the
+  provenance choke point — before its items are returned.
+* **Sequencing** reuses ``solver.sequencing.sequence`` (the one scoring
+  function) and re-shapes its ranked per-patient items into the single
+  ``order``-payload item the seam enacts (``World.resequence_waiting`` reads
+  ``PlanItem.order``); the ranking itself stays in ``solver``.
+* **Turnaround/discharge** hold the oracle from construction: their lever
+  Protocols pass only the ``DecisionInput`` (doc 04 §3.6), while the solver
+  functions price response travel through the oracle — a read-only query
+  surface, threaded once by the factory.
+* **Discharge** feeds the load gate the neutral ``FloorLoad()`` default:
+  ``DecisionInput`` deliberately carries no utilization signal (no hidden
+  fields), so in v1 documentation is always in the promoted band.
+* **Staffing** is input-only in v1 (🟡 A7): the roster comes from the
+  scenario, so the optimized arm reuses the baseline ``InputStaffing`` no-op
+  lever rather than duplicating it.
+
+Each adapter early-returns ``()`` when its lever's candidate set is empty (no
+waiting patient, no FREE bay, no pending task, no CLEANING bay). That guard is
+pure marshalling — the lever would return an empty plan anyway — and keeps the
+per-tick cost proportional to what there is to decide.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from hospital.core import BayStatus, CompiledRules, DecisionInput, PlanItem, StaffMember
+from hospital.sim.policies.baseline import InputStaffing
+from hospital.sim.policies.protocols import PolicySet
+from hospital.solver import (
+    ObjectiveConfig,
+    RoutingOracle,
+    Solver,
+    assign_staff,
+    get_backend,
+    prioritize_cleaning,
+    prioritize_discharge,
+    stamp,
+)
+from hospital.solver.discharge import FloorLoad
+from hospital.solver.sequencing import sequence as score_sequence
+
 if TYPE_CHECKING:
-    from hospital.core import CompiledRules
-    from hospital.sim.policies.protocols import PolicySet
-    from hospital.solver import ObjectiveConfig, RoutingOracle
+    from hospital.core import Plan
+
+# The registry name of the default placement backend (doc 03 §3.2).
+PLACEMENT_BACKEND = "placement_cpsat"
+
+# Anti-starvation escalation for the sequencing score (points per waited
+# second, doc 03 §4.4) — the solver default the greedy backend also uses.
+DEFAULT_STARVATION_RATE = 1
+
+
+@dataclass
+class SolverPlacement:
+    """``PlacementPolicy`` — marshal to the registry placement backend + stamp.
+
+    Holds the previous stamped plan as the next solve's warm start (the rolling
+    re-solve of doc 03 §4.3). ``last_status`` exposes the most recent solve's
+    ``SolverStatus`` claim — recorded, never hidden (PLAN §5).
+    """
+
+    backend: Solver
+    objective: ObjectiveConfig
+    rules: CompiledRules
+    _warm: Plan | None = field(default=None, init=False, repr=False)
+
+    @property
+    def last_status(self) -> str | None:
+        return self._last_status
+
+    _last_status: str | None = field(default=None, init=False, repr=False)
+
+    def place(self, di: DecisionInput, oracle: RoutingOracle) -> tuple[PlanItem, ...]:
+        if not di.waiting or not any(bs.status is BayStatus.FREE for bs in di.bays):
+            return ()  # nothing to place / nowhere to place — the empty solve
+        result = self.backend.solve(
+            di, oracle, config=self.objective, rules=self.rules, warm_start=self._warm
+        )
+        stamped = stamp(
+            result, self.objective, rules_hash=self.rules.rules_hash or None, now=di.now
+        )
+        self._warm = stamped.plan
+        self._last_status = stamped.status.value
+        return stamped.plan.items
+
+
+@dataclass(frozen=True)
+class SolverSequencing:
+    """``SequencingPolicy`` — the one acuity+anti-starvation scoring, re-shaped.
+
+    ``solver.sequencing.sequence`` emits one ranked item per patient; the seam
+    enacts a queue order through the single ``order`` payload
+    (``World.resequence_waiting``), so the ranked items are marshalled into one
+    ``sequence`` item whose ``order`` is the scored service order.
+    """
+
+    objective: ObjectiveConfig
+    starvation_rate: int = DEFAULT_STARVATION_RATE
+
+    def sequence(self, di: DecisionInput) -> tuple[PlanItem, ...]:
+        if not di.waiting:
+            return ()
+        ranked = score_sequence(di, config=self.objective, starvation_rate=self.starvation_rate)
+        order = tuple(item.patient.root for item in ranked if item.patient is not None)
+        if not order:
+            return ()
+        return (PlanItem(stable_id="seq:waiting", kind="sequence", order=order),)
+
+
+@dataclass(frozen=True)
+class SolverDispatch:
+    """``DispatchPolicy`` — the global assignment (CP-SAT matching) lever.
+
+    ``solver.dispatch.assign_staff`` is max-cardinality, min-travel matching
+    over idle qualified staff x pending tasks (a single task degenerates to
+    "nearest qualified"), judged on the same skill union the validator applies.
+    """
+
+    objective: ObjectiveConfig
+    rules: CompiledRules
+    roster: tuple[StaffMember, ...]
+
+    def dispatch(self, di: DecisionInput, oracle: RoutingOracle) -> tuple[PlanItem, ...]:
+        if not di.pending_tasks:
+            return ()
+        return assign_staff(
+            di, oracle, config=self.objective, rules=self.rules, staff_members=self.roster
+        )
+
+
+@dataclass(frozen=True)
+class SolverTurnaround:
+    """``TurnaroundPolicy`` — cleaning as value-of-unblocking assignment."""
+
+    oracle: RoutingOracle
+    objective: ObjectiveConfig
+    rules: CompiledRules
+    roster: tuple[StaffMember, ...]
+
+    def turnaround(self, di: DecisionInput) -> tuple[PlanItem, ...]:
+        if not any(bs.status is BayStatus.CLEANING for bs in di.bays):
+            return ()
+        return prioritize_cleaning(
+            di, self.oracle, config=self.objective, rules=self.rules, staff_members=self.roster
+        )
+
+
+@dataclass(frozen=True)
+class SolverDischarge:
+    """``DischargePolicy`` — discharge expedite + documentation load gate."""
+
+    oracle: RoutingOracle
+    objective: ObjectiveConfig
+    rules: CompiledRules
+
+    def discharge(self, di: DecisionInput) -> tuple[PlanItem, ...]:
+        if not any(t.kind in ("discharge", "documentation") for t in di.pending_tasks):
+            return ()
+        return prioritize_discharge(
+            di, self.oracle, config=self.objective, load=FloorLoad(), rules=self.rules
+        )
 
 
 def make_optimized_policies(
@@ -31,12 +185,30 @@ def make_optimized_policies(
     oracle: RoutingOracle,
     objective: ObjectiveConfig,
     rules: CompiledRules,
+    roster: tuple[StaffMember, ...],
+    placement_backend: str = PLACEMENT_BACKEND,
 ) -> PolicySet:
-    """Wire the solver-backed ``PolicySet`` — not yet implemented (next phase)."""
-    raise NotImplementedError(
-        "the optimized arm arrives with the solver-adapter phase (doc 08 §7 step 7); "
-        "only kind='baseline' is available in this build"
+    """Wire the solver-backed ``PolicySet`` (origin ``"solver"``)."""
+    return PolicySet(
+        placement=SolverPlacement(
+            backend=get_backend(placement_backend), objective=objective, rules=rules
+        ),
+        sequencing=SolverSequencing(objective=objective),
+        dispatch=SolverDispatch(objective=objective, rules=rules, roster=roster),
+        turnaround=SolverTurnaround(oracle=oracle, objective=objective, rules=rules, roster=roster),
+        discharge=SolverDischarge(oracle=oracle, objective=objective, rules=rules),
+        staffing=InputStaffing(),
+        origin="solver",
     )
 
 
-__all__ = ["make_optimized_policies"]
+__all__ = [
+    "DEFAULT_STARVATION_RATE",
+    "PLACEMENT_BACKEND",
+    "SolverDischarge",
+    "SolverDispatch",
+    "SolverPlacement",
+    "SolverSequencing",
+    "SolverTurnaround",
+    "make_optimized_policies",
+]

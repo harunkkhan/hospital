@@ -117,9 +117,11 @@ def patient_process(
     finally:
         world.resources.triage.release(req)
 
-    # 3 — wait for a bay (acuity-priority queue, infinite patience)
+    # 3 — wait for a bay (acuity-priority queue, infinite patience). The stage
+    # string is the placement convention (solver.placement.NEEDS_BAY_STAGES):
+    # a stage outside that vocabulary would be invisible to the CP-SAT backend.
     event_log.append(BayRequested(occurred_at=executor.now(), patient=pid))
-    wake = world.request_bay(patient, stage="triage->bay")
+    wake = world.request_bay(patient, stage="waiting_for_bay")
     world.request_decision()
     granted = yield wake
     bay = world.bay(cast("BayId", granted))

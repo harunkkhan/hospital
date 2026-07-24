@@ -3,8 +3,7 @@
 Everything else in ``sim`` is arm-agnostic: the composition root asks for a
 ``PolicySet`` by kind and never looks inside. The factory is justified by two
 real implementations (anti-dup rule 8): ``baseline`` wires the myopic levers;
-``optimized`` wires the solver adapters (next phase — the registration point is
-``policies.optimized``).
+``optimized`` wires the thin solver adapters (``policies.optimized``).
 
 Signature note (deviation from the doc's ``(kind, *, oracle, objective)``,
 recorded in the build report): the baseline levers also need ``rules`` (the
@@ -54,7 +53,7 @@ def make_policies(
         )
     if objective is None:
         raise ValueError("the optimized arm requires an ObjectiveConfig")
-    return make_optimized_policies(oracle=oracle, objective=objective, rules=rules)
+    return make_optimized_policies(oracle=oracle, objective=objective, rules=rules, roster=roster)
 
 
 __all__ = ["Arm", "make_policies"]
