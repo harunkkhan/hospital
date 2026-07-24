@@ -13,15 +13,22 @@ Two oracle-backed levers; this module contains **no** pathfinding of its own
   path (no return-to-start term); 2-opt is first-improvement with a fixed scan
   order → a deterministic local optimum.
 
-Deviation note: ``core.seam.TaskSpec`` carries no acuity/urgency field (the doc
-§7 #13 assumption was superseded by core), so task urgency ``u(t)`` is uniform
-here and the assignment cost is ``w_travel · distance`` — still "nearest
-qualified". Staff role/skills are not in ``DecisionInput`` either, so
-``staff_members`` is supplied explicitly. ``assign_staff`` also takes the
-compiled ``rules``: qualification is judged on
-``task.required_skills | rules.skills_for(task.kind)`` — the SAME union
-:func:`hospital.core.validation.validate` applies — so dispatch can never emit
-a plan the one validator rejects.
+Assignment objective (doc 03 §4.5's ``u(t)``, restored after the M1 stress
+finding): the matching is **provably lexicographic** — serve-first (max
+cardinality), then task priority, then minimize travel — via the same
+instance-derived big-M construction as placement (see ``_serve_priority``).
+Task priority is *strict acuity tiers, FIFO within a tier* — the very
+discipline ``World``'s bay queue and the baseline service order apply — read
+from ``TaskSpec.esi`` through the one ``acuity_urgency`` curve. Without the
+priority term the matched SUBSET under scarcity followed travel cost alone, so
+tasks in a far zone (resus — the only zone ESI-1 may occupy) were starved
+tick after tick while the solver "saved walking" on nearer low-acuity work.
+
+Staff role/skills are not in ``DecisionInput``, so ``staff_members`` is
+supplied explicitly. ``assign_staff`` also takes the compiled ``rules``:
+qualification is judged on ``task.required_skills | rules.skills_for(task.kind)``
+— the SAME union :func:`hospital.core.validation.validate` applies — so
+dispatch can never emit a plan the one validator rejects.
 """
 
 from __future__ import annotations
@@ -36,12 +43,13 @@ from hospital.core import (
     DecisionInput,
     NodeId,
     PlanItem,
+    SimTime,
     StaffId,
     StaffMember,
     TaskId,
     TaskSpec,
 )
-from hospital.solver.objective import ObjectiveConfig
+from hospital.solver.objective import ObjectiveConfig, acuity_urgency
 from hospital.solver.oracle import EMPTY_MASK, RouteMask
 from hospital.solver.protocol import RoutingOracle
 
@@ -81,19 +89,55 @@ def assign_staff(
                 cost[(ss.staff, task.id)] = config.w_travel * dist_s
     if not cost:
         return ()
-    matched = _solve_assignment(cost, idle, task_list)
+    priority = _serve_priority(task_list, di.now, config)
+    matched = _solve_assignment(cost, idle, task_list, priority)
     return tuple(
         PlanItem(stable_id=f"dispatch:{tid.root}", kind="dispatch", staff=sid, task=tid)
         for (sid, tid) in sorted(matched, key=lambda st: st[1].root)
     )
 
 
+def _serve_priority(
+    tasks: list[TaskSpec], now: SimTime, config: ObjectiveConfig
+) -> dict[TaskId, int]:
+    """Who gets served under scarcity: strict acuity tiers, FIFO within a tier.
+
+    ``priority(t) = u(t)·W + waited_s(t) + 1`` with ``W = max waited_s + 2``
+    strictly exceeding any ``waited_s + 1``, so a higher-urgency task outranks
+    ANY lower-urgency wait (strict tiers — the same discipline ``World``'s bay
+    queue and the baseline service order apply) and, within a tier, the
+    longest-waiting task wins (FIFO — bounded overtaking, no starvation within
+    a tier). ``u`` is the one ``acuity_urgency`` curve; a patient-less task
+    (cleaning) prices at the curve's floor urgency. Instance-derived, so the
+    ordering is provable for every config — never a tuned constant.
+    """
+    floor_urgency = min(u for _, u in config.acuity_urgency)
+    waited: dict[TaskId, int] = {}
+    urgency: dict[TaskId, int] = {}
+    for t in tasks:
+        waited[t.id] = max(0, (now.root - t.ready_at.root) // MICROS_PER_SEC)
+        urgency[t.id] = acuity_urgency(config, t.esi) if t.esi is not None else floor_urgency
+    tier = max(waited.values(), default=0) + 2
+    return {tid: urgency[tid] * tier + waited[tid] + 1 for tid in waited}
+
+
 def _solve_assignment(
     cost: dict[tuple[StaffId, TaskId], int],
     idle: list[StaffState],
     tasks: list[TaskSpec],
+    priority: dict[TaskId, int],
 ) -> list[tuple[StaffId, TaskId]]:
-    """Max-cardinality, min-cost matching (single task = nearest qualified)."""
+    """Serve-first, priority-second, min-travel-third matching (single task = nearest).
+
+    The reward construction mirrors placement's place-first proof: with
+    ``B = Σ_t max_s cost[s,t] + 1`` strictly exceeding any matching's total
+    travel and ``reward[t] = priority[t]·B``: (1) matching one more task always
+    improves the objective (``reward - cost ≥ B - (B-1) = 1``) — capacity is
+    never left idle to save travel; (2) whenever two equal-cardinality
+    matchings differ in served priority (integers, so by ≥ 1), the reward gap
+    ``≥ B`` dominates any travel gap ``< B`` — who is served under scarcity
+    follows ``priority`` exactly; (3) travel only breaks the remaining ties.
+    """
     if len(tasks) == 1:
         task = tasks[0]
         candidates = [(c, sid) for (sid, tid), c in cost.items() if tid == task.id]
@@ -106,11 +150,11 @@ def _solve_assignment(
 
     model = cp_model.CpModel()
     y = {k: model.new_bool_var(f"y_{k[0].root}_{k[1].root}") for k in cost}
-    # big must dominate the total cost spread so cardinality is strictly
-    # lexicographic: adding ANY match improves the objective by at least 1
-    # (max(cost)+1 would let one cheap match beat two expensive ones,
-    # stranding a coverable task — the myopia this solver exists to avoid).
-    big = sum(cost.values()) + 1
+    max_cost_by_task: dict[TaskId, int] = {}
+    for (_sid, tid), c in cost.items():
+        max_cost_by_task[tid] = max(c, max_cost_by_task.get(tid, 0))
+    big_b = sum(max_cost_by_task.values()) + 1
+    reward = {tid: priority[tid] * big_b for tid in max_cost_by_task}
     for ss in idle:
         staff_vars = [y[k] for k in cost if k[0] == ss.staff]
         if staff_vars:
@@ -119,8 +163,9 @@ def _solve_assignment(
         task_vars = [y[k] for k in cost if k[1] == task.id]
         if task_vars:
             model.add(sum(task_vars) <= 1)
-    # Maximize matches first (big-M), then minimize travel: minimize Σ(cost-big)·y.
-    model.minimize(sum([(cost[k] - big) * y[k] for k in cost]))
+    # Minimize Σ cost·y + Σ reward·(unmatched) — the constant Σ reward is
+    # dropped, leaving: minimize Σ (cost[s,t] - reward[t])·y[s,t].
+    model.minimize(sum([(cost[k] - reward[k[1]]) * y[k] for k in cost]))
     solver = cp_model.CpSolver()
     solver.parameters.random_seed = 0
     solver.parameters.num_search_workers = 1

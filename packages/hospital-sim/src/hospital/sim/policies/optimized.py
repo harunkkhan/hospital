@@ -130,9 +130,11 @@ class SolverSequencing:
 class SolverDispatch:
     """``DispatchPolicy`` — the global assignment (CP-SAT matching) lever.
 
-    ``solver.dispatch.assign_staff`` is max-cardinality, min-travel matching
-    over idle qualified staff x pending tasks (a single task degenerates to
-    "nearest qualified"), judged on the same skill union the validator applies.
+    ``solver.dispatch.assign_staff`` is serve-first (max-cardinality), then
+    task-priority (strict acuity tiers, FIFO within a tier), then min-travel
+    matching over idle qualified staff x pending tasks (a single task
+    degenerates to "nearest qualified"), judged on the same skill union the
+    validator applies.
     """
 
     objective: ObjectiveConfig
