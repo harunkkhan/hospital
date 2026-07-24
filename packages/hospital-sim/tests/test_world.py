@@ -170,7 +170,7 @@ class TestBayQueue:
         later_routine = make_patient("p_esi3_b", esi=EsiAcuity.ESI3, arrival_s=50.0)
         for p in (early_routine, later_routine, late_critical):
             h.world.register_patient(p)
-            h.world.request_bay(p, stage="triage->bay")
+            h.world.request_bay(p, stage="waiting_for_bay")
         order = [w.patient.id.root for w in h.world.waiting_for_bay()]
         assert order == ["p_esi1", "p_esi3_a", "p_esi3_b"]
 
@@ -182,7 +182,7 @@ class TestBayQueue:
         got: list[object] = []
 
         def proc() -> Generator[simpy.Event, object]:
-            wake = h.world.request_bay(p, stage="triage->bay")
+            wake = h.world.request_bay(p, stage="waiting_for_bay")
             granted = yield wake
             got.append(granted)
 
@@ -205,7 +205,7 @@ class TestBayQueue:
         b = make_patient("pb", arrival_s=10.0)
         for p in (a, b):
             h.world.register_patient(p)
-            h.world.request_bay(p, stage="triage->bay")
+            h.world.request_bay(p, stage="waiting_for_bay")
         h.world.resequence_waiting(("pb", "pa"))
         order = [w.patient.id.root for w in h.world.waiting_for_bay()]
         assert order == ["pb", "pa"]

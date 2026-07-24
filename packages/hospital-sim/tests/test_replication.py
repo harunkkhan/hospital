@@ -35,6 +35,14 @@ class TestDeterminism:
         assert a.run_id == b.run_id
         assert a.objective_hash == b.objective_hash
 
+    def test_optimized_same_seed_twice_is_byte_identical(self) -> None:
+        # the CP-SAT arm is deterministic given its input (fixed random_seed,
+        # one worker, deterministic-time budget): same seed -> same bytes
+        scenario = tiny_scenario(horizon_hours=6, rate_per_hour=3.0)
+        a = run_replication(scenario, "optimized", 11)
+        b = run_replication(scenario, "optimized", 11)
+        assert a.event_log_jsonl == b.event_log_jsonl
+
     def test_different_seeds_differ(self) -> None:
         scenario = tiny_scenario()
         a = run_replication(scenario, "baseline", 1)
@@ -122,7 +130,7 @@ def test_rejected_plan_triggers_a_resolve_and_mutates_nothing() -> None:
     oracle = GraphRoutingOracle(h.layout.graph)
     p = make_patient("p1", esi=EsiAcuity.ESI5)  # ESI5 may not enter resus
     h.world.register_patient(p)
-    h.world.request_bay(p, stage="triage->bay")
+    h.world.request_bay(p, stage="waiting_for_bay")
     resus_bay = next(b.id for b in h.layout.bays if b.zone_type.value == "resus_trauma")
 
     @dataclass

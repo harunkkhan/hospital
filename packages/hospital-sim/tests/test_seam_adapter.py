@@ -33,7 +33,7 @@ class TestProjection:
         h = build_physics()
         p = make_patient("p1")
         h.world.register_patient(p)
-        h.world.request_bay(p, stage="triage->bay")
+        h.world.request_bay(p, stage="waiting_for_bay")
         task = h.world.add_task(
             kind="nurse_visit",
             patient=p.id,
@@ -78,7 +78,7 @@ class TestRejectNeverRepair:
         rules = tiny_rules()
         p = make_patient("p1", esi=EsiAcuity.ESI5)  # ESI5 may not enter resus
         h.world.register_patient(p)
-        wake = h.world.request_bay(p, stage="triage->bay")
+        wake = h.world.request_bay(p, stage="waiting_for_bay")
         resus_bay = _free_bay(h, "resus_trauma")
         plan = Plan(
             items=(
@@ -129,7 +129,7 @@ class TestPreflight:
         rules = tiny_rules()
         p = make_patient("p1", esi=EsiAcuity.ESI3)
         h.world.register_patient(p)
-        wake = h.world.request_bay(p, stage="triage->bay")
+        wake = h.world.request_bay(p, stage="waiting_for_bay")
         bay = h.world.free_compatible_bays(p, rules)[0]
         nurse = next(m for m in h.roster if m.role is StaffRole.NURSE)
         first = h.world.add_task(
@@ -212,7 +212,7 @@ class TestPreflight:
         p = make_patient("p1", esi=EsiAcuity.ESI3)
         h.world.register_patient(p)
         free = h.world.free_compatible_bays(p, rules)
-        h.world.request_bay(p, stage="triage->bay")
+        h.world.request_bay(p, stage="waiting_for_bay")
         h.world.grant_bay(p.id, free[0])  # granted between solve and apply
         plan = Plan(
             items=(
@@ -233,7 +233,7 @@ class TestHappyPath:
         rules = tiny_rules()
         p = make_patient("p1", esi=EsiAcuity.ESI3)
         h.world.register_patient(p)
-        wake = h.world.request_bay(p, stage="triage->bay")
+        wake = h.world.request_bay(p, stage="waiting_for_bay")
         bay = h.world.free_compatible_bays(p, rules)[0]
         plan = Plan(
             items=(
