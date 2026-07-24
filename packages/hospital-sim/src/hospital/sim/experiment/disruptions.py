@@ -16,10 +16,14 @@ Mechanisms:
   ``DisruptionInjected`` marker at the surge instant.
 * ``staff_absence`` — marks the staff absent in ``World`` and ``Interrupt``s the
   agent; the staff process re-queues unfinished work and sleeps out the window.
-* ``zone_closure`` — closes the zone's FREE bays for the window (occupied bays
-  are never yanked from under a patient), or, with a ``node:<id>`` /
-  ``edge:<a>:<b>`` target, masks the route graph so live rerouting through
-  ``World.route`` kicks in; fully undone at window end.
+* ``zone_closure`` — opens a ``World`` zone-closure window: FREE bays close
+  immediately, occupied bays are never yanked from under a patient, and a bay
+  freed mid-window parks CLOSED (the closure governs late-freed capacity for
+  the whole window); or, with a ``node:<id>`` / ``edge:<a>:<b>`` target, masks
+  the route graph so live rerouting through ``World.route`` kicks in — actors
+  needing a severed destination wait for the reopening (``World.await_route``),
+  never crash. All closures are refcounted, so overlapping windows on the same
+  target never reopen each other early; fully undone when the LAST window ends.
 * ``imaging_outage`` — seizes the suite's full capacity with maximum-urgency
   requests for the window (an in-progress scan finishes first — the outage
   takes effect when the machine frees), then releases exactly what it took.
@@ -33,7 +37,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from hospital.core import (
-    BayStatus,
     DisruptionInjected,
     Duration,
     EventLog,
@@ -42,6 +45,7 @@ from hospital.core import (
     SimTime,
     StaffId,
     StaffRole,
+    ZoneId,
 )
 from hospital.sim.physics.executor import PriorityTier, TaskExecutor
 
@@ -170,11 +174,13 @@ def _closure(
         world.block_edge(*edge)
         undo.append(lambda e=edge: world.unblock_edge(*e))
     elif target is not None:
-        # a zone id: close every currently-FREE bay in it (never an occupied one)
-        for bay in world.layout.bays:
-            if bay.zone.root == target and world.bay_status(bay.id) is BayStatus.FREE:
-                world.close_bay(bay.id)
-                undo.append(lambda b=bay.id: world.reopen_bay(b))
+        # a zone id: the closure governs the zone for the WHOLE window — FREE
+        # bays close now, occupied bays are never yanked, and a bay freed
+        # mid-window parks CLOSED until the window ends (World owns that rule,
+        # refcounted so overlapping windows never reopen each other early).
+        zone = ZoneId(target)
+        world.begin_zone_closure(zone)
+        undo.append(lambda z=zone: world.end_zone_closure(z))
     yield executor.delay(ev.duration, PriorityTier.DISRUPTION)
     for restore in reversed(undo):
         restore()

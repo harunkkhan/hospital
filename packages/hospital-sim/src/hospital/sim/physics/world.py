@@ -73,6 +73,7 @@ from hospital.core import (
     TaskSpec,
     UnknownEntity,
     ZeroTimeCycle,
+    ZoneId,
 )
 from hospital.core.seam import BayState, StaffState, TaskKind, WaitingPatient
 from hospital.sim.physics.executor import PriorityTier, TierTimeout
@@ -152,6 +153,8 @@ class World:
         self._bay_status: dict[BayId, BayStatus] = {b.id: BayStatus.FREE for b in layout.bays}
         self._bay_occupant: dict[BayId, PatientId] = {}
         self._prior_status: dict[BayId, BayStatus] = {}
+        # Active zone-closure windows, refcounted by ZoneId root (overlap-safe).
+        self._zone_closures: dict[str, int] = {}
 
         self._staff: dict[StaffId, StaffMember] = {}
         self._staff_pos: dict[StaffId, NodeId] = {}
@@ -369,8 +372,18 @@ class World:
         self._bay_occupant.pop(b, None)
 
     def free_bay(self, b: BayId) -> None:
-        """``CLEANING -> FREE`` — capacity returns; triggers a decision tick."""
+        """``CLEANING -> FREE`` — capacity returns; triggers a decision tick.
+
+        Inside an active zone-closure window the closure GOVERNS the freed
+        capacity: the bay parks ``CLOSED`` (prior ``FREE``) instead, and
+        returns via :meth:`end_zone_closure`'s reopen at window end — a bay
+        freed mid-window must never leak back into placement.
+        """
         self._expect_status(b, BayStatus.CLEANING, "free")
+        if self._bay_by_id[b].zone.root in self._zone_closures:
+            self._bay_status[b] = BayStatus.CLOSED
+            self._prior_status[b] = BayStatus.FREE
+            return
         self._bay_status[b] = BayStatus.FREE
         self.request_decision()
 
@@ -391,6 +404,32 @@ class World:
         self._bay_status[b] = prior
         if prior is BayStatus.FREE:
             self.request_decision()
+
+    def begin_zone_closure(self, zone: ZoneId) -> None:
+        """Open a zone-closure window (refcounted — overlapping windows stack).
+
+        FREE bays in the zone close immediately; occupied/cleaning bays are
+        never yanked from under a patient, but the window governs them — a bay
+        freed mid-window (:meth:`free_bay`) parks ``CLOSED`` until the LAST
+        overlapping window ends.
+        """
+        count = self._zone_closures.get(zone.root, 0)
+        self._zone_closures[zone.root] = count + 1
+        if count == 0:
+            for bay in self.layout.bays:
+                if bay.zone == zone and self._bay_status[bay.id] is BayStatus.FREE:
+                    self.close_bay(bay.id)
+
+    def end_zone_closure(self, zone: ZoneId) -> None:
+        """Close a zone-closure window; the zone reopens only at refcount zero."""
+        count = self._zone_closures.get(zone.root, 0)
+        if count > 1:
+            self._zone_closures[zone.root] = count - 1
+            return
+        self._zone_closures.pop(zone.root, None)
+        for bay in self.layout.bays:
+            if bay.zone == zone and self._bay_status[bay.id] is BayStatus.CLOSED:
+                self.reopen_bay(bay.id)
 
     # ----------------------------------------------------------------- staff
     def register_staff(self, member: StaffMember) -> None:

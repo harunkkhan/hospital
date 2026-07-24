@@ -267,6 +267,37 @@ class TestClosure:
         for bay in zone_bays[1:]:
             assert h.world.bay_status(bay) is BayStatus.FREE
 
+    def test_bay_freed_mid_window_stays_governed_by_the_closure(self) -> None:
+        # Finding 5: a bay busy at closure start that frees mid-window must
+        # not become placeable while the zone is still closed.
+        h = build_physics()
+        zone = h.layout.bays[0].zone
+        occupied = next(b.id for b in h.layout.bays if b.zone == zone)
+        h.world.assign_bay(occupied, PatientId("px"))
+        schedule_disruptions(
+            h.env,
+            h.world,
+            h.executor,
+            h.streams,
+            (
+                DisruptionEvent(
+                    kind="zone_closure",
+                    at=SimTime(hours(1).root),
+                    duration=hours(1),
+                    target=zone.root,
+                ),
+            ),
+            staff_processes={},
+            event_log=h.log,
+        )
+        h.env.run(until=hours(1).root + 1)  # mid-window
+        # the patient leaves and housekeeping finishes while the zone is closed
+        h.world.vacate_bay(occupied)
+        h.world.free_bay(occupied)
+        assert h.world.bay_status(occupied) is BayStatus.CLOSED  # governed, not FREE
+        h.env.run(until=hours(3).root)  # past the window
+        assert h.world.bay_status(occupied) is BayStatus.FREE
+
 
 class TestImagingOutage:
     def test_outage_seizes_capacity_for_the_window_then_releases(self) -> None:
