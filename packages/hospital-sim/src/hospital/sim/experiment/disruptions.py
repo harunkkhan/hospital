@@ -26,7 +26,10 @@ Mechanisms:
   target never reopen each other early; fully undone when the LAST window ends.
 * ``imaging_outage`` — seizes the suite's full capacity with maximum-urgency
   requests for the window (an in-progress scan finishes first — the outage
-  takes effect when the machine frees), then releases exactly what it took.
+  takes effect when the machine frees, and holds only the REMAINDER of the
+  declared window), then releases exactly what it took. Only an omitted target
+  selects the default suite; an unknown explicit target is recorded as
+  unresolved and perturbs nothing.
 
 Every injector restores exactly what it perturbed — a partial restore would be
 a permanent, arm-varying bias (nuance 4.10).
@@ -186,6 +189,24 @@ def _closure(
         restore()
 
 
+def _resolve_imaging(
+    imaging: Mapping[NodeId, simpy.PriorityResource], target: str | None
+) -> NodeId | None:
+    """Deterministic suite resolution: only an OMITTED target selects the default.
+
+    An explicit-but-unknown target resolves to nothing — it is recorded as
+    unresolved and capacity is left untouched (mirrors ``_resolve_staff``);
+    silently outaging the first suite would perturb physics the scenario never
+    asked to perturb.
+    """
+    nodes = sorted(imaging, key=lambda n: n.root)
+    if not nodes:
+        return None
+    if target is None:
+        return nodes[0]
+    return next((n for n in nodes if n.root == target), None)
+
+
 def _imaging_outage(
     world: World,
     executor: TaskExecutor,
@@ -194,15 +215,15 @@ def _imaging_outage(
 ) -> Generator[simpy.Event, object]:
     yield _delay_to(executor, ev.at)
     imaging = world.resources.imaging
-    if not imaging:
+    node = _resolve_imaging(imaging, ev.target)
+    if node is None:
+        detail = "no imaging nodes" if not imaging else f"unresolved target {ev.target!r}"
         event_log.append(
             DisruptionInjected(
-                occurred_at=executor.now(), disruption="imaging_outage", detail="no imaging nodes"
+                occurred_at=executor.now(), disruption="imaging_outage", detail=detail
             )
         )
         return
-    nodes = sorted(imaging, key=lambda n: n.root)
-    node = next((n for n in nodes if ev.target is not None and n.root == ev.target), nodes[0])
     event_log.append(
         DisruptionInjected(
             occurred_at=executor.now(), disruption="imaging_outage", detail=node.root
@@ -212,7 +233,13 @@ def _imaging_outage(
     requests = [resource.request(priority=_OUTAGE_PRIORITY) for _ in range(int(resource.capacity))]
     for request in requests:
         yield request
-    yield executor.delay(ev.duration, PriorityTier.DISRUPTION)
+    # Hold only the REMAINDER of the declared window: an in-progress scan
+    # finishes first, so acquisition can land mid-window (or past it) — the
+    # outage still ends at ``ev.at + ev.duration``, never at acquisition +
+    # duration, which could fall entirely outside the declared window.
+    remaining = _until(ev).root - int(executor.env.now)
+    if remaining > 0:
+        yield executor.delay(Duration(remaining), PriorityTier.DISRUPTION)
     for request in requests:
         resource.release(request)
 

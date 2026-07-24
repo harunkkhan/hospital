@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 
 import simpy
 from _sim_fixtures import build_physics, make_patient, ring_layout, tiny_scenario
@@ -25,7 +26,7 @@ from hospital.data.scenario import DisruptionEvent, DisruptionSpec
 from hospital.sim.experiment.disruptions import schedule_disruptions
 from hospital.sim.experiment.replication import run_replication
 from hospital.sim.flow.staff import staff_process
-from hospital.sim.physics.executor import TaskExecutor
+from hospital.sim.physics.executor import PriorityTier, TaskExecutor
 from hospital.sim.physics.resources import build_resources
 from hospital.sim.physics.world import World
 
@@ -325,6 +326,68 @@ class TestImagingOutage:
         h.env.run(until=hours(4).root)  # past the window
         assert resource.count == 0  # fully released
         assert len(_markers(h.log, "imaging_outage")) == 1
+
+    def test_outage_after_in_progress_scan_still_ends_at_window_end(self) -> None:
+        # Finding 6: the outage yields to an in-progress scan, then holds only
+        # the REMAINDER of its declared window [1h, 2h] — not scan-end + 1h.
+        h = build_physics()
+        node = next(iter(sorted(h.resources.imaging, key=lambda n: n.root)))
+        resource = h.resources.imaging[node]
+
+        def scanner() -> Generator[simpy.Event, object]:
+            req = resource.request(priority=-3)
+            yield req
+            yield h.executor.delay(minutes(90), PriorityTier.COMPLETION)  # 0 .. 1.5h
+            resource.release(req)
+
+        h.env.process(scanner())
+        schedule_disruptions(
+            h.env,
+            h.world,
+            h.executor,
+            h.streams,
+            (
+                DisruptionEvent(
+                    kind="imaging_outage",
+                    at=SimTime(hours(1).root),
+                    duration=hours(1),
+                    target=node.root,
+                ),
+            ),
+            staff_processes={},
+            event_log=h.log,
+        )
+        h.env.run(until=minutes(105).root)  # scan over, outage holding
+        assert resource.count == resource.capacity
+        h.env.run(until=hours(2).root + 1)  # declared window end
+        assert resource.count == 0  # released at 2h, NOT at 1.5h + 1h = 2.5h
+
+    def test_unknown_explicit_target_is_recorded_and_perturbs_nothing(self) -> None:
+        # Finding 9: an explicit-but-unknown target must not silently outage
+        # the first suite — recorded unresolved, capacity untouched.
+        h = build_physics()
+        schedule_disruptions(
+            h.env,
+            h.world,
+            h.executor,
+            h.streams,
+            (
+                DisruptionEvent(
+                    kind="imaging_outage",
+                    at=SimTime(hours(1).root),
+                    duration=hours(1),
+                    target="imaging_ghost",
+                ),
+            ),
+            staff_processes={},
+            event_log=h.log,
+        )
+        h.env.run(until=int(hours(1.5).root))  # mid-window
+        for resource in h.resources.imaging.values():
+            assert resource.count == 0  # nothing seized
+        markers = _markers(h.log, "imaging_outage")
+        assert len(markers) == 1
+        assert markers[0].detail == "unresolved target 'imaging_ghost'"
 
 
 class TestIdenticalAcrossArms:
