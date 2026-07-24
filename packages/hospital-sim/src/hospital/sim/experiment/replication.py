@@ -77,6 +77,10 @@ if TYPE_CHECKING:
     from hospital.sim.policies.protocols import PolicySet
     from hospital.solver import RoutingOracle
 
+# Acuity-weighted patient time must dominate staff travel (PLAN §5.1): at 1:1 the
+# solver trades seconds of door-to-provider for staff-walk savings.
+DEFAULT_OBJECTIVE = ObjectiveConfig(w_time=10, w_travel=1)
+
 
 class Replication(FrozenModel):
     """One finished run: the byte-stable log plus everything needed to fold it."""
@@ -211,7 +215,7 @@ def run_replication(scenario: Scenario, arm: Arm, seed: int) -> Replication:
 
     # 6-8: oracle + objective + compiled rules + the chosen arm
     oracle = GraphRoutingOracle(layout.graph)
-    objective = ObjectiveConfig()
+    objective = DEFAULT_OBJECTIVE
     rules = compile_rules(scenario.rules if scenario.rules else default_rules())
     policies = make_policies(arm, oracle=oracle, rules=rules, roster=roster, objective=objective)
     world.set_decision_hook(_make_tick(world, oracle, policies, rules, executor, log))

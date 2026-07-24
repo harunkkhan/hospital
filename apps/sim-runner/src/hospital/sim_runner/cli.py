@@ -37,7 +37,7 @@ from hospital.data.layout import generate_floor
 from hospital.data.scenario import Scenario, load_scenario, realize_staff
 from hospital.sim import Replication, run_replication
 from hospital.sim.experiment.comparison import compare_replications
-from hospital.solver import ObjectiveConfig
+from hospital.sim.experiment.replication import DEFAULT_OBJECTIVE
 
 Arm = Literal["baseline", "optimized"]
 
@@ -126,7 +126,7 @@ def run_command(args: argparse.Namespace) -> int:
     seed = args.seed if args.seed is not None else scenario.seed
     seeds = tuple(seed + i for i in range(args.reps))
     warmup = _default_warmup(scenario)
-    objective = ObjectiveConfig()
+    objective = DEFAULT_OBJECTIVE
     out = Path(args.out)
 
     print(f"scenario={scenario.name} seeds={list(seeds)} arm={args.arm}")
