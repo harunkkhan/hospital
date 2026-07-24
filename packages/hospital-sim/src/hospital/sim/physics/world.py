@@ -580,6 +580,7 @@ class World:
             required_role=required_role,
             required_skills=required_skills,
             ready_at=self.now(),
+            esi=esi,
         )
         task = SimTask(
             spec=spec,

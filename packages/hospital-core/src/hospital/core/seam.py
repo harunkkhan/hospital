@@ -20,7 +20,7 @@ from typing import Literal
 from pydantic import model_validator
 
 from hospital.core.entities import FloorLayout, Patient
-from hospital.core.enums import BayStatus, StaffRole
+from hospital.core.enums import BayStatus, EsiAcuity, StaffRole
 from hospital.core.errors import SeamViolation
 from hospital.core.events import EventEnvelope
 from hospital.core.ids import BayId, NodeId, PatientId, StaffId, TaskId
@@ -66,7 +66,13 @@ class StaffState(FrozenModel):
 
 
 class TaskSpec(FrozenModel):
-    """A unit of pending work the decision layer may route/sequence."""
+    """A unit of pending work the decision layer may route/sequence.
+
+    ``esi`` is the served patient's triage acuity — the urgency signal the
+    dispatch lever prices (doc 03 §4.5's ``u(t)``). Every task is created
+    post-triage, so acuity is observable state, never a hidden field; it is
+    ``None`` only for patient-less work (cleaning).
+    """
 
     id: TaskId
     kind: TaskKind
@@ -75,6 +81,7 @@ class TaskSpec(FrozenModel):
     required_role: StaffRole
     required_skills: frozenset[str] = frozenset()
     ready_at: SimTime
+    esi: EsiAcuity | None = None
 
 
 class DecisionInput(FrozenModel):

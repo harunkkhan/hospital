@@ -60,7 +60,8 @@ class TestProjection:
             "pending_tasks",
             "events_since",
         }
-        # physics-only task facts (duration/destination/bay) never reach the spec
+        # physics-only task facts (duration/destination/bay) never reach the
+        # spec; acuity does (observable post-triage — dispatch's urgency signal)
         assert set(type(task.spec).model_fields) == {
             "id",
             "kind",
@@ -69,6 +70,7 @@ class TestProjection:
             "required_role",
             "required_skills",
             "ready_at",
+            "esi",
         }
 
 
