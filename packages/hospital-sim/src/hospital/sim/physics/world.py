@@ -408,6 +408,10 @@ class World:
             if rank is not None:
                 entry.override = rank
 
+    def is_waiting(self, p: PatientId) -> bool:
+        """Whether ``p`` is currently in the bay wait queue (a ``grant_bay`` precondition)."""
+        return any(e.patient.id == p for e in self._queue)
+
     def grant_bay(self, p: PatientId, b: BayId) -> None:
         """Assign ``b`` to waiting patient ``p`` and succeed their wake event."""
         entry = next((e for e in self._queue if e.patient.id == p), None)
@@ -471,6 +475,15 @@ class World:
     def pending_tasks(self) -> tuple[TaskSpec, ...]:
         """Undispatched tasks, in FIFO order (boosts move a task to the front)."""
         return tuple(self._tasks[tid].spec for tid in self._pending)
+
+    def is_pending(self, tid: TaskId) -> bool:
+        """Whether ``tid`` is still undispatched (a ``dispatch_task`` precondition)."""
+        return tid in self._pending
+
+    def staff_task(self, s: StaffId) -> TaskId | None:
+        """The task currently assigned to ``s`` — ``None`` means dispatchable."""
+        self.staff_member(s)
+        return self._staff_task.get(s)
 
     def live_task_specs(self) -> tuple[TaskSpec, ...]:
         """Every not-yet-completed task (pending or dispatched) — validation context."""

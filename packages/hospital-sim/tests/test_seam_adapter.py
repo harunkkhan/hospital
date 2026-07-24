@@ -121,6 +121,112 @@ class TestRejectNeverRepair:
             apply_plan(h.world, plan, ctx, h.executor, h.log)
 
 
+class TestPreflight:
+    """Finding 1: dynamic dispatchability is judged BEFORE the first mutation."""
+
+    def test_busy_staff_dispatch_rejects_whole_plan_before_any_mutation(self) -> None:
+        h = build_physics()
+        rules = tiny_rules()
+        p = make_patient("p1", esi=EsiAcuity.ESI3)
+        h.world.register_patient(p)
+        wake = h.world.request_bay(p, stage="triage->bay")
+        bay = h.world.free_compatible_bays(p, rules)[0]
+        nurse = next(m for m in h.roster if m.role is StaffRole.NURSE)
+        first = h.world.add_task(
+            kind="nurse_visit",
+            patient=p.id,
+            at=h.layout.bays[0].node,
+            required_role=StaffRole.NURSE,
+            activity=Activity.NURSE_VISIT,
+            duration=minutes(5),
+        )
+        h.world.dispatch_task(first.spec.id, nurse.id)  # the nurse is now mid-task
+        second = h.world.add_task(
+            kind="nurse_visit",
+            patient=p.id,
+            at=h.layout.bays[1].node,
+            required_role=StaffRole.NURSE,
+            activity=Activity.NURSE_VISIT,
+            duration=minutes(5),
+        )
+        # A feasible assign_bay FOLLOWED by a dispatch to the busy nurse: the
+        # validator cannot see mid-task staff, so before the fix the bay was
+        # granted (mutation!) and then _enact_dispatch raised a bare ValueError.
+        plan = Plan(
+            items=(
+                PlanItem(stable_id=f"assign:{p.id.root}", kind="assign_bay", patient=p.id, bay=bay),
+                PlanItem(
+                    stable_id=f"dispatch:{second.spec.id.root}",
+                    kind="dispatch",
+                    staff=nurse.id,
+                    task=second.spec.id,
+                ),
+            )
+        )
+        with pytest.raises(InfeasiblePlan) as exc:
+            apply_plan(h.world, plan, validation_context(h.world, rules), h.executor, h.log)
+        assert any(v.kind == "double_booked" for v in exc.value.violations)
+        # nothing was applied: the earlier assign_bay item did NOT land
+        assert h.world.bay_status(bay) is BayStatus.FREE
+        assert not wake.triggered
+        assert h.world.is_waiting(p.id)
+        assert h.world.is_pending(second.spec.id)
+        assert not any(isinstance(e.event, BayAssigned) for e in h.log)
+
+    def test_no_longer_pending_task_rejects_as_infeasible(self) -> None:
+        h = build_physics()
+        rules = tiny_rules()
+        p = make_patient("p1")
+        h.world.register_patient(p)
+        nurses = [m for m in h.roster if m.role is StaffRole.NURSE]
+        assert len(nurses) >= 2
+        task = h.world.add_task(
+            kind="nurse_visit",
+            patient=p.id,
+            at=h.layout.bays[0].node,
+            required_role=StaffRole.NURSE,
+            activity=Activity.NURSE_VISIT,
+            duration=minutes(5),
+        )
+        h.world.dispatch_task(task.spec.id, nurses[0].id)  # taken between solve and apply
+        plan = Plan(
+            items=(
+                PlanItem(
+                    stable_id=f"dispatch:{task.spec.id.root}",
+                    kind="dispatch",
+                    staff=nurses[1].id,
+                    task=task.spec.id,
+                ),
+            )
+        )
+        # Before the fix this raised a bare ValueError ("task not pending"),
+        # which _make_tick does not catch — the whole run aborted.
+        with pytest.raises(InfeasiblePlan) as exc:
+            apply_plan(h.world, plan, validation_context(h.world, rules), h.executor, h.log)
+        assert any(v.kind == "double_booked" for v in exc.value.violations)
+        assert len(h.resources.mailboxes[nurses[1].id].items) == 0
+
+    def test_patient_no_longer_waiting_rejects_as_infeasible(self) -> None:
+        h = build_physics()
+        rules = tiny_rules()
+        p = make_patient("p1", esi=EsiAcuity.ESI3)
+        h.world.register_patient(p)
+        free = h.world.free_compatible_bays(p, rules)
+        h.world.request_bay(p, stage="triage->bay")
+        h.world.grant_bay(p.id, free[0])  # granted between solve and apply
+        plan = Plan(
+            items=(
+                PlanItem(
+                    stable_id=f"assign:{p.id.root}", kind="assign_bay", patient=p.id, bay=free[1]
+                ),
+            )
+        )
+        with pytest.raises(InfeasiblePlan) as exc:
+            apply_plan(h.world, plan, validation_context(h.world, rules), h.executor, h.log)
+        assert any(v.kind == "unknown_entity" for v in exc.value.violations)
+        assert h.world.bay_status(free[1]) is BayStatus.FREE
+
+
 class TestHappyPath:
     def test_assign_bay_grants_and_emits_with_origin(self) -> None:
         h = build_physics()
