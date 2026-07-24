@@ -24,9 +24,22 @@ Three invariants live here and nowhere else:
 ``run_service`` stamps each ``*_completed`` with the sequence of its
 ``*_started`` (``caused_by``), so ``analysis`` reconstructs causal chains with
 no side-channel state. On a :class:`simpy.Interrupt` mid-service (a staff
-absence) the ``*_completed`` is still emitted at the interruption instant — a
-cut-short service is truthfully closed, never left dangling — and the interrupt
-propagates to the caller.
+absence) the emission is activity-dependent, matching ``analysis._index``'s
+pair discipline:
+
+* **Patient-facing services** (triage/provider/nurse/documentation) emit their
+  ``*_completed`` at the interruption instant. Their pairs are stack-matched
+  in the index; an unclosed ``*Started`` would be preserved as an OPEN
+  interval and clipped at the horizon, over-crediting care time.
+* **Cleaning emits NOTHING on interrupt.** ``BayCleaningCompleted`` is the
+  bay-cycle CLOSER in the index (it seals the cycle and frees the trace); the
+  bay is still ``CLEANING`` after an interrupt and the task requeues, so a
+  terminal event here would close the cycle early and the true re-clean's pair
+  would land on no open cycle. The index tolerates the dangling
+  ``BayCleaningStarted``: a later re-clean's ``Started`` supersedes it, and an
+  end-of-log dangling start is legitimate WIP occupancy.
+
+In both cases the interrupt propagates to the caller.
 """
 
 from __future__ import annotations
@@ -198,20 +211,24 @@ class TaskExecutor:
         """Emit ``*_started`` → elapse ``duration`` → emit ``*_completed``.
 
         The completed event carries ``caused_by = <started sequence>``. On a
-        ``simpy.Interrupt`` mid-service, the completed event is emitted at the
-        interruption instant (the pair discipline holds — a cut-short service is
-        closed, not dangling) and the interrupt re-raises to the caller.
-        Returns the started event's sequence.
+        ``simpy.Interrupt`` mid-service the completed event is emitted at the
+        interruption instant (a cut-short service is closed, not dangling) —
+        EXCEPT for cleaning: ``BayCleaningCompleted`` is the bay-cycle closer
+        downstream, and the interrupted bay is still ``CLEANING`` with its task
+        requeued, so an interrupted cleaning emits no terminal event (see the
+        module docstring). The interrupt re-raises to the caller. Returns the
+        started event's sequence.
         """
         started = _started_event(activity, self.now(), patient=patient, staff=staff, bay=bay)
         seq = self._log.append(started, caused_by=caused_by)
         try:
             yield self.delay(duration, PriorityTier.COMPLETION)
         except simpy.Interrupt:
-            completed = _completed_event(
-                activity, self.now(), patient=patient, staff=staff, bay=bay, esi=esi
-            )
-            self._log.append(completed, caused_by=seq)
+            if activity is not Activity.CLEANING:
+                completed = _completed_event(
+                    activity, self.now(), patient=patient, staff=staff, bay=bay, esi=esi
+                )
+                self._log.append(completed, caused_by=seq)
             raise
         completed = _completed_event(
             activity, self.now(), patient=patient, staff=staff, bay=bay, esi=esi

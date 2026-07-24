@@ -9,6 +9,9 @@ from _sim_fixtures import PhysicsHarness, build_physics, make_patient
 
 from hospital.core import (
     Activity,
+    BayCleaningCompleted,
+    BayCleaningStarted,
+    BayStatus,
     NurseVisitCompleted,
     NurseVisitStarted,
     PatientMoved,
@@ -170,3 +173,54 @@ class TestAbsence:
         assert task.completed
         pairs = [e.event for e in h.log if isinstance(e.event, NurseVisitCompleted)]
         assert len(pairs) == 2  # the cut-short visit and the full re-serve
+
+    def test_interrupted_cleaning_emits_no_terminal_event(self) -> None:
+        # Finding 7: an absence mid-clean must NOT emit BayCleaningCompleted —
+        # the bay is still CLEANING and the task requeues; the terminal event
+        # is the bay-cycle closer downstream, so it belongs to the re-clean.
+        h = build_physics()
+        hk = next(m for m in h.roster if m.role is StaffRole.HOUSEKEEPING)
+        proc = _start_staff(h, hk)
+        bay = h.layout.bays[0]
+        h.world.assign_bay(bay.id, make_patient("p1").id)
+        h.world.vacate_bay(bay.id)  # OCCUPIED -> CLEANING: a dirty bay
+        task = h.world.add_task(
+            kind="cleaning",
+            patient=None,
+            at=bay.node,
+            required_role=StaffRole.HOUSEKEEPING,
+            activity=Activity.CLEANING,
+            duration=minutes(10),
+            bay=bay.id,
+        )
+        h.env.run(until=1)
+        h.world.dispatch_task(task.spec.id, hk.id)
+
+        walk = h.layout.graph.dijkstra(hk.home_station, task.spec.at).total
+        interrupt_at = walk.root + minutes(2).root  # two minutes into the clean
+        absence_end = interrupt_at + minutes(30).root
+
+        def interrupter() -> Generator[simpy.Event, object]:
+            yield h.executor.delay(
+                SimTime(interrupt_at) - h.executor.now(), PriorityTier.DISRUPTION
+            )
+            h.world.set_absent(hk.id, SimTime(absence_end))
+            proc.interrupt()
+
+        h.env.process(interrupter())
+        h.env.run(until=absence_end - 1)
+
+        # the started clean is left open — no early bay-cycle close
+        assert any(isinstance(e.event, BayCleaningStarted) for e in h.log)
+        assert not any(isinstance(e.event, BayCleaningCompleted) for e in h.log)
+        assert h.world.bay_status(bay.id) is BayStatus.CLEANING
+        assert h.world.pending_tasks() == (task.spec,)  # requeued, never dropped
+
+        # the re-clean emits the ONE terminal event and frees the bay
+        h.env.run(until=absence_end + 1)
+        h.world.dispatch_task(task.spec.id, hk.id)
+        h.env.run(until=absence_end + hours(1).root)
+        assert task.completed
+        completions = [e.event for e in h.log if isinstance(e.event, BayCleaningCompleted)]
+        assert len(completions) == 1
+        assert h.world.bay_status(bay.id) is BayStatus.FREE

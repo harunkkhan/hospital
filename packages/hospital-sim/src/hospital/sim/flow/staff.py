@@ -12,7 +12,10 @@ Absence (`simpy.Interrupt`, the only in-service interruption in v1):
 * interrupted mid-travel -> the position is truthfully the last completed hop
   (the executor only updates position after a hop finishes);
 * interrupted mid-serve -> ``run_service`` closes the ``*_started`` with a
-  ``*_completed`` at the interruption instant (the pair discipline holds);
+  ``*_completed`` at the interruption instant (the pair discipline holds) —
+  except cleaning, which emits NO terminal event: the bay is still
+  ``CLEANING`` and the requeued task's re-clean emits the one true
+  ``BayCleaningCompleted`` that closes the bay cycle downstream;
 * in every case the unfinished task is **re-queued to pending** (the patient is
   still blocked on ``task.done`` — dropping it would deadlock the flow) and a
   decision is requested so another staff can be dispatched;
