@@ -27,6 +27,7 @@ from hospital.core import (
     StaffState,
     TaskSpec,
     WaitingPatient,
+    ZoneType,
 )
 from hospital.solver import RoutingOracle
 
@@ -52,7 +53,15 @@ def _service_order(waiting: tuple[WaitingPatient, ...]) -> list[WaitingPatient]:
 
 @dataclass(frozen=True)
 class FirstAvailablePlacement:
-    """First FREE compatible bay in fixed ``BayId`` order, per waiting patient."""
+    """First FREE compatible bay in fixed ``BayId`` order, per waiting patient.
+
+    Capacity discipline: a ``CapacityRule`` can cap a zone type BELOW its
+    physical bay count, and the validator counts current occupants PLUS the
+    items of the plan under judgment. The policy tracks the same running
+    occupancy here — proposing over-cap assignments would be rejected by the
+    validator and, being deterministic, re-proposed identically every re-solve
+    until the per-instant tick bound raised ``ZeroTimeCycle``.
+    """
 
     rules: CompiledRules
 
@@ -61,6 +70,18 @@ class FirstAvailablePlacement:
         free = sorted(
             (bs.bay for bs in di.bays if bs.status is BayStatus.FREE), key=lambda b: b.root
         )
+        # Zone-type occupancy the validator will judge against: current
+        # occupants first, then every bay this plan takes.
+        occupancy: dict[ZoneType, int] = {}
+        for bs in di.bays:
+            if bs.status is BayStatus.OCCUPIED:
+                zt = bay_by_id[bs.bay].zone_type
+                occupancy[zt] = occupancy.get(zt, 0) + 1
+
+        def within_capacity(bay: Bay) -> bool:
+            cap = self.rules.capacity_for(bay.zone_type)
+            return cap is None or occupancy.get(bay.zone_type, 0) < cap
+
         items: list[PlanItem] = []
         taken: set[BayId] = set()
         for w in _service_order(di.waiting):
@@ -68,13 +89,17 @@ class FirstAvailablePlacement:
                 (
                     b
                     for b in free
-                    if b not in taken and _compatible(bay_by_id[b], w.patient, self.rules)
+                    if b not in taken
+                    and _compatible(bay_by_id[b], w.patient, self.rules)
+                    and within_capacity(bay_by_id[b])
                 ),
                 None,
             )
             if chosen is None:
                 continue  # no compatible capacity now; the patient keeps waiting
             taken.add(chosen)
+            zt = bay_by_id[chosen].zone_type
+            occupancy[zt] = occupancy.get(zt, 0) + 1
             items.append(
                 PlanItem(
                     stable_id=f"assign:{w.patient.id.root}",
@@ -93,8 +118,14 @@ class NearestIdleDispatch:
     "Nearest" is an ``oracle.distance`` *query* over the same one Dijkstra the
     optimized arm uses; ties break on staff id for a total order. One task per
     staff per tick (the validator's staff double-booking rule is never risked).
+
+    Qualification is judged on ``task.required_skills | rules.skills_for(kind)``
+    — the SAME union the validator (and ``solver.dispatch``) applies. Filtering
+    on the spec's skills alone would propose rule-unqualified staff, and the
+    deterministic reject/re-solve loop would end in ``ZeroTimeCycle``.
     """
 
+    rules: CompiledRules
     roster: tuple[StaffMember, ...] = field(default=())
 
     def dispatch(self, di: DecisionInput, oracle: RoutingOracle) -> tuple[PlanItem, ...]:
@@ -108,7 +139,7 @@ class NearestIdleDispatch:
         ]
         items: list[PlanItem] = []
         for task in di.pending_tasks:
-            candidates = [s for s in idle if _qualified(members[s.staff], task)]
+            candidates = [s for s in idle if _qualified(members[s.staff], task, self.rules)]
             if not candidates:
                 continue  # nobody idle and qualified; the task stays pending
             chosen = min(
@@ -127,8 +158,11 @@ class NearestIdleDispatch:
         return tuple(items)
 
 
-def _qualified(member: StaffMember, task: TaskSpec) -> bool:
-    return member.role == task.required_role and not (task.required_skills - member.skills)
+def _qualified(member: StaffMember, task: TaskSpec, rules: CompiledRules) -> bool:
+    if member.role != task.required_role:
+        return False
+    required = task.required_skills | rules.skills_for(task.kind)
+    return not (required - member.skills)
 
 
 @dataclass(frozen=True)

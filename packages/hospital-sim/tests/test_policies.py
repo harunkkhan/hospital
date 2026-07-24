@@ -5,9 +5,25 @@ from __future__ import annotations
 import pytest
 from _sim_fixtures import build_physics, make_patient, tiny_rules
 
-from hospital.core import Activity, EsiAcuity, SimTime, StaffRole, minutes
+from hospital.core import (
+    Activity,
+    CapacityRule,
+    CompatibilityRule,
+    EsiAcuity,
+    Plan,
+    Rule,
+    SimTime,
+    SkillRule,
+    StaffId,
+    StaffMember,
+    StaffRole,
+    ZoneType,
+    compile_rules,
+    minutes,
+    validate,
+)
 from hospital.sim.policies.factory import make_policies
-from hospital.sim.seam_adapter import build_decision_input
+from hospital.sim.seam_adapter import build_decision_input, validation_context
 from hospital.solver import GraphRoutingOracle, ObjectiveConfig
 
 
@@ -66,6 +82,117 @@ class TestFirstAvailablePlacement:
         assert len(items) == 1
         assert items[0].bay is not None
         assert h.world.bay(items[0].bay).isolation_capable
+
+
+class TestCapacityRule:
+    """Finding 2: placement must honor a zone cap below the physical bay count."""
+
+    def test_capacity_rule_bounds_placements_including_occupants(self) -> None:
+        h = build_physics()
+        rules_tuple: tuple[Rule, ...] = (
+            CompatibilityRule(allowed_zone_types=frozenset({(EsiAcuity.ESI3, ZoneType.GENERAL)})),
+            CapacityRule(zone_type=ZoneType.GENERAL, max_occupancy=2),
+        )
+        rules = compile_rules(rules_tuple)
+        oracle = GraphRoutingOracle(h.layout.graph)
+        policies = make_policies("baseline", oracle=oracle, rules=rules, roster=h.roster)
+
+        general = [b.id for b in h.layout.bays if b.zone_type is ZoneType.GENERAL]
+        assert len(general) >= 3  # the cap binds below the physical count
+        # one occupant already in the zone -> only ONE cap slot remains
+        h.world.assign_bay(general[0], make_patient("occ").id)
+        waiting = [make_patient(f"p{i}", esi=EsiAcuity.ESI3) for i in range(3)]
+        for p in waiting:
+            h.world.register_patient(p)
+            h.world.request_bay(p, stage="triage->bay")
+
+        di = build_decision_input(h.world, SimTime(0), ())
+        items = policies.placement.place(di, oracle)
+
+        # Before the fix: 3 items -> validator capacity_exceeded -> identical
+        # deterministic retry -> ZeroTimeCycle. The occupant AND earlier items
+        # in the same plan both count against the cap.
+        assert len(items) == 1
+        plan = Plan(items=items)
+        assert validate(plan, validation_context(h.world, rules)) == ()
+
+
+class TestSkillRule:
+    """Finding 3: dispatch must union compiled rule skills into qualification."""
+
+    def _skill_rules(self) -> tuple[Rule, ...]:
+        return (
+            CompatibilityRule(allowed_zone_types=frozenset({(EsiAcuity.ESI3, ZoneType.GENERAL)})),
+            SkillRule(task_kind="cleaning", required_skills=frozenset({"biohazard"})),
+        )
+
+    def test_rule_unqualified_staff_is_never_dispatched(self) -> None:
+        h = build_physics()
+        rules = compile_rules(self._skill_rules())
+        oracle = GraphRoutingOracle(h.layout.graph)
+        station = h.layout.stations[0]
+        plain = StaffMember(
+            id=StaffId("hk_plain"),
+            role=StaffRole.HOUSEKEEPING,
+            home_station=station,
+            skills=frozenset(),
+        )
+        skilled = StaffMember(
+            id=StaffId("hk_bio"),
+            role=StaffRole.HOUSEKEEPING,
+            home_station=station,
+            skills=frozenset({"biohazard"}),
+        )
+        h.world.register_staff(plain)
+        h.world.register_staff(skilled)
+        task = h.world.add_task(
+            kind="cleaning",
+            patient=None,
+            at=h.layout.bays[0].node,
+            required_role=StaffRole.HOUSEKEEPING,
+            activity=Activity.CLEANING,
+            duration=minutes(10),
+            bay=h.layout.bays[0].id,
+        )
+        # the unqualified housekeeper is NEARER — the old skill check would pick it
+        h.world.set_staff_position(plain.id, task.spec.at)
+
+        policies = make_policies(
+            "baseline", oracle=oracle, rules=rules, roster=(plain, skilled)
+        )
+        di = build_decision_input(h.world, SimTime(0), ())
+        items = policies.dispatch.dispatch(di, oracle)
+
+        assert len(items) == 1
+        assert items[0].staff == skilled.id  # rule skills won, not raw distance
+        plan = Plan(items=items)
+        assert validate(plan, validation_context(h.world, rules)) == ()
+
+    def test_nobody_rule_qualified_leaves_the_task_pending(self) -> None:
+        h = build_physics()
+        rules = compile_rules(self._skill_rules())
+        oracle = GraphRoutingOracle(h.layout.graph)
+        plain = StaffMember(
+            id=StaffId("hk_plain"),
+            role=StaffRole.HOUSEKEEPING,
+            home_station=h.layout.stations[0],
+            skills=frozenset(),
+        )
+        h.world.register_staff(plain)
+        task = h.world.add_task(
+            kind="cleaning",
+            patient=None,
+            at=h.layout.bays[0].node,
+            required_role=StaffRole.HOUSEKEEPING,
+            activity=Activity.CLEANING,
+            duration=minutes(10),
+            bay=h.layout.bays[0].id,
+        )
+        policies = make_policies("baseline", oracle=oracle, rules=rules, roster=(plain,))
+        di = build_decision_input(h.world, SimTime(0), ())
+        # before the fix: a rule-unqualified dispatch -> validator reject -> retry loop
+        assert policies.dispatch.dispatch(di, oracle) == ()
+        assert task.spec in di.pending_tasks
 
 
 class TestNearestIdleDispatch:

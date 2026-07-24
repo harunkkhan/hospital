@@ -46,7 +46,7 @@ def make_policies(
         return PolicySet(
             placement=FirstAvailablePlacement(rules=rules),
             sequencing=FifoWithinAcuity(),
-            dispatch=NearestIdleDispatch(roster=roster),
+            dispatch=NearestIdleDispatch(rules=rules, roster=roster),
             turnaround=FifoTurnaround(),
             discharge=FifoDischarge(),
             staffing=InputStaffing(),
