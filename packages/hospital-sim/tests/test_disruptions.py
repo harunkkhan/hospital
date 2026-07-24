@@ -117,6 +117,48 @@ class TestAbsence:
         assert idles == [0, (at + duration).root]
         assert h.world.absent_until(nurse.id) is None
 
+    def test_overlapping_absences_keep_the_longest_window(self) -> None:
+        # Finding 8: a second, shorter window inside a longer one must not
+        # bring the agent back early — [1h, 6h] + [2h, 3h] returns at 6h.
+        h = build_physics()
+        nurse = next(m for m in h.roster if m.role is StaffRole.NURSE)
+        procs = {
+            m.id: h.env.process(
+                staff_process(h.env, h.world, h.executor, h.log, m, h.resources.mailboxes[m.id])
+            )
+            for m in h.roster
+        }
+        schedule_disruptions(
+            h.env,
+            h.world,
+            h.executor,
+            h.streams,
+            (
+                DisruptionEvent(
+                    kind="staff_absence",
+                    at=SimTime(hours(1).root),
+                    duration=hours(5),
+                    target=nurse.id.root,
+                ),
+                DisruptionEvent(
+                    kind="staff_absence",
+                    at=SimTime(hours(2).root),
+                    duration=hours(1),
+                    target=nurse.id.root,
+                ),
+            ),
+            staff_processes=procs,
+            event_log=h.log,
+        )
+        h.env.run(until=hours(7).root)
+        idles = [
+            env.event.occurred_at.root
+            for env in h.log
+            if env.event.kind == "staff_idle" and env.event.staff == nurse.id
+        ]
+        assert idles == [0, hours(6).root]  # back at 6h, never at 3h
+        assert h.world.absent_until(nurse.id) is None
+
 
 class TestClosure:
     def test_node_closure_forces_a_reroute_then_restores(self) -> None:

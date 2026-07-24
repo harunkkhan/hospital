@@ -461,8 +461,15 @@ class World:
         self._staff_task.pop(s, None)
 
     def set_absent(self, s: StaffId, until: SimTime) -> None:
+        """Mark ``s`` absent through ``until`` — overlapping windows keep the MAX.
+
+        A later-but-shorter window must never truncate an active longer one
+        (through-hour-6 then through-hour-3 still returns at 6).
+        """
         self.staff_member(s)
-        self._absent_until[s] = until
+        current = self._absent_until.get(s)
+        if current is None or until.root > current.root:
+            self._absent_until[s] = until
 
     def absent_until(self, s: StaffId) -> SimTime | None:
         return self._absent_until.get(s)

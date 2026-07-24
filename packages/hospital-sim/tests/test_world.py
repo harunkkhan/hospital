@@ -15,8 +15,10 @@ from hospital.core import (
     LayoutError,
     NodeId,
     PatientId,
+    SimTime,
     UnknownEntity,
     ZeroTimeCycle,
+    hours,
 )
 from hospital.sim.physics.world import World
 
@@ -237,6 +239,18 @@ class TestStaff:
         target = h.layout.entrances[0]
         h.world.set_staff_position(member.id, target)
         assert h.world.staff_at(member.id) == target
+
+    def test_overlapping_absences_keep_the_max_end(self) -> None:
+        # Finding 8: a later-but-shorter absence must not truncate an active
+        # longer one — through-hour-6 then through-hour-3 still returns at 6.
+        h = build_physics()
+        member = h.roster[0]
+        h.world.set_absent(member.id, SimTime(hours(6).root))
+        h.world.set_absent(member.id, SimTime(hours(3).root))
+        assert h.world.absent_until(member.id) == SimTime(hours(6).root)
+        # a genuinely longer window still extends
+        h.world.set_absent(member.id, SimTime(hours(8).root))
+        assert h.world.absent_until(member.id) == SimTime(hours(8).root)
 
 
 class TestDecisionTicks:
