@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 
 import simpy
-from _sim_fixtures import build_physics, ring_layout, tiny_scenario
+from _sim_fixtures import build_physics, make_patient, ring_layout, tiny_scenario
 
 from hospital.core import (
+    Activity,
     BayStatus,
     DisruptionInjected,
     EventLog,
@@ -15,8 +16,10 @@ from hospital.core import (
     PatientId,
     RandomStreams,
     SimTime,
+    StaffMoved,
     StaffRole,
     hours,
+    minutes,
 )
 from hospital.data.scenario import DisruptionEvent, DisruptionSpec
 from hospital.sim.experiment.disruptions import schedule_disruptions
@@ -148,6 +151,91 @@ class TestClosure:
         env.run(until=hours(3).root)  # past the window
         assert world.closed_nodes == frozenset()
         assert world.route(src, dst) == before  # exact restore
+
+    def test_task_at_a_closed_node_waits_and_recovers(self) -> None:
+        # Finding 4: a node closure on a node an actor NEEDS must block the
+        # actor until reopening — never raise LayoutError out of env.run.
+        h = build_physics()
+        nurse = next(m for m in h.roster if m.role is StaffRole.NURSE)
+        h.env.process(
+            staff_process(
+                h.env, h.world, h.executor, h.log, nurse, h.resources.mailboxes[nurse.id]
+            )
+        )
+        p = make_patient("p1")
+        h.world.register_patient(p)
+        target = h.layout.bays[0].node
+        task = h.world.add_task(
+            kind="nurse_visit",
+            patient=p.id,
+            at=target,
+            required_role=StaffRole.NURSE,
+            activity=Activity.NURSE_VISIT,
+            duration=minutes(5),
+        )
+        window_end = SimTime(hours(2).root)
+        schedule_disruptions(
+            h.env,
+            h.world,
+            h.executor,
+            h.streams,
+            (
+                DisruptionEvent(
+                    kind="zone_closure",
+                    at=SimTime(hours(1).root),
+                    duration=hours(1),
+                    target=f"node:{target.root}",
+                ),
+            ),
+            staff_processes={},
+            event_log=h.log,
+        )
+        h.env.run(until=hours(1).root + 1)  # mid-window
+        h.world.dispatch_task(task.spec.id, nurse.id)
+        h.env.run(until=hours(4).root)  # before the fix: LayoutError killed the run
+
+        assert task.completed
+        # the nurse only started walking once the closure lifted
+        moves = [
+            env.event.occurred_at
+            for env in h.log
+            if isinstance(env.event, StaffMoved) and env.event.staff == nurse.id
+        ]
+        assert moves and all(t >= window_end for t in moves)
+
+    def test_overlapping_node_closures_do_not_reopen_early(self) -> None:
+        # Finding 10: the first window's restore must not reopen a node the
+        # second, still-active window holds closed.
+        layout = ring_layout()
+        env = simpy.Environment()
+        log = EventLog()
+        resources = build_resources(env, layout, ())
+        world = World(env, layout, resources, log)
+        executor = TaskExecutor(env, world, log)
+        src, dst = NodeId("a"), NodeId("c")
+        base = world.route(src, dst)
+        windows = (
+            (SimTime(hours(1).root), hours(2)),  # [1h, 3h)
+            (SimTime(hours(2).root), hours(2)),  # [2h, 4h)
+        )
+        schedule_disruptions(
+            env,
+            world,
+            executor,
+            RandomStreams(0),
+            tuple(
+                DisruptionEvent(kind="zone_closure", at=at, duration=duration, target="node:b")
+                for at, duration in windows
+            ),
+            staff_processes={},
+            event_log=log,
+        )
+        env.run(until=int(hours(3.5).root))  # first window over, second active
+        assert NodeId("b") in world.closed_nodes
+        assert NodeId("b") not in world.route(src, dst).nodes
+        env.run(until=hours(5).root)  # both windows over
+        assert world.closed_nodes == frozenset()
+        assert world.route(src, dst) == base
 
     def test_zone_closure_closes_only_free_bays_and_reopens(self) -> None:
         h = build_physics()

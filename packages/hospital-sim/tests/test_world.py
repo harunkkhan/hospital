@@ -8,7 +8,16 @@ import pytest
 import simpy
 from _sim_fixtures import build_physics, make_patient, ring_world, tiny_rules
 
-from hospital.core import BayId, BayStatus, EsiAcuity, PatientId, UnknownEntity, ZeroTimeCycle
+from hospital.core import (
+    BayId,
+    BayStatus,
+    EsiAcuity,
+    LayoutError,
+    NodeId,
+    PatientId,
+    UnknownEntity,
+    ZeroTimeCycle,
+)
 from hospital.sim.physics.world import World
 
 
@@ -49,6 +58,63 @@ class TestRouting:
         rerouted = r.world.route(src, dst)
         assert blocked not in rerouted.nodes
         assert [n.root for n in rerouted.nodes] == ["a", "d", "c"]
+
+    def test_route_allows_egress_from_a_closed_src(self) -> None:
+        # Finding 4: an actor standing ON a closed node must still be routable
+        # out; only entering/traversing a closure is forbidden (nuance 4.1).
+        r = ring_world()
+        r.world.close_node(NodeId("a"))
+        path = r.world.route(NodeId("a"), NodeId("c"))
+        assert path.nodes[0] == NodeId("a")
+        assert r.world.try_route(NodeId("c"), NodeId("a")) is None  # no ingress
+
+    def test_try_route_distinguishes_closures_from_layout_bugs(self) -> None:
+        # Finding 4: closure-severed routes are recoverable (None -> wait);
+        # a genuinely broken route still raises even while masks are active.
+        r = ring_world()
+        r.world.close_node(NodeId("b"))
+        r.world.close_node(NodeId("d"))
+        assert r.world.try_route(NodeId("a"), NodeId("c")) is None
+        with pytest.raises(LayoutError):
+            r.world.try_route(NodeId("a"), NodeId("ghost"))
+
+    def test_await_route_waits_for_a_reopening(self) -> None:
+        # Finding 4: an actor needing a closed/severed destination parks until
+        # the closure lifts, then routes — the run never sees a LayoutError.
+        r = ring_world()
+        r.world.close_node(NodeId("b"))
+        r.world.close_node(NodeId("d"))
+        resumed: list[tuple[int, tuple[str, ...]]] = []
+
+        def traveler() -> Generator[simpy.Event, object]:
+            path = yield from r.world.await_route(NodeId("a"), NodeId("c"))
+            resumed.append((int(r.env.now), tuple(n.root for n in path.nodes)))
+
+        def reopener() -> Generator[simpy.Event, object]:
+            yield r.env.timeout(10)
+            r.world.open_node(NodeId("b"))
+
+        r.env.process(traveler())
+        r.env.process(reopener())
+        r.env.run(until=100)
+        assert resumed == [(10, ("a", "b", "c"))]
+
+    def test_overlapping_closures_are_refcounted(self) -> None:
+        # Finding 10: the first window's reopen must not undo the second's.
+        r = ring_world()
+        r.world.close_node(NodeId("b"))
+        r.world.close_node(NodeId("b"))
+        r.world.open_node(NodeId("b"))
+        assert NodeId("b") in r.world.closed_nodes
+        r.world.open_node(NodeId("b"))
+        assert r.world.closed_nodes == frozenset()
+        u, v = NodeId("a"), NodeId("b")
+        r.world.block_edge(u, v)
+        r.world.block_edge(u, v)
+        r.world.unblock_edge(u, v)
+        assert (u, v) in r.world.blocked_edges
+        r.world.unblock_edge(u, v)
+        assert r.world.blocked_edges == frozenset()
 
 
 class TestBayLifecycle:

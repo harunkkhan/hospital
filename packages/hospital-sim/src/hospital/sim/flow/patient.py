@@ -65,7 +65,7 @@ if TYPE_CHECKING:
 
     import simpy
 
-    from hospital.core import RandomStreams
+    from hospital.core import RandomStreams, RoutePath
     from hospital.core.seam import TaskKind
     from hospital.sim.physics.world import World
 
@@ -102,8 +102,10 @@ def patient_process(
     )
 
     # 2 — triage (pooled rooms; acuity priority; ESI is ground truth, revealed here)
-    triage_node = _nearest(world, entrance, world.resources.triage_nodes)
-    yield from executor.walk(pid, world.route(entrance, triage_node))
+    _triage_node, triage_path = yield from _nearest_open(
+        world, entrance, world.resources.triage_nodes
+    )
+    yield from executor.walk(pid, triage_path)
     req = yield from executor.acquire(world.resources.triage, priority=priority)
     try:
         duration = service_times.sample(
@@ -201,11 +203,31 @@ def patient_process(
     event_log.append(DischargeCompleted(occurred_at=executor.now(), patient=pid))
 
 
-def _nearest(world: World, src: NodeId, candidates: tuple[NodeId, ...]) -> NodeId:
-    """Deterministic nearest node by route time, id as the total-order tail."""
+def _nearest_open(
+    world: World, src: NodeId, candidates: tuple[NodeId, ...]
+) -> Generator[simpy.Event, object, tuple[NodeId, RoutePath]]:
+    """Deterministic nearest *reachable* candidate by route time, id as tie-break.
+
+    A closure that severs every candidate parks the caller until a reopening
+    (recoverable, nuance 4.1) rather than raising ``LayoutError`` mid-run; an
+    empty candidate tuple is still a genuine layout bug and raises.
+    """
     if not candidates:
         raise LayoutError("no candidate nodes on this floor for a required visit")
-    return min(candidates, key=lambda n: (world.route(src, n).total.root, n.root))
+    while True:
+        best: tuple[int, str] | None = None
+        chosen: tuple[NodeId, RoutePath] | None = None
+        for n in sorted(candidates, key=lambda n: n.root):
+            path = world.try_route(src, n)
+            if path is None:
+                continue  # closure-severed right now; other candidates may serve
+            key = (path.total.root, n.root)
+            if best is None or key < best:
+                best = key
+                chosen = (n, path)
+        if chosen is not None:
+            return chosen
+        yield world.masks_relaxed()
 
 
 def _self_walk(
@@ -213,7 +235,8 @@ def _self_walk(
 ) -> Generator[simpy.Event, object]:
     pos = world.patient_at(patient.id)
     if pos != dest:
-        yield from executor.walk(patient.id, world.route(pos, dest))
+        path = yield from world.await_route(pos, dest)
+        yield from executor.walk(patient.id, path)
 
 
 def _transport(world: World, patient: Patient, dest: NodeId) -> Generator[simpy.Event, object]:
@@ -283,7 +306,7 @@ def _imaging(
     event_log.append(
         TestOrdered(occurred_at=executor.now(), patient=pid, activity=Activity.IMAGING)
     )
-    suite = _nearest(world, bay.node, tuple(world.resources.imaging))
+    suite, _path = yield from _nearest_open(world, bay.node, tuple(world.resources.imaging))
     yield from _transport(world, patient, suite)  # ALL imaging transports are escorted
     resource = world.resources.imaging[suite]
     req = yield from executor.acquire(resource, priority=priority)
@@ -329,7 +352,7 @@ def _lab(
     yield from _bedside_service(
         world, patient, bay, "lab", Activity.LAB, StaffRole.NURSE, index, service_times
     )
-    station = _nearest(world, bay.node, tuple(world.resources.lab))
+    station, _path = yield from _nearest_open(world, bay.node, tuple(world.resources.lab))
     resource = world.resources.lab[station]
     req = yield from executor.acquire(resource, priority=priority)
     try:

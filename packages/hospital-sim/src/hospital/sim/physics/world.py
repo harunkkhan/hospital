@@ -14,6 +14,24 @@ no Dijkstra in ``sim``. ``block_edge``/``close_node`` mutate the masks and bump
 a second pathfinder (a masked ``(a, b)`` entry closes a bidirectional corridor
 in both directions — core's semantics, nuance 1.7).
 
+Closure semantics (nuance 4.1 — a closure must never crash or strand):
+
+* **Masks are reference-counted.** Overlapping disruption windows on the same
+  node/edge each count one closure; the mask relaxes only when the LAST window
+  ends — an early ``open_node`` from the first window cannot reopen a node the
+  second window still holds closed.
+* **Egress is always legal.** :meth:`route` never treats the *source* as
+  closed: an actor already standing on a closed node may leave (closure
+  forbids entering/traversing, not escaping) — otherwise a closure would
+  strand actors, masquerading as gridlock.
+* **Ingress waits, it does not crash.** A destination that is closed — or
+  unreachable because closures cut every path — is a *recoverable* condition:
+  :meth:`try_route` reports it as ``None`` (instead of core's ``LayoutError``)
+  and :meth:`await_route` parks the caller until a reopening relaxes the
+  masks, then retries. Only a failure that would occur with NO masks (unknown
+  node, disconnected floor) still raises — that is a layout bug, and waiting
+  would hide it forever.
+
 The bay four-state machine ``FREE → OCCUPIED → CLEANING → FREE`` (plus
 ``* → CLOSED → prior`` for disruptions) has exactly one path per transition.
 :meth:`free_bay` is a *decision trigger*: freed capacity requests a decision
@@ -60,7 +78,7 @@ from hospital.core.seam import BayState, StaffState, TaskKind, WaitingPatient
 from hospital.sim.physics.executor import PriorityTier, TierTimeout
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Generator
 
     from hospital.core import CompiledRules
     from hospital.sim.physics.resources import ResourcePool
@@ -150,10 +168,14 @@ class World:
         self._pending: list[TaskId] = []
         self._task_seq = 0
 
-        self._blocked: set[tuple[NodeId, NodeId]] = set()
-        self._closed: set[NodeId] = set()
+        # Masks are refcounted: overlapping closure windows on one node/edge
+        # each hold a count; the mask relaxes only at zero (finding: the first
+        # window's unconditional reopen must not undo a still-active second).
+        self._blocked: dict[tuple[NodeId, NodeId], int] = {}
+        self._closed: dict[NodeId, int] = {}
         self._mask_version = 0
         self._route_memo: dict[tuple[str, str, int], RoutePath] = {}
+        self._mask_relaxed: simpy.Event = env.event()
 
         self._edge_secs: dict[tuple[NodeId, NodeId], Duration] = {}
         for e in layout.graph.edges:
@@ -184,6 +206,11 @@ class World:
 
         Results are memoized per ``(src, dst, mask_version)``; every mask
         mutator bumps the version, invalidating the memo wholesale.
+
+        Egress rule: ``src`` is never treated as closed — an actor standing on
+        a closed node may always leave (nuance 4.1). Raises ``LayoutError``
+        when ``dst`` is closed or every path is masked; callers that can wait
+        use :meth:`await_route` instead.
         """
         key = (src.root, dst.root, self._mask_version)
         cached = self._route_memo.get(key)
@@ -193,10 +220,51 @@ class World:
             src,
             dst,
             blocked_edges=frozenset(self._blocked),
-            closed_nodes=frozenset(self._closed),
+            closed_nodes=frozenset(self._closed) - {src},
         )
         self._route_memo[key] = path
         return path
+
+    def try_route(self, src: NodeId, dst: NodeId) -> RoutePath | None:
+        """:meth:`route`, with closure-induced failures softened to ``None``.
+
+        ``None`` means "blocked by the current masks — recoverable, wait for a
+        reopening". A failure that would occur even with NO masks (unknown
+        node, disconnected floor) still raises: that is a genuine layout bug,
+        and waiting on it would hide it forever.
+        """
+        if not self._blocked and not self._closed:
+            return self.route(src, dst)
+        try:
+            return self.route(src, dst)
+        except LayoutError:
+            self.layout.graph.dijkstra(src, dst)  # re-raises iff genuinely broken
+            return None
+
+    def masks_relaxed(self) -> simpy.Event:
+        """An event succeeded at the next mask relaxation (open/unblock)."""
+        return self._mask_relaxed
+
+    def await_route(self, src: NodeId, dst: NodeId) -> Generator[simpy.Event, object, RoutePath]:
+        """Route ``src -> dst``, waiting out closures instead of crashing.
+
+        An actor needing a closed (or closure-severed) destination parks here
+        until a reopening relaxes the masks, then retries — the recoverable
+        disruption semantics of nuance 4.1: a closure blocks, it never kills
+        the replication.
+        """
+        while True:
+            path = self.try_route(src, dst)
+            if path is not None:
+                return path
+            yield self._mask_relaxed
+
+    def _relax_masks(self) -> None:
+        """Wake every actor parked on a closure — a route may have reopened."""
+        ev = self._mask_relaxed
+        self._mask_relaxed = self._env.event()
+        if not ev.triggered:
+            ev.succeed(None)
 
     def edge_seconds(self, u: NodeId, v: NodeId) -> Duration:
         """Traversal seconds of the directed hop ``u -> v`` (LayoutError if absent)."""
@@ -206,20 +274,34 @@ class World:
         return secs
 
     def block_edge(self, a: NodeId, b: NodeId) -> None:
-        self._blocked.add((a, b))
+        """Close a corridor (refcounted — one count per overlapping window)."""
+        self._blocked[(a, b)] = self._blocked.get((a, b), 0) + 1
         self._mask_version += 1
 
     def unblock_edge(self, a: NodeId, b: NodeId) -> None:
-        self._blocked.discard((a, b))
+        """Release one closure count; the edge reopens only at zero."""
+        count = self._blocked.get((a, b), 0)
+        if count <= 1:
+            self._blocked.pop((a, b), None)
+        else:
+            self._blocked[(a, b)] = count - 1
         self._mask_version += 1
+        self._relax_masks()
 
     def close_node(self, n: NodeId) -> None:
-        self._closed.add(n)
+        """Close a node (refcounted — one count per overlapping window)."""
+        self._closed[n] = self._closed.get(n, 0) + 1
         self._mask_version += 1
 
     def open_node(self, n: NodeId) -> None:
-        self._closed.discard(n)
+        """Release one closure count; the node reopens only at zero."""
+        count = self._closed.get(n, 0)
+        if count <= 1:
+            self._closed.pop(n, None)
+        else:
+            self._closed[n] = count - 1
         self._mask_version += 1
+        self._relax_masks()
 
     @property
     def blocked_edges(self) -> frozenset[tuple[NodeId, NodeId]]:

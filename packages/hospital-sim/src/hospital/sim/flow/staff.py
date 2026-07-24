@@ -86,6 +86,9 @@ def _serve(
 ) -> Generator[simpy.Event, object]:
     """Travel to the task, then perform it (escorted walk or a paired service)."""
     sid = staff.id
+    # Routing goes through ``await_route``: a task at (or severed by) a closed
+    # node parks the agent until the closure lifts — recoverable, never a
+    # LayoutError that would kill the replication (nuance 4.1).
     if task.spec.kind == "transport":
         patient = task.spec.patient
         destination = task.destination
@@ -94,14 +97,15 @@ def _serve(
         # requeue), then escort — both actors emit per-edge movement events
         pickup = world.patient_at(patient)
         if world.staff_at(sid) != pickup:
-            yield from executor.walk(sid, world.route(world.staff_at(sid), pickup))
+            path = yield from world.await_route(world.staff_at(sid), pickup)
+            yield from executor.walk(sid, path)
         if world.patient_at(patient) != destination:
-            yield from executor.walk(
-                patient, world.route(world.patient_at(patient), destination), escort=sid
-            )
+            path = yield from world.await_route(world.patient_at(patient), destination)
+            yield from executor.walk(patient, path, escort=sid)
         return
     if world.staff_at(sid) != task.spec.at:
-        yield from executor.walk(sid, world.route(world.staff_at(sid), task.spec.at))
+        path = yield from world.await_route(world.staff_at(sid), task.spec.at)
+        yield from executor.walk(sid, path)
     yield from executor.run_service(
         task.activity,
         duration=task.duration,
