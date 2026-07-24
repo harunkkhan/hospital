@@ -157,9 +157,7 @@ class TestSkillRule:
         # the unqualified housekeeper is NEARER — the old skill check would pick it
         h.world.set_staff_position(plain.id, task.spec.at)
 
-        policies = make_policies(
-            "baseline", oracle=oracle, rules=rules, roster=(plain, skilled)
-        )
+        policies = make_policies("baseline", oracle=oracle, rules=rules, roster=(plain, skilled))
         di = build_decision_input(h.world, SimTime(0), ())
         items = policies.dispatch.dispatch(di, oracle)
 

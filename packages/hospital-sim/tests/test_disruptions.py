@@ -201,9 +201,7 @@ class TestClosure:
         h = build_physics()
         nurse = next(m for m in h.roster if m.role is StaffRole.NURSE)
         h.env.process(
-            staff_process(
-                h.env, h.world, h.executor, h.log, nurse, h.resources.mailboxes[nurse.id]
-            )
+            staff_process(h.env, h.world, h.executor, h.log, nurse, h.resources.mailboxes[nurse.id])
         )
         p = make_patient("p1")
         h.world.register_patient(p)

@@ -57,7 +57,6 @@ from hospital.sim.policies.protocols import PlanOrigin
 
 if TYPE_CHECKING:
     from hospital.core import BayId, PatientId, StaffId, TaskId
-
     from hospital.sim.physics.executor import TaskExecutor
     from hospital.sim.physics.world import World
 
