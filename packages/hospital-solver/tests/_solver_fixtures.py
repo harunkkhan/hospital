@@ -241,6 +241,8 @@ def task(
     role: StaffRole,
     patient: str | None = None,
     skills: frozenset[str] = frozenset(),
+    esi: EsiAcuity | None = None,
+    ready_at_us: int = 0,
 ) -> TaskSpec:
     return TaskSpec(
         id=TaskId(tid),
@@ -249,7 +251,8 @@ def task(
         at=NodeId(at),
         required_role=role,
         required_skills=skills,
-        ready_at=SimTime(0),
+        ready_at=SimTime(ready_at_us),
+        esi=esi,
     )
 
 

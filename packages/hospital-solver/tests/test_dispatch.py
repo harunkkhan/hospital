@@ -16,6 +16,7 @@ from _solver_fixtures import (
 from hospital.core import (
     DecisionInput,
     Duration,
+    EsiAcuity,
     NodeId,
     Plan,
     PlanItem,
@@ -155,6 +156,154 @@ def test_assignment_never_strands_a_coverable_task() -> None:
         staff_members=members,
     )
     assert _matching(items) == {"t1": "s2", "t2": "s1"}  # both covered, min travel
+
+
+def test_scarce_staff_serves_critical_before_nearer_low_acuity() -> None:
+    # Regression (M1 stress finding): with travel-only costs the matched SUBSET
+    # under scarcity followed distance alone — the far resus-zone ESI-1 task
+    # lost to nearer low-acuity work tick after tick (ESI-1 LOS +22 min while
+    # the solver "saved walking"). Priority is strict acuity tiers: the one
+    # idle physician takes the just-created ESI-1 task at the FAR node over a
+    # nearer ESI-4 task that has already waited 600 s.
+    di = decision_input(staff=(staff_state("doc", at="gstat"),), now_us=600_000_000)
+    members = (staff_member("doc", StaffRole.PHYSICIAN, skills=frozenset({"md"})),)
+    tasks = (
+        task(
+            "t-low",
+            "provider_visit",
+            at="b1",  # 3000 cm from gstat — the travel-cheap choice
+            role=StaffRole.PHYSICIAN,
+            skills=frozenset({"md"}),
+            esi=EsiAcuity.ESI4,
+            ready_at_us=0,  # waited 600 s
+        ),
+        task(
+            "t-crit",
+            "provider_visit",
+            at="b3",  # 9000 cm from gstat — the resus bay
+            role=StaffRole.PHYSICIAN,
+            skills=frozenset({"md"}),
+            esi=EsiAcuity.ESI1,
+            ready_at_us=600_000_000,  # just created
+        ),
+    )
+    items = assign_staff(
+        di,
+        _oracle(di),
+        config=default_config(),
+        rules=demo_compiled(),
+        tasks=tasks,
+        staff_members=members,
+    )
+    assert _matching(items) == {"t-crit": "doc"}
+
+
+def test_same_tier_dispatch_is_fifo_not_travel() -> None:
+    # Within one acuity tier the longest-waiting task wins over a nearer fresh
+    # one — aging is bounded (no starvation within a tier), and travel cannot
+    # buy its way past a longer wait.
+    di = decision_input(staff=(staff_state("doc", at="gstat"),), now_us=600_000_000)
+    members = (staff_member("doc", StaffRole.PHYSICIAN, skills=frozenset({"md"})),)
+    tasks = (
+        task(
+            "t-near-fresh",
+            "provider_visit",
+            at="b1",
+            role=StaffRole.PHYSICIAN,
+            skills=frozenset({"md"}),
+            esi=EsiAcuity.ESI3,
+            ready_at_us=600_000_000,
+        ),
+        task(
+            "t-far-aged",
+            "provider_visit",
+            at="b3",
+            role=StaffRole.PHYSICIAN,
+            skills=frozenset({"md"}),
+            esi=EsiAcuity.ESI3,
+            ready_at_us=0,
+        ),
+    )
+    items = assign_staff(
+        di,
+        _oracle(di),
+        config=default_config(),
+        rules=demo_compiled(),
+        tasks=tasks,
+        staff_members=members,
+    )
+    assert _matching(items) == {"t-far-aged": "doc"}
+
+
+def test_equal_priority_ties_break_on_travel() -> None:
+    # Same tier, same wait -> the third lexicographic level (min travel) decides.
+    di = decision_input(staff=(staff_state("doc", at="gstat"),))
+    members = (staff_member("doc", StaffRole.PHYSICIAN, skills=frozenset({"md"})),)
+    tasks = (
+        task(
+            "t-far",
+            "provider_visit",
+            at="b4",  # 4000 cm
+            role=StaffRole.PHYSICIAN,
+            skills=frozenset({"md"}),
+            esi=EsiAcuity.ESI3,
+        ),
+        task(
+            "t-near",
+            "provider_visit",
+            at="b1",  # 3000 cm
+            role=StaffRole.PHYSICIAN,
+            skills=frozenset({"md"}),
+            esi=EsiAcuity.ESI3,
+        ),
+    )
+    items = assign_staff(
+        di,
+        _oracle(di),
+        config=default_config(),
+        rules=demo_compiled(),
+        tasks=tasks,
+        staff_members=members,
+    )
+    assert _matching(items) == {"t-near": "doc"}
+
+
+def test_priority_never_reduces_cardinality() -> None:
+    # Serve-first still dominates: taking the ESI-1 with the only us-skilled
+    # physician would strand the other task, so the full cover wins even though
+    # it hands the critical task to the farther staff member.
+    di = decision_input(staff=(staff_state("s1", at="b3"), staff_state("s2", at="b1")))
+    members = (
+        staff_member("s1", StaffRole.PHYSICIAN, skills=frozenset({"md", "us"})),
+        staff_member("s2", StaffRole.PHYSICIAN, skills=frozenset({"md"})),
+    )
+    tasks = (
+        task(
+            "t-crit",
+            "provider_visit",
+            at="b3",
+            role=StaffRole.PHYSICIAN,
+            skills=frozenset({"md"}),
+            esi=EsiAcuity.ESI1,
+        ),
+        task(
+            "t-us",
+            "imaging",
+            at="b1",
+            role=StaffRole.PHYSICIAN,
+            skills=frozenset({"md", "us"}),
+            esi=EsiAcuity.ESI5,
+        ),
+    )
+    items = assign_staff(
+        di,
+        _oracle(di),
+        config=default_config(),
+        rules=demo_compiled(),
+        tasks=tasks,
+        staff_members=members,
+    )
+    assert _matching(items) == {"t-crit": "s2", "t-us": "s1"}
 
 
 def test_rule_skills_unioned_with_task_skills() -> None:
