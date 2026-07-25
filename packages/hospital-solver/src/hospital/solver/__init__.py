@@ -10,7 +10,7 @@ lever imports ``ortools`` inside the function that needs it — so
 from __future__ import annotations
 
 from hospital.solver.discharge import prioritize_discharge
-from hospital.solver.dispatch import assign_staff, route_visits
+from hospital.solver.dispatch import assign_staff, priority_urgencies, route_visits
 from hospital.solver.objective import ObjectiveConfig, config_hash, weighted_total
 from hospital.solver.oracle import GraphRoutingOracle, RouteMask
 from hospital.solver.protocol import RoutingOracle, Solver, SolveResult, SolverStatus
@@ -36,6 +36,7 @@ __all__ = [
     "load_roster",
     "prioritize_cleaning",
     "prioritize_discharge",
+    "priority_urgencies",
     "route_visits",
     "sequence",
     "stamp",

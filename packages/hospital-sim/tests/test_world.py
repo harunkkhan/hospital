@@ -170,7 +170,7 @@ class TestBayQueue:
         later_routine = make_patient("p_esi3_b", esi=EsiAcuity.ESI3, arrival_s=50.0)
         for p in (early_routine, later_routine, late_critical):
             h.world.register_patient(p)
-            h.world.request_bay(p, stage="triage->bay")
+            h.world.request_bay(p, stage="waiting_for_bay")
         order = [w.patient.id.root for w in h.world.waiting_for_bay()]
         assert order == ["p_esi1", "p_esi3_a", "p_esi3_b"]
 
@@ -182,7 +182,7 @@ class TestBayQueue:
         got: list[object] = []
 
         def proc() -> Generator[simpy.Event, object]:
-            wake = h.world.request_bay(p, stage="triage->bay")
+            wake = h.world.request_bay(p, stage="waiting_for_bay")
             granted = yield wake
             got.append(granted)
 
@@ -205,10 +205,40 @@ class TestBayQueue:
         b = make_patient("pb", arrival_s=10.0)
         for p in (a, b):
             h.world.register_patient(p)
-            h.world.request_bay(p, stage="triage->bay")
+            h.world.request_bay(p, stage="waiting_for_bay")
         h.world.resequence_waiting(("pb", "pa"))
         order = [w.patient.id.root for w in h.world.waiting_for_bay()]
         assert order == ["pb", "pa"]
+
+    def test_resequence_rank_is_authoritative_across_acuity_tiers(self) -> None:
+        # Regression (M1 review finding 2): the queue key put ESI ahead of the
+        # enacted sequence override, so an anti-starvation order that promoted
+        # a long-waiting ESI-5 over an ESI-2 was silently re-tiered back to
+        # acuity — the sequencing lever's rank was a no-op. The enacted rank
+        # must be the PRIMARY key.
+        h = build_physics()
+        critical = make_patient("p_esi2", esi=EsiAcuity.ESI2, arrival_s=50.0)
+        starved = make_patient("p_esi5", esi=EsiAcuity.ESI5, arrival_s=0.0)
+        for p in (critical, starved):
+            h.world.register_patient(p)
+            h.world.request_bay(p, stage="waiting_for_bay")
+        assert [w.patient.id.root for w in h.world.waiting_for_bay()] == ["p_esi2", "p_esi5"]
+        h.world.resequence_waiting(("p_esi5", "p_esi2"))
+        assert [w.patient.id.root for w in h.world.waiting_for_bay()] == ["p_esi5", "p_esi2"]
+
+    def test_resequence_resets_entries_the_order_does_not_name(self) -> None:
+        # The enacted order is authoritative for the WHOLE queue: an entry a
+        # fresh order does not name (e.g. enqueued after the solve) drops back
+        # to unranked and sorts after every ranked entry until the next tick.
+        h = build_physics()
+        a = make_patient("pa", esi=EsiAcuity.ESI3, arrival_s=0.0)
+        b = make_patient("pb", esi=EsiAcuity.ESI3, arrival_s=10.0)
+        for p in (a, b):
+            h.world.register_patient(p)
+            h.world.request_bay(p, stage="waiting_for_bay")
+        h.world.resequence_waiting(("pb", "pa"))
+        h.world.resequence_waiting(("pa",))  # pb no longer named -> unranked
+        assert [w.patient.id.root for w in h.world.waiting_for_bay()] == ["pa", "pb"]
 
 
 class TestCompatibility:

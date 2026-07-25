@@ -1,6 +1,9 @@
-"""Baseline policies — deterministic, myopic, competent; factory arm selection."""
+"""Baseline + optimized policies — determinism, thinness; factory arm selection."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import ClassVar
 
 import pytest
 from _sim_fixtures import build_physics, make_patient, tiny_rules
@@ -9,8 +12,12 @@ from hospital.core import (
     Activity,
     CapacityRule,
     CompatibilityRule,
+    CompiledRules,
+    DecisionInput,
+    Duration,
     EsiAcuity,
     Plan,
+    PlanItem,
     Rule,
     SimTime,
     SkillRule,
@@ -23,8 +30,15 @@ from hospital.core import (
     validate,
 )
 from hospital.sim.policies.factory import make_policies
+from hospital.sim.policies.optimized import SolverDispatch, SolverPlacement, SolverSequencing
 from hospital.sim.seam_adapter import build_decision_input, validation_context
-from hospital.solver import GraphRoutingOracle, ObjectiveConfig
+from hospital.solver import (
+    GraphRoutingOracle,
+    ObjectiveConfig,
+    RoutingOracle,
+    SolveResult,
+    SolverStatus,
+)
 
 
 class TestFirstAvailablePlacement:
@@ -38,7 +52,7 @@ class TestFirstAvailablePlacement:
         critical = make_patient("p_critical", esi=EsiAcuity.ESI1, arrival_s=60.0)
         for p in (routine, critical):
             h.world.register_patient(p)
-            h.world.request_bay(p, stage="triage->bay")
+            h.world.request_bay(p, stage="waiting_for_bay")
 
         di = build_decision_input(h.world, SimTime(0), ())
         items = policies.placement.place(di, oracle)
@@ -64,7 +78,7 @@ class TestFirstAvailablePlacement:
         for i, bay in enumerate(h.world.free_compatible_bays(p, rules)):
             h.world.assign_bay(bay, make_patient(f"occ{i}").id)
         h.world.register_patient(p)
-        h.world.request_bay(p, stage="triage->bay")
+        h.world.request_bay(p, stage="waiting_for_bay")
 
         di = build_decision_input(h.world, SimTime(0), ())
         assert policies.placement.place(di, oracle) == ()
@@ -76,7 +90,7 @@ class TestFirstAvailablePlacement:
         policies = make_policies("baseline", oracle=oracle, rules=rules, roster=h.roster)
         p = make_patient("p_iso", esi=EsiAcuity.ESI3, isolation=True)
         h.world.register_patient(p)
-        h.world.request_bay(p, stage="triage->bay")
+        h.world.request_bay(p, stage="waiting_for_bay")
         di = build_decision_input(h.world, SimTime(0), ())
         items = policies.placement.place(di, oracle)
         assert len(items) == 1
@@ -104,7 +118,7 @@ class TestCapacityRule:
         waiting = [make_patient(f"p{i}", esi=EsiAcuity.ESI3) for i in range(3)]
         for p in waiting:
             h.world.register_patient(p)
-            h.world.request_bay(p, stage="triage->bay")
+            h.world.request_bay(p, stage="waiting_for_bay")
 
         di = build_decision_input(h.world, SimTime(0), ())
         items = policies.placement.place(di, oracle)
@@ -296,7 +310,7 @@ class TestComposition:
         policies = make_policies("baseline", oracle=oracle, rules=tiny_rules(), roster=h.roster)
         p = make_patient("p1")
         h.world.register_patient(p)
-        h.world.request_bay(p, stage="triage->bay")
+        h.world.request_bay(p, stage="waiting_for_bay")
         di = build_decision_input(h.world, SimTime(0), ())
         resp = policies.decide(di, oracle)
         assert resp.mode == "replace"
@@ -321,20 +335,215 @@ class TestFactory:
         policies = make_policies("baseline", oracle=oracle, rules=tiny_rules(), roster=h.roster)
         assert policies.origin == "baseline"
 
-    def test_optimized_arm_is_next_phase(self) -> None:
+    def test_optimized_arm_is_wired_with_solver_origin(self) -> None:
         h = build_physics()
         oracle = GraphRoutingOracle(h.layout.graph)
-        with pytest.raises(NotImplementedError, match="optimized arm"):
-            make_policies(
-                "optimized",
-                oracle=oracle,
-                rules=tiny_rules(),
-                roster=h.roster,
-                objective=ObjectiveConfig(),
-            )
+        policies = make_policies(
+            "optimized",
+            oracle=oracle,
+            rules=tiny_rules(),
+            roster=h.roster,
+            objective=ObjectiveConfig(),
+        )
+        assert policies.origin == "solver"
+        assert isinstance(policies.placement, SolverPlacement)
+        assert policies.placement.backend.name == "placement_cpsat"
 
     def test_optimized_arm_requires_an_objective(self) -> None:
         h = build_physics()
         oracle = GraphRoutingOracle(h.layout.graph)
         with pytest.raises(ValueError, match="requires an ObjectiveConfig"):
             make_policies("optimized", oracle=oracle, rules=tiny_rules(), roster=h.roster)
+
+
+@dataclass
+class _StubBackend:
+    """A canned ``Solver`` — proves the placement adapter is a pure marshaller.
+
+    ``statuses`` scripts each successive solve's claim (OPTIMAL once drained).
+    """
+
+    plan: Plan
+    name: ClassVar[str] = "stub_backend"
+    version: ClassVar[str] = "0.0.1"
+    calls: list[tuple[DecisionInput, Plan | None]] = field(
+        default_factory=list[tuple[DecisionInput, "Plan | None"]]
+    )
+    statuses: list[SolverStatus] = field(default_factory=list[SolverStatus])
+
+    def solve(
+        self,
+        di: DecisionInput,
+        oracle: RoutingOracle,
+        *,
+        config: ObjectiveConfig,
+        rules: CompiledRules,
+        time_cap: Duration | None = None,
+        warm_start: Plan | None = None,
+    ) -> SolveResult:
+        self.calls.append((di, warm_start))
+        status = self.statuses.pop(0) if self.statuses else SolverStatus.OPTIMAL
+        return SolveResult(
+            plan=self.plan,
+            status=status,
+            objective_value=0,
+            solve_wall_us=1,
+            backend=self.name,
+        )
+
+
+class TestOptimizedPolicies:
+    def test_placement_is_a_thin_marshaller_over_the_backend(self) -> None:
+        # The adapter returns EXACTLY the stamped backend plan's items — it
+        # performs no optimization, filtering, or repair of its own.
+        h = build_physics()
+        oracle = GraphRoutingOracle(h.layout.graph)
+        p = make_patient("p1", esi=EsiAcuity.ESI3)
+        h.world.register_patient(p)
+        h.world.request_bay(p, stage="waiting_for_bay")
+        bay = h.world.free_compatible_bays(p, tiny_rules())[0]
+        canned = Plan(
+            items=(PlanItem(stable_id="assign:p1", kind="assign_bay", patient=p.id, bay=bay),)
+        )
+        stub = _StubBackend(plan=canned)
+        placement = SolverPlacement(backend=stub, objective=ObjectiveConfig(), rules=tiny_rules())
+
+        di = build_decision_input(h.world, SimTime(0), ())
+        items = placement.place(di, oracle)
+        assert items == canned.items
+        assert len(stub.calls) == 1
+        assert stub.calls[0][1] is None  # first solve has no warm start
+        assert placement.last_status == "optimal"
+
+        # the previous stamped plan warm-starts the next solve (rolling re-solve)
+        placement.place(di, oracle)
+        assert stub.calls[1][1] == canned
+
+    def test_worst_status_keeps_the_weakest_solve_claim(self) -> None:
+        # Regression (M1 review finding 4): only the LAST solve's status was
+        # kept, so a run that fell back to the greedy heuristic mid-week ended
+        # reporting whatever its final tick claimed. The worst-observed status
+        # must survive the run (a claim is never upgraded).
+        h = build_physics()
+        oracle = GraphRoutingOracle(h.layout.graph)
+        p = make_patient("p1", esi=EsiAcuity.ESI3)
+        h.world.register_patient(p)
+        h.world.request_bay(p, stage="waiting_for_bay")
+        stub = _StubBackend(
+            plan=Plan(items=()),
+            statuses=[SolverStatus.OPTIMAL, SolverStatus.HEURISTIC, SolverStatus.FEASIBLE],
+        )
+        placement = SolverPlacement(backend=stub, objective=ObjectiveConfig(), rules=tiny_rules())
+        di = build_decision_input(h.world, SimTime(0), ())
+
+        assert placement.worst_status is None  # no solve yet
+        placement.place(di, oracle)
+        assert placement.worst_status is SolverStatus.OPTIMAL
+        placement.place(di, oracle)
+        assert placement.worst_status is SolverStatus.HEURISTIC
+        placement.place(di, oracle)  # a later, stronger claim never upgrades
+        assert placement.worst_status is SolverStatus.HEURISTIC
+        assert placement.last_status == "feasible"  # the per-solve view still moves
+
+    def test_placement_skips_the_solve_when_there_is_nothing_to_place(self) -> None:
+        h = build_physics()
+        oracle = GraphRoutingOracle(h.layout.graph)
+        stub = _StubBackend(plan=Plan(items=()))
+        placement = SolverPlacement(backend=stub, objective=ObjectiveConfig(), rules=tiny_rules())
+        di = build_decision_input(h.world, SimTime(0), ())  # nobody waiting
+        assert placement.place(di, oracle) == ()
+        assert stub.calls == []  # the empty solve is never issued
+
+    def test_sequencing_marshals_the_scored_ranking_into_one_order_item(self) -> None:
+        h = build_physics()
+        routine = make_patient("p_routine", esi=EsiAcuity.ESI4)
+        critical = make_patient("p_critical", esi=EsiAcuity.ESI1)
+        for p in (routine, critical):
+            h.world.register_patient(p)
+            h.world.request_bay(p, stage="waiting_for_bay")
+        di = build_decision_input(h.world, SimTime(0), ())
+        items = SolverSequencing(objective=ObjectiveConfig()).sequence(di)
+        assert len(items) == 1
+        assert items[0].kind == "sequence"
+        # same waited time -> pure acuity order: the critical patient first
+        assert items[0].order == ("p_critical", "p_routine")
+
+    def test_scarce_housekeeper_is_sent_to_the_higher_unblock_value_bay(self) -> None:
+        # Regression (M1 review finding 3): SolverDispatch ignored the
+        # turnaround lever's value-of-unblocking — with 2 dirty bays and 1
+        # housekeeper, the clean the housekeeper was standing next to always
+        # won, even when the OTHER bay unblocked a waiting ESI-1. The adapter
+        # must fold priority_urgencies into the assignment cost.
+        h = build_physics()
+        rules = tiny_rules()
+        oracle = GraphRoutingOracle(h.layout.graph)
+        bays = {b.zone_type: b for b in h.layout.bays}
+        gen_bay = bays[ZoneType.GENERAL]
+        resus_bay = bays[ZoneType.RESUS_TRAUMA]
+        occupants = (make_patient("p-gen"), make_patient("p-resus"))
+        for occupant, bay in zip(occupants, (gen_bay, resus_bay), strict=True):
+            h.world.register_patient(occupant)
+            h.world.assign_bay(bay.id, occupant.id)
+            h.world.vacate_bay(bay.id)  # both bays now CLEANING
+        for bay in (gen_bay, resus_bay):
+            h.world.add_task(
+                kind="cleaning",
+                patient=None,
+                at=bay.node,
+                required_role=StaffRole.HOUSEKEEPING,
+                activity=Activity.CLEANING,
+                duration=minutes(10),
+                bay=bay.id,
+            )
+        # Only the resus bay unblocks demand: an ESI-1 waits for a bay.
+        critical = make_patient("p-crit", esi=EsiAcuity.ESI1)
+        h.world.register_patient(critical)
+        h.world.request_bay(critical, stage="waiting_for_bay")
+        # Park the one housekeeper AT the general bay: travel alone would pick
+        # the general clean; the unblock value must outbid the shorter walk.
+        housekeeper = next(m for m in h.roster if m.role == StaffRole.HOUSEKEEPING)
+        h.world.set_staff_position(housekeeper.id, gen_bay.node)
+
+        di = build_decision_input(h.world, SimTime(0), ())
+        dispatch = SolverDispatch(objective=ObjectiveConfig(), rules=rules, roster=h.roster)
+        items = dispatch.dispatch(di, oracle)
+        by_staff = {i.staff: i.task for i in items if i.kind == "dispatch"}
+        resus_task = next(
+            t.id
+            for t in di.pending_tasks
+            if t.kind == "cleaning" and h.world.task(t.id).bay == resus_bay.id
+        )
+        assert by_staff[housekeeper.id] == resus_task
+
+    def test_optimized_decide_produces_a_validate_clean_plan(self) -> None:
+        # End-to-end through the real CP-SAT backend: whatever the arm proposes
+        # passes the ONE validator against the apply-time context.
+        h = build_physics()
+        rules = tiny_rules()
+        oracle = GraphRoutingOracle(h.layout.graph)
+        policies = make_policies(
+            "optimized", oracle=oracle, rules=rules, roster=h.roster, objective=ObjectiveConfig()
+        )
+        for i, esi in enumerate((EsiAcuity.ESI1, EsiAcuity.ESI3, EsiAcuity.ESI5)):
+            p = make_patient(f"p{i}", esi=esi, isolation=(i == 1))
+            h.world.register_patient(p)
+            h.world.request_bay(p, stage="waiting_for_bay")
+        pat = make_patient("p_task")
+        h.world.register_patient(pat)
+        h.world.add_task(
+            kind="nurse_visit",
+            patient=pat.id,
+            at=h.layout.bays[0].node,
+            required_role=StaffRole.NURSE,
+            activity=Activity.NURSE_VISIT,
+            duration=minutes(5),
+        )
+
+        di = build_decision_input(h.world, SimTime(0), ())
+        resp = policies.decide(di, oracle)
+        assert resp.mode == "replace"
+        assert resp.plan is not None
+        kinds = {i.kind for i in resp.plan.items}
+        assert "assign_bay" in kinds  # the placement backend actually placed
+        assert "dispatch" in kinds  # the assignment lever actually dispatched
+        assert validate(resp.plan, validation_context(h.world, rules)) == ()

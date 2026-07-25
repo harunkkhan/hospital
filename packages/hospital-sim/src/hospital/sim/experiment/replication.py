@@ -67,8 +67,9 @@ from hospital.sim.physics.resources import build_resources
 from hospital.sim.physics.service_times import ServiceTimes, default_service_table
 from hospital.sim.physics.world import World
 from hospital.sim.policies.factory import Arm, make_policies
+from hospital.sim.policies.optimized import SolverPlacement
 from hospital.sim.seam_adapter import apply_plan, build_decision_input, validation_context
-from hospital.solver import GraphRoutingOracle, ObjectiveConfig, config_hash
+from hospital.solver import GraphRoutingOracle, ObjectiveConfig, SolverStatus, config_hash
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -77,9 +78,46 @@ if TYPE_CHECKING:
     from hospital.sim.policies.protocols import PolicySet
     from hospital.solver import RoutingOracle
 
+# Acuity-weighted patient time must dominate staff travel (PLAN §5.1): at 1:1 the
+# solver trades seconds of door-to-provider for staff-walk savings (M1 stress
+# fit). Two experiment-level tunings of the one weight set:
+#
+# * ``unplaced_wait_penalty`` — the deferral horizon dispatch prices an
+#   unserved task at (placement's use of it is a lexicographic reward scale,
+#   invariant to its magnitude). 150 s sits just above the stressed floor's
+#   maximum walk (~94 s): far tasks stay protectable, while the travel an
+#   acuity step can buy stays on the scale of real walk gaps. At 200-1000 s
+#   every acuity gap dominated all travel — tier-like matching, and the
+#   door-to-provider regression of the lexicographic formulation returned.
+# * ``acuity_urgency`` — convex at the top, compressed at the bottom.
+#   ``priority_weight``'s linear curve couples "ESI-1 always outbids a nearby
+#   task" (needs a large urgency-x-horizon product) to "every ESI step
+#   dominates all travel" (starves the ESI-3/4/5 majority and re-creates the
+#   baseline service order, destroying the walking savings). ESI-1 is priced
+#   as categorical (resuscitation); the ambulatory classes are compressed so
+#   travel decides among them.
+DEFAULT_OBJECTIVE = ObjectiveConfig(
+    w_time=10,
+    w_travel=1,
+    unplaced_wait_penalty=150,
+    acuity_urgency=(
+        (EsiAcuity.ESI1, 12),
+        (EsiAcuity.ESI2, 3),
+        (EsiAcuity.ESI3, 2),
+        (EsiAcuity.ESI4, 2),
+        (EsiAcuity.ESI5, 2),
+    ),
+)
+
 
 class Replication(FrozenModel):
-    """One finished run: the byte-stable log plus everything needed to fold it."""
+    """One finished run: the byte-stable log plus everything needed to fold it.
+
+    ``solver_status`` is the optimized arm's worst-observed placement solve
+    claim over the whole run (``None`` for the baseline arm): a week that ever
+    fell back below OPTIMAL is distinguishable downstream (``Scorecard.status``,
+    CLI/comparison) — recorded, never hidden (PLAN §5).
+    """
 
     run_id: RunId
     arm: Arm
@@ -88,6 +126,7 @@ class Replication(FrozenModel):
     event_log_jsonl: str
     objective_hash: str
     horizon: OperatingWeek
+    solver_status: SolverStatus | None = None
 
 
 class _TapEventLog(EventLog):
@@ -190,8 +229,21 @@ def _spawn_arrivals(
         )
 
 
-def run_replication(scenario: Scenario, arm: Arm, seed: int) -> Replication:
-    """Run one full horizon of ``scenario`` under ``arm`` — deterministic in ``seed``."""
+def run_replication(
+    scenario: Scenario,
+    arm: Arm,
+    seed: int,
+    *,
+    objective: ObjectiveConfig = DEFAULT_OBJECTIVE,
+) -> Replication:
+    """Run one full horizon of ``scenario`` under ``arm`` — deterministic in ``seed``.
+
+    ``objective`` is the ONE weight set for the run: it drives the optimized
+    arm's decisions (through ``make_policies``) AND is the config whose hash is
+    recorded on the ``Replication``. A caller that scores the run under some
+    objective must pass that same objective here — otherwise the reported
+    ``objective_hash`` would describe weights that never drove a decision.
+    """
     # 1-2: the single CRN source; randomness-free floor construction
     streams = RandomStreams(seed)
     layout = generate_floor(scenario.facility)
@@ -209,9 +261,8 @@ def run_replication(scenario: Scenario, arm: Arm, seed: int) -> Replication:
     service_times = ServiceTimes(streams, default_service_table())
     executor = TaskExecutor(env, world, log)
 
-    # 6-8: oracle + objective + compiled rules + the chosen arm
+    # 6-8: oracle + the caller's objective + compiled rules + the chosen arm
     oracle = GraphRoutingOracle(layout.graph)
-    objective = ObjectiveConfig()
     rules = compile_rules(scenario.rules if scenario.rules else default_rules())
     policies = make_policies(arm, oracle=oracle, rules=rules, roster=roster, objective=objective)
     world.set_decision_hook(_make_tick(world, oracle, policies, rules, executor, log))
@@ -237,6 +288,8 @@ def run_replication(scenario: Scenario, arm: Arm, seed: int) -> Replication:
 
     # 12-13: one continuous horizon, half-open [start, end); return the record
     env.run(until=horizon.end.root)
+    placement = policies.placement
+    solver_status = placement.worst_status if isinstance(placement, SolverPlacement) else None
     return Replication(
         run_id=RunId(f"{scenario.name}-{arm}-{seed}"),
         arm=arm,
@@ -245,6 +298,7 @@ def run_replication(scenario: Scenario, arm: Arm, seed: int) -> Replication:
         event_log_jsonl=log.to_jsonl(),
         objective_hash=config_hash(objective),
         horizon=horizon,
+        solver_status=solver_status,
     )
 
 

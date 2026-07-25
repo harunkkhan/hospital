@@ -1,0 +1,1477 @@
+{
+  "arms": {
+    "baseline": {
+      "bottleneck": {
+        "binding": "lab",
+        "gini_by_role": {
+          "housekeeping": 0.010228662457682258,
+          "nurse": 0.05578756715019987,
+          "physician": 0.012891431511695296,
+          "porter": 0.11156231030290531,
+          "tech": 0.0
+        },
+        "gini_overall": 0.40388749935670204,
+        "resources": [
+          {
+            "mean_wait_s": 9132.023668679885,
+            "n_requests": 769,
+            "resource": "lab",
+            "share_of_cycle": 0.5041414465800936,
+            "total_wait_s": 7074170.8552047
+          },
+          {
+            "mean_wait_s": 4368.739229181892,
+            "n_requests": 274,
+            "resource": "imaging",
+            "share_of_cycle": 0.08901498163161296,
+            "total_wait_s": 1195976.7381759998
+          },
+          {
+            "mean_wait_s": 1467.6186810878835,
+            "n_requests": 704,
+            "resource": "nurse",
+            "share_of_cycle": 0.07587581527409548,
+            "total_wait_s": 1034862.6196575001
+          },
+          {
+            "mean_wait_s": 440.0237419546132,
+            "n_requests": 810,
+            "resource": "provider",
+            "share_of_cycle": 0.025588566645899036,
+            "total_wait_s": 359368.8730046
+          },
+          {
+            "mean_wait_s": 218.356333061989,
+            "n_requests": 796,
+            "resource": "housekeeping",
+            "share_of_cycle": 0.012865034756771514,
+            "total_wait_s": 174060.5152397
+          },
+          {
+            "mean_wait_s": 18.67914562123876,
+            "n_requests": 810,
+            "resource": "triage",
+            "share_of_cycle": 0.0011259248380301031,
+            "total_wait_s": 15129.9364917
+          },
+          {
+            "mean_wait_s": 52.71252692902598,
+            "n_requests": 21,
+            "resource": "bay:observation",
+            "share_of_cycle": 0.00010896903078618538,
+            "total_wait_s": 1798.2645348
+          },
+          {
+            "mean_wait_s": 0.7995178680644436,
+            "n_requests": 456,
+            "resource": "bay:general",
+            "share_of_cycle": 2.5462252026836325e-05,
+            "total_wait_s": 350.24475649999994
+          },
+          {
+            "mean_wait_s": 0.20101490436363637,
+            "n_requests": 310,
+            "resource": "bay:fast_track",
+            "share_of_cycle": 3.2955166184991866e-06,
+            "total_wait_s": 55.2790987
+          },
+          {
+            "mean_wait_s": 0.0,
+            "n_requests": 22,
+            "resource": "bay:resus_trauma",
+            "share_of_cycle": 0.0,
+            "total_wait_s": 0.0
+          }
+        ],
+        "total_cycle_s": 13846619.161815802
+      },
+      "kpis": {
+        "values": {
+          "bay_utilization": 0.31816375575178185,
+          "boarding_time_s_mean": 7213.911526161866,
+          "completions_per_week": 901.5,
+          "door_to_provider_s_mean": 1037.926182211828,
+          "door_to_provider_s_p90": 2453.32843818,
+          "door_to_triage_s_mean": 18.67914562123876,
+          "door_to_triage_s_p90": 103.500012,
+          "los_s_mean_by_esi_1": 18862.100248880502,
+          "los_s_mean_by_esi_2": 14536.794333203836,
+          "los_s_mean_by_esi_3": 13370.359333857175,
+          "los_s_mean_by_esi_4": 20280.947331370688,
+          "los_s_mean_by_esi_5": 20164.369699230945,
+          "los_s_p90_by_esi_1": 29261.782329039997,
+          "los_s_p90_by_esi_2": 25754.610999000004,
+          "los_s_p90_by_esi_3": 29131.60012015,
+          "los_s_p90_by_esi_4": 57491.70552230002,
+          "los_s_p90_by_esi_5": 59360.33387789001,
+          "nurse_util": 0.37226264288497574,
+          "provider_util": 0.6415657777089764,
+          "staff_frac_cleaning": 0.06481365402988834,
+          "staff_frac_direct_care": 0.22530843864997502,
+          "staff_frac_documentation": 0.035478204071430194,
+          "staff_frac_idle": 0.6609243622791621,
+          "staff_frac_walk": 0.0134753409695443,
+          "staff_minutes_walked": 1979.2580816066668,
+          "turnaround_time_s_mean": 3316.587961978074,
+          "wip_end_of_week": 40.6
+        }
+      },
+      "n_reps": 10,
+      "utilization": {
+        "fractions": {
+          "staff_frac_cleaning": 0.06481365402988834,
+          "staff_frac_direct_care": 0.22530843864997502,
+          "staff_frac_documentation": 0.035478204071430194,
+          "staff_frac_idle": 0.6609243622791621,
+          "staff_frac_walk": 0.0134753409695443
+        },
+        "per_staff": [
+          {
+            "cleaning_s": 288274.8406296,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 221047.8751489,
+            "on_shift_s": 518400.0,
+            "role": "housekeeping",
+            "staff": "staff_housekeeping_000",
+            "walk_s": 9077.284221500002
+          },
+          {
+            "cleaning_s": 282914.929605,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 226448.202843,
+            "on_shift_s": 518400.0,
+            "role": "housekeeping",
+            "staff": "staff_housekeeping_001",
+            "walk_s": 9036.867552
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 148472.30878420002,
+            "documentation_s": 47213.83164619999,
+            "idle_s": 319257.1093196,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_000",
+            "walk_s": 3456.75025
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 154521.7253531,
+            "documentation_s": 44995.366566900004,
+            "idle_s": 315264.86113820004,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_001",
+            "walk_s": 3618.0469418000002
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 146598.45691749998,
+            "documentation_s": 46951.7764502,
+            "idle_s": 321281.5996993,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_002",
+            "walk_s": 3568.1669330000004
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 146146.38309039996,
+            "documentation_s": 44127.9030567,
+            "idle_s": 324766.4969374,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_003",
+            "walk_s": 3359.2169155
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 142091.56399330002,
+            "documentation_s": 44517.2034311,
+            "idle_s": 328438.14232969994,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_004",
+            "walk_s": 3353.0902459
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 143164.9475359,
+            "documentation_s": 42895.2343776,
+            "idle_s": 329099.4878482,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_005",
+            "walk_s": 3240.3302383
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 133363.70421369997,
+            "documentation_s": 41961.001312,
+            "idle_s": 339825.62422660005,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_006",
+            "walk_s": 3249.6702477000003
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 326366.89322659984,
+            "documentation_s": 0.0,
+            "idle_s": 182958.18255100015,
+            "on_shift_s": 518400.0,
+            "role": "physician",
+            "staff": "staff_physician_000",
+            "walk_s": 9074.9242224
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 325862.5071532001,
+            "documentation_s": 0.0,
+            "idle_s": 183728.54532699988,
+            "on_shift_s": 518400.0,
+            "role": "physician",
+            "staff": "staff_physician_001",
+            "walk_s": 8808.9475198
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 319009.7178666001,
+            "documentation_s": 0.0,
+            "idle_s": 190750.17462899993,
+            "on_shift_s": 518400.0,
+            "role": "physician",
+            "staff": "staff_physician_002",
+            "walk_s": 8640.107504399999
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 490446.1140315,
+            "on_shift_s": 518400.0,
+            "role": "porter",
+            "staff": "staff_porter_000",
+            "walk_s": 27953.885968500002
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 496081.8038644,
+            "on_shift_s": 518400.0,
+            "role": "porter",
+            "staff": "staff_porter_001",
+            "walk_s": 22318.196135600003
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 518400.0,
+            "on_shift_s": 518400.0,
+            "role": "tech",
+            "staff": "staff_tech_000",
+            "walk_s": 0.0
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 518400.0,
+            "on_shift_s": 518400.0,
+            "role": "tech",
+            "staff": "staff_tech_001",
+            "walk_s": 0.0
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 518400.0,
+            "on_shift_s": 518400.0,
+            "role": "tech",
+            "staff": "staff_tech_002",
+            "walk_s": 0.0
+          }
+        ],
+        "util_by_role": {
+          "housekeeping_util": 0.5683872704553433,
+          "nurse_util": 0.37226264288497574,
+          "porter_util": 0.04848773351089893,
+          "provider_util": 0.6415657777089764,
+          "tech_util": 0.0
+        }
+      },
+      "waits": {
+        "by_esi": {
+          "1": {
+            "paperwork_or_boarding": {
+              "mean_s": 6337.862487346232,
+              "p90_s": 11016.8127227,
+              "share_of_los": 0.3391821145231026,
+              "total_s": 126420.5586263
+            },
+            "svc_triage": {
+              "mean_s": 490.8691485792564,
+              "p90_s": 688.38596196,
+              "share_of_los": 0.026718247981601023,
+              "total_s": 9786.960305999999
+            },
+            "wait_bay": {
+              "mean_s": 1390.2798093011083,
+              "p90_s": 4496.35978997,
+              "share_of_los": 0.07387873488750958,
+              "total_s": 28471.3867035
+            },
+            "wait_provider": {
+              "mean_s": -617.0598539907094,
+              "p90_s": 1318.35924567,
+              "share_of_los": -0.03356159239888942,
+              "total_s": -12159.633445
+            },
+            "wait_triage": {
+              "mean_s": 17.834039154808426,
+              "p90_s": 78.50000900000002,
+              "share_of_los": 0.0009691199244850525,
+              "total_s": 370.700036
+            },
+            "workup_service": {
+              "mean_s": 4896.459851646092,
+              "p90_s": 7827.448832810001,
+              "share_of_los": 0.2627518051046223,
+              "total_s": 99372.2892594
+            },
+            "workup_wait": {
+              "mean_s": 6345.854766843715,
+              "p90_s": 13642.25894345,
+              "share_of_los": 0.3300615699775688,
+              "total_s": 131471.72253680002
+            }
+          },
+          "2": {
+            "paperwork_or_boarding": {
+              "mean_s": 3827.9685147475457,
+              "p90_s": 9369.217834670002,
+              "share_of_los": 0.26347822571258467,
+              "total_s": 755093.3237119
+            },
+            "svc_triage": {
+              "mean_s": 390.9542872087414,
+              "p90_s": 568.59237463,
+              "share_of_los": 0.026956502394013017,
+              "total_s": 77063.2141651
+            },
+            "wait_bay": {
+              "mean_s": 1240.1563003793838,
+              "p90_s": 4094.73493238,
+              "share_of_los": 0.08550784543979088,
+              "total_s": 244539.2892304
+            },
+            "wait_provider": {
+              "mean_s": -525.6052170168496,
+              "p90_s": 1650.42468215,
+              "share_of_los": -0.036431591631354204,
+              "total_s": -103072.5126754
+            },
+            "wait_triage": {
+              "mean_s": 17.421090736628692,
+              "p90_s": 93.5000108,
+              "share_of_los": 0.0012011285330336204,
+              "total_s": 3446.5353469
+            },
+            "workup_service": {
+              "mean_s": 3597.487931752757,
+              "p90_s": 6165.785196700001,
+              "share_of_los": 0.24765000732006454,
+              "total_s": 709598.1713453999
+            },
+            "workup_wait": {
+              "mean_s": 5988.411425395627,
+              "p90_s": 14300.324590160002,
+              "share_of_los": 0.4116378822318675,
+              "total_s": 1181104.137762
+            }
+          },
+          "3": {
+            "paperwork_or_boarding": {
+              "mean_s": 2248.60005470019,
+              "p90_s": 7436.72061301,
+              "share_of_los": 0.16957397156609394,
+              "total_s": 793082.7019221999
+            },
+            "svc_triage": {
+              "mean_s": 300.04729878841,
+              "p90_s": 435.44946243000004,
+              "share_of_los": 0.022732840649154984,
+              "total_s": 105850.94826130001
+            },
+            "wait_bay": {
+              "mean_s": 1385.8900826043116,
+              "p90_s": 4701.167726490001,
+              "share_of_los": 0.10434911486966006,
+              "total_s": 489082.26491090003
+            },
+            "wait_provider": {
+              "mean_s": -721.4143685641693,
+              "p90_s": 1500.7534418400003,
+              "share_of_los": -0.05500856730540462,
+              "total_s": -252462.04615460002
+            },
+            "wait_triage": {
+              "mean_s": 19.080959339613152,
+              "p90_s": 103.500012,
+              "share_of_los": 0.001448767701529639,
+              "total_s": 6735.150659999999
+            },
+            "workup_service": {
+              "mean_s": 2243.6738926448925,
+              "p90_s": 3986.2032286900003,
+              "share_of_los": 0.16916832769800955,
+              "total_s": 791871.7313514
+            },
+            "workup_wait": {
+              "mean_s": 7894.481414343929,
+              "p90_s": 21302.893579900003,
+              "share_of_los": 0.5877355448209565,
+              "total_s": 2786089.0638694
+            }
+          },
+          "4": {
+            "paperwork_or_boarding": {
+              "mean_s": 762.2776229177429,
+              "p90_s": 806.8605906600002,
+              "share_of_los": 0.04070694004132188,
+              "total_s": 112670.90479550001
+            },
+            "svc_triage": {
+              "mean_s": 254.19222876467558,
+              "p90_s": 381.78229079000005,
+              "share_of_los": 0.013613589299047388,
+              "total_s": 37600.4956579
+            },
+            "wait_bay": {
+              "mean_s": 1748.2405602931199,
+              "p90_s": 5440.5389590800005,
+              "share_of_los": 0.09436551326328238,
+              "total_s": 258782.81857529999
+            },
+            "wait_provider": {
+              "mean_s": -1097.7532777560273,
+              "p90_s": 1568.7911334900004,
+              "share_of_los": -0.061609855050188345,
+              "total_s": -162151.583449
+            },
+            "wait_triage": {
+              "mean_s": 18.8375663440343,
+              "p90_s": 103.500012,
+              "share_of_los": 0.0010254331742571786,
+              "total_s": 2787.3002724
+            },
+            "workup_service": {
+              "mean_s": 1597.7883556529982,
+              "p90_s": 2797.2609934800003,
+              "share_of_los": 0.08534387703733101,
+              "total_s": 236124.61031959997
+            },
+            "workup_wait": {
+              "mean_s": 16997.364275154145,
+              "p90_s": 53283.43752436002,
+              "share_of_los": 0.8265545022349485,
+              "total_s": 2522175.2255201
+            }
+          },
+          "5": {
+            "paperwork_or_boarding": {
+              "mean_s": 490.472561319954,
+              "p90_s": 630.5423988,
+              "share_of_los": 0.029655228554714263,
+              "total_s": 25097.8800117
+            },
+            "svc_triage": {
+              "mean_s": 209.7060011774491,
+              "p90_s": 300.16464820000004,
+              "share_of_los": 0.012266778197331596,
+              "total_s": 10682.3361658
+            },
+            "wait_bay": {
+              "mean_s": 1759.6531072821738,
+              "p90_s": 5803.151897820001,
+              "share_of_los": 0.10580610457999258,
+              "total_s": 90961.8442677
+            },
+            "wait_provider": {
+              "mean_s": -1146.3000275494092,
+              "p90_s": 1276.9209834500002,
+              "share_of_los": -0.07346428123085162,
+              "total_s": -60375.11532910001
+            },
+            "wait_triage": {
+              "mean_s": 20.496100135065564,
+              "p90_s": 99.50001152000002,
+              "share_of_los": 0.0011962132990106678,
+              "total_s": 1058.1501056000002
+            },
+            "workup_service": {
+              "mean_s": 1142.7868516872977,
+              "p90_s": 2045.2104606799999,
+              "share_of_los": 0.06840735282530837,
+              "total_s": 58412.3507082
+            },
+            "workup_wait": {
+              "mean_s": 17687.555105178417,
+              "p90_s": 56623.495975180005,
+              "share_of_los": 0.8561326037744943,
+              "total_s": 882802.9733537
+            }
+          }
+        },
+        "per_bay_cycle": [],
+        "per_patient": [],
+        "stage_means": {
+          "paperwork_or_boarding": {
+            "mean_s": 2357.369970838913,
+            "p90_s": 7541.80651816,
+            "share_of_los": 0.1538079508691299,
+            "total_s": 1812365.3690676
+          },
+          "svc_triage": {
+            "mean_s": 313.43592991678526,
+            "p90_s": 479.97315560000004,
+            "share_of_los": 0.020543346111561823,
+            "total_s": 240983.9545561
+          },
+          "wait_bay": {
+            "mean_s": 1444.722090694931,
+            "p90_s": 4557.134664720001,
+            "share_of_los": 0.09448827919776723,
+            "total_s": 1111837.6036878
+          },
+          "wait_provider": {
+            "mean_s": -771.1743991191389,
+            "p90_s": 1548.44786669,
+            "share_of_los": -0.05167743503893883,
+            "total_s": -590220.8910531
+          },
+          "wait_triage": {
+            "mean_s": 18.715779253167664,
+            "p90_s": 103.500012,
+            "share_of_los": 0.0012305024910039656,
+            "total_s": 14397.8364209
+          },
+          "workup_service": {
+            "mean_s": 2464.666800510432,
+            "p90_s": 4714.051612630001,
+            "share_of_los": 0.16101671209273388,
+            "total_s": 1895379.152984
+          },
+          "workup_wait": {
+            "mean_s": 9727.691824601372,
+            "p90_s": 24237.384438090005,
+            "share_of_los": 0.620590644276742,
+            "total_s": 7503643.1230419995
+          }
+        }
+      }
+    },
+    "optimized": {
+      "bottleneck": {
+        "binding": "lab",
+        "gini_by_role": {
+          "housekeeping": 0.010971181533715324,
+          "nurse": 0.03210888845242331,
+          "physician": 0.01155000220280803,
+          "porter": 0.03491213598775813,
+          "tech": 0.0
+        },
+        "gini_overall": 0.4028683686825003,
+        "resources": [
+          {
+            "mean_wait_s": 9096.289581332356,
+            "n_requests": 769,
+            "resource": "lab",
+            "share_of_cycle": 0.5014173336425547,
+            "total_wait_s": 7047264.1273386
+          },
+          {
+            "mean_wait_s": 4457.138104832863,
+            "n_requests": 274,
+            "resource": "imaging",
+            "share_of_cycle": 0.09081140314156554,
+            "total_wait_s": 1222447.5232513
+          },
+          {
+            "mean_wait_s": 1562.0348623940233,
+            "n_requests": 703,
+            "resource": "nurse",
+            "share_of_cycle": 0.08075474609647024,
+            "total_wait_s": 1100332.9803197
+          },
+          {
+            "mean_wait_s": 553.4632985117794,
+            "n_requests": 809,
+            "resource": "provider",
+            "share_of_cycle": 0.032413473927075595,
+            "total_wait_s": 451103.18198849994
+          },
+          {
+            "mean_wait_s": 233.32299367354162,
+            "n_requests": 795,
+            "resource": "housekeeping",
+            "share_of_cycle": 0.013778912329391334,
+            "total_wait_s": 185654.9476589
+          },
+          {
+            "mean_wait_s": 18.67914562123876,
+            "n_requests": 810,
+            "resource": "triage",
+            "share_of_cycle": 0.0011241805230423685,
+            "total_wait_s": 15129.9364917
+          },
+          {
+            "mean_wait_s": 76.08068273029762,
+            "n_requests": 38,
+            "resource": "bay:observation",
+            "share_of_cycle": 0.0001925936245626202,
+            "total_wait_s": 3104.4479504
+          },
+          {
+            "mean_wait_s": 5.076620742019174,
+            "n_requests": 493,
+            "resource": "bay:general",
+            "share_of_cycle": 0.00016139723798066697,
+            "total_wait_s": 2558.9505059
+          },
+          {
+            "mean_wait_s": 0.2444580242798354,
+            "n_requests": 255,
+            "resource": "bay:fast_track",
+            "share_of_cycle": 3.5563078790698036e-06,
+            "total_wait_s": 59.4032999
+          },
+          {
+            "mean_wait_s": 0.0,
+            "n_requests": 23,
+            "resource": "bay:resus_trauma",
+            "share_of_cycle": 0.0,
+            "total_wait_s": 0.0
+          }
+        ],
+        "total_cycle_s": 13854161.765192699
+      },
+      "kpis": {
+        "values": {
+          "bay_utilization": 0.31681103400849764,
+          "boarding_time_s_mean": 7229.120640487813,
+          "completions_per_week": 901.6,
+          "door_to_provider_s_mean": 1213.32027528724,
+          "door_to_provider_s_p90": 2545.5503278900005,
+          "door_to_triage_s_mean": 18.67914562123876,
+          "door_to_triage_s_p90": 103.500012,
+          "los_s_mean_by_esi_1": 18013.54641703509,
+          "los_s_mean_by_esi_2": 13710.47790033916,
+          "los_s_mean_by_esi_3": 13757.176324786551,
+          "los_s_mean_by_esi_4": 20409.611802129144,
+          "los_s_mean_by_esi_5": 20896.971344702335,
+          "los_s_p90_by_esi_1": 27934.184222570002,
+          "los_s_p90_by_esi_2": 24553.558498880004,
+          "los_s_p90_by_esi_3": 29665.546755320003,
+          "los_s_p90_by_esi_4": 56957.52364428,
+          "los_s_p90_by_esi_5": 63567.33735986,
+          "nurse_util": 0.3727382584922839,
+          "provider_util": 0.6416448356090536,
+          "staff_frac_cleaning": 0.0648827210506082,
+          "staff_frac_direct_care": 0.2254335911653504,
+          "staff_frac_documentation": 0.0354588085409518,
+          "staff_frac_idle": 0.6614974199329271,
+          "staff_frac_walk": 0.012727459310162493,
+          "staff_minutes_walked": 1869.4092234766667,
+          "turnaround_time_s_mean": 3334.932716485723,
+          "wip_end_of_week": 40.5
+        }
+      },
+      "n_reps": 10,
+      "utilization": {
+        "fractions": {
+          "staff_frac_cleaning": 0.0648827210506082,
+          "staff_frac_direct_care": 0.2254335911653504,
+          "staff_frac_documentation": 0.0354588085409518,
+          "staff_frac_idle": 0.6614974199329271,
+          "staff_frac_walk": 0.012727459310162493
+        },
+        "per_staff": [
+          {
+            "cleaning_s": 285918.13847909996,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 222228.9504673,
+            "on_shift_s": 518400.0,
+            "role": "housekeeping",
+            "staff": "staff_housekeeping_000",
+            "walk_s": 10252.911053599999
+          },
+          {
+            "cleaning_s": 285880.3055957,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 222341.12002689997,
+            "on_shift_s": 518400.0,
+            "role": "housekeeping",
+            "staff": "staff_housekeeping_001",
+            "walk_s": 10178.5743774
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 144690.3220735,
+            "documentation_s": 43591.5751964,
+            "idle_s": 326501.1624427,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_000",
+            "walk_s": 3616.9402873999998
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 144178.7028524,
+            "documentation_s": 44585.74761020001,
+            "idle_s": 325945.4959112,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_001",
+            "walk_s": 3690.0536262
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 143220.36595449998,
+            "documentation_s": 46701.6127661,
+            "idle_s": 324746.314314,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_002",
+            "walk_s": 3731.7069653999997
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 145183.98776539997,
+            "documentation_s": 43696.0831134,
+            "idle_s": 326031.1655129,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_003",
+            "walk_s": 3488.7636082999998
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 144998.16230680002,
+            "documentation_s": 43739.1705357,
+            "idle_s": 326170.2802123,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_004",
+            "walk_s": 3492.3869452
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 146656.08041229998,
+            "documentation_s": 43864.1504231,
+            "idle_s": 324229.5594975,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_005",
+            "walk_s": 3650.2096671
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 145866.74508850003,
+            "documentation_s": 46313.0482648,
+            "idle_s": 322583.4296926,
+            "on_shift_s": 518400.0,
+            "role": "nurse",
+            "staff": "staff_nurse_006",
+            "walk_s": 3636.7769541000002
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 324596.64385369996,
+            "documentation_s": 0.0,
+            "idle_s": 185107.24861389998,
+            "on_shift_s": 518400.0,
+            "role": "physician",
+            "staff": "staff_physician_000",
+            "walk_s": 8696.107532400001
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 325679.86393660004,
+            "documentation_s": 0.0,
+            "idle_s": 184173.38855459998,
+            "on_shift_s": 518400.0,
+            "role": "physician",
+            "staff": "staff_physician_001",
+            "walk_s": 8546.747508800001
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 321630.2779783,
+            "documentation_s": 0.0,
+            "idle_s": 188033.31449229998,
+            "on_shift_s": 518400.0,
+            "role": "physician",
+            "staff": "staff_physician_002",
+            "walk_s": 8736.407529400001
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 498164.64500879997,
+            "on_shift_s": 518400.0,
+            "role": "porter",
+            "staff": "staff_porter_000",
+            "walk_s": 20235.354991199998
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 498188.3876379,
+            "on_shift_s": 518400.0,
+            "role": "porter",
+            "staff": "staff_porter_001",
+            "walk_s": 20211.6123621
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 518400.0,
+            "on_shift_s": 518400.0,
+            "role": "tech",
+            "staff": "staff_tech_000",
+            "walk_s": 0.0
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 518400.0,
+            "on_shift_s": 518400.0,
+            "role": "tech",
+            "staff": "staff_tech_001",
+            "walk_s": 0.0
+          },
+          {
+            "cleaning_s": 0.0,
+            "direct_care_s": 0.0,
+            "documentation_s": 0.0,
+            "idle_s": 518400.0,
+            "on_shift_s": 518400.0,
+            "role": "tech",
+            "staff": "staff_tech_002",
+            "walk_s": 0.0
+          }
+        ],
+        "util_by_role": {
+          "housekeeping_util": 0.5712094227486497,
+          "nurse_util": 0.3727382584922839,
+          "porter_util": 0.039011349684895835,
+          "provider_util": 0.6416448356090536,
+          "tech_util": 0.0
+        }
+      },
+      "waits": {
+        "by_esi": {
+          "1": {
+            "paperwork_or_boarding": {
+              "mean_s": 6325.33305448257,
+              "p90_s": 10967.621858479999,
+              "share_of_los": 0.3538331226716237,
+              "total_s": 128102.3269841
+            },
+            "svc_triage": {
+              "mean_s": 489.17092155730836,
+              "p90_s": 686.64912756,
+              "share_of_los": 0.02776058447927516,
+              "total_s": 9906.9336534
+            },
+            "wait_bay": {
+              "mean_s": 1277.7944809748328,
+              "p90_s": 3895.86426596,
+              "share_of_los": 0.07136655045470469,
+              "total_s": 26549.492589399997
+            },
+            "wait_provider": {
+              "mean_s": -990.2371141648166,
+              "p90_s": 246.64004781000003,
+              "share_of_los": -0.05522174577841502,
+              "total_s": -20601.1836691
+            },
+            "wait_triage": {
+              "mean_s": 17.652220951172062,
+              "p90_s": 76.50000876000003,
+              "share_of_los": 0.001000872916329343,
+              "total_s": 371.750036
+            },
+            "workup_service": {
+              "mean_s": 4894.533335090421,
+              "p90_s": 7817.23256911,
+              "share_of_los": 0.27457800666887244,
+              "total_s": 100811.1650925
+            },
+            "workup_wait": {
+              "mean_s": 5999.299518143604,
+              "p90_s": 13027.490927840001,
+              "share_of_los": 0.32668260858760967,
+              "total_s": 126017.84741710001
+            }
+          },
+          "2": {
+            "paperwork_or_boarding": {
+              "mean_s": 3838.630696198873,
+              "p90_s": 9402.679771190002,
+              "share_of_los": 0.2800174661321453,
+              "total_s": 760983.0290495
+            },
+            "svc_triage": {
+              "mean_s": 391.23194955530323,
+              "p90_s": 570.42256189,
+              "share_of_los": 0.028598126972457522,
+              "total_s": 77497.58422739999
+            },
+            "wait_bay": {
+              "mean_s": 1137.503662168729,
+              "p90_s": 3727.0252382,
+              "share_of_los": 0.08315755845207026,
+              "total_s": 225178.0553685
+            },
+            "wait_provider": {
+              "mean_s": -839.2361945014615,
+              "p90_s": 432.4558647,
+              "share_of_los": -0.06136142108397209,
+              "total_s": -165903.8635556
+            },
+            "wait_triage": {
+              "mean_s": 17.44084647510563,
+              "p90_s": 93.5000108,
+              "share_of_los": 0.0012762924411664168,
+              "total_s": 3470.0353493000002
+            },
+            "workup_service": {
+              "mean_s": 3598.1177097923983,
+              "p90_s": 6215.320900960001,
+              "share_of_los": 0.26265547557037283,
+              "total_s": 713363.0602487
+            },
+            "workup_wait": {
+              "mean_s": 5566.789230650213,
+              "p90_s": 13617.41886198,
+              "share_of_los": 0.40565650151575977,
+              "total_s": 1102865.8412143
+            }
+          },
+          "3": {
+            "paperwork_or_boarding": {
+              "mean_s": 2258.0474237835783,
+              "p90_s": 7461.408333970001,
+              "share_of_los": 0.16552785582327872,
+              "total_s": 793909.0946063
+            },
+            "svc_triage": {
+              "mean_s": 300.08415198532975,
+              "p90_s": 435.76687246,
+              "share_of_los": 0.0221109246212075,
+              "total_s": 105529.60949969999
+            },
+            "wait_bay": {
+              "mean_s": 1536.1432457080753,
+              "p90_s": 5169.39286668,
+              "share_of_los": 0.11251843144783387,
+              "total_s": 541429.0418819
+            },
+            "wait_provider": {
+              "mean_s": -449.4153777071585,
+              "p90_s": 1822.0631119500001,
+              "share_of_los": -0.0338768037929548,
+              "total_s": -156684.96079470002
+            },
+            "wait_triage": {
+              "mean_s": 19.182551437220365,
+              "p90_s": 103.500012,
+              "share_of_los": 0.0014153763346136695,
+              "total_s": 6751.3006624
+            },
+            "workup_service": {
+              "mean_s": 2242.0917713451045,
+              "p90_s": 3978.3682890900004,
+              "share_of_los": 0.16437577510375256,
+              "total_s": 788818.6880283
+            },
+            "workup_wait": {
+              "mean_s": 7851.042558234401,
+              "p90_s": 21272.467242079998,
+              "share_of_los": 0.5679284404622684,
+              "total_s": 2763157.1741775
+            }
+          },
+          "4": {
+            "paperwork_or_boarding": {
+              "mean_s": 769.7494745337281,
+              "p90_s": 828.05211595,
+              "share_of_los": 0.04057635059847019,
+              "total_s": 113642.87058999999
+            },
+            "svc_triage": {
+              "mean_s": 253.9823872953979,
+              "p90_s": 381.92029156,
+              "share_of_los": 0.013407280155120879,
+              "total_s": 37516.5839912
+            },
+            "wait_bay": {
+              "mean_s": 1922.9371913229675,
+              "p90_s": 6235.339649780001,
+              "share_of_los": 0.10193780889894637,
+              "total_s": 284541.4102698
+            },
+            "wait_provider": {
+              "mean_s": -965.6871086479641,
+              "p90_s": 1681.9379192200017,
+              "share_of_los": -0.05379345654318809,
+              "total_s": -142085.1409157
+            },
+            "wait_triage": {
+              "mean_s": 18.79635996073711,
+              "p90_s": 103.500012,
+              "share_of_los": 0.0010074911680702666,
+              "total_s": 2776.6002712
+            },
+            "workup_service": {
+              "mean_s": 1603.760778348866,
+              "p90_s": 2800.81508087,
+              "share_of_los": 0.08430587302138014,
+              "total_s": 236734.9415466
+            },
+            "workup_wait": {
+              "mean_s": 16806.072719315413,
+              "p90_s": 52702.280916120006,
+              "share_of_los": 0.8125586527012002,
+              "total_s": 2488337.9771552
+            }
+          },
+          "5": {
+            "paperwork_or_boarding": {
+              "mean_s": 499.12211178500627,
+              "p90_s": 629.7947099300001,
+              "share_of_los": 0.029177884008286005,
+              "total_s": 25562.2145733
+            },
+            "svc_triage": {
+              "mean_s": 209.57071833321567,
+              "p90_s": 299.56347320000003,
+              "share_of_los": 0.011859599056375365,
+              "total_s": 10697.0406412
+            },
+            "wait_bay": {
+              "mean_s": 1947.035433567955,
+              "p90_s": 6132.326074030001,
+              "share_of_los": 0.10990523768129375,
+              "total_s": 100230.4688355
+            },
+            "wait_provider": {
+              "mean_s": -900.7207782240994,
+              "p90_s": 1797.1745234900009,
+              "share_of_los": -0.05662329497703502,
+              "total_s": -47151.8094608
+            },
+            "wait_triage": {
+              "mean_s": 20.525066556154712,
+              "p90_s": 96.50001116000004,
+              "share_of_los": 0.0011678177220318896,
+              "total_s": 1058.5001056
+            },
+            "workup_service": {
+              "mean_s": 1144.5708550032712,
+              "p90_s": 2049.40466121,
+              "share_of_los": 0.06644254147702673,
+              "total_s": 58610.900328
+            },
+            "workup_wait": {
+              "mean_s": 17976.867937680832,
+              "p90_s": 60363.232003180005,
+              "share_of_los": 0.8380702150320213,
+              "total_s": 897436.7001842
+            }
+          }
+        },
+        "per_bay_cycle": [],
+        "per_patient": [],
+        "stage_means": {
+          "paperwork_or_boarding": {
+            "mean_s": 2369.9800982826628,
+            "p90_s": 7586.524034100003,
+            "share_of_los": 0.15439040866376355,
+            "total_s": 1822199.5358032
+          },
+          "svc_triage": {
+            "mean_s": 313.6124438354129,
+            "p90_s": 480.60482078000007,
+            "share_of_los": 0.020519016756693736,
+            "total_s": 241147.7520129
+          },
+          "wait_bay": {
+            "mean_s": 1529.140928084735,
+            "p90_s": 4594.493615820002,
+            "share_of_los": 0.09989772153432146,
+            "total_s": 1177928.4689451
+          },
+          "wait_provider": {
+            "mean_s": -694.9346621723739,
+            "p90_s": 1204.5906615500003,
+            "share_of_los": -0.04658460791579756,
+            "total_s": -532426.9583959
+          },
+          "wait_triage": {
+            "mean_s": 18.751143963842097,
+            "p90_s": 103.500012,
+            "share_of_los": 0.001230017309328226,
+            "total_s": 14428.1864245
+          },
+          "workup_service": {
+            "mean_s": 2468.1880608646134,
+            "p90_s": 4722.04755274,
+            "share_of_los": 0.16097207650030568,
+            "total_s": 1898338.7552441
+          },
+          "workup_wait": {
+            "mean_s": 9562.44441851039,
+            "p90_s": 24094.394491130006,
+            "share_of_los": 0.609575367151385,
+            "total_s": 7377815.5401483
+          }
+        }
+      }
+    }
+  },
+  "contrasts": {
+    "bay_utilization": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 0.31816375575178185,
+      "ci_hi": 0.003666041504541176,
+      "ci_lo": -0.0009689535599806387,
+      "diff_mean": 0.0013527217432841882,
+      "key": "bay_utilization",
+      "n_pairs": 10,
+      "optimized_mean": 0.31681103400849764,
+      "significant": false
+    },
+    "boarding_time_s_mean": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 7213.911526161866,
+      "ci_hi": 2.644375867401396,
+      "ci_lo": -60.09080744980987,
+      "diff_mean": -15.209114325947212,
+      "key": "boarding_time_s_mean",
+      "n_pairs": 10,
+      "optimized_mean": 7229.120640487813,
+      "significant": false
+    },
+    "completions_per_week": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 901.5,
+      "ci_hi": 1.7,
+      "ci_lo": -1.9,
+      "diff_mean": -0.1,
+      "key": "completions_per_week",
+      "n_pairs": 10,
+      "optimized_mean": 901.6,
+      "significant": false
+    },
+    "door_to_provider_s_mean": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 1037.926182211828,
+      "ci_hi": -113.57734980786567,
+      "ci_lo": -241.1904833604466,
+      "diff_mean": -175.3940930754121,
+      "key": "door_to_provider_s_mean",
+      "n_pairs": 10,
+      "optimized_mean": 1213.32027528724,
+      "significant": true
+    },
+    "door_to_provider_s_p90": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 2453.32843818,
+      "ci_hi": 201.67324951383299,
+      "ci_lo": -516.8210389033335,
+      "diff_mean": -92.22188971000041,
+      "key": "door_to_provider_s_p90",
+      "n_pairs": 10,
+      "optimized_mean": 2545.5503278900005,
+      "significant": false
+    },
+    "door_to_triage_s_mean": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 18.67914562123876,
+      "ci_hi": 0.0,
+      "ci_lo": 0.0,
+      "diff_mean": 0.0,
+      "key": "door_to_triage_s_mean",
+      "n_pairs": 10,
+      "optimized_mean": 18.67914562123876,
+      "significant": false
+    },
+    "door_to_triage_s_p90": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 103.500012,
+      "ci_hi": 0.0,
+      "ci_lo": 0.0,
+      "diff_mean": 0.0,
+      "key": "door_to_triage_s_p90",
+      "n_pairs": 10,
+      "optimized_mean": 103.500012,
+      "significant": false
+    },
+    "los_s_mean_by_esi_1": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 18862.100248880502,
+      "ci_hi": 1402.8858580370331,
+      "ci_lo": 419.1310189790879,
+      "diff_mean": 848.553831845413,
+      "key": "los_s_mean_by_esi_1",
+      "n_pairs": 10,
+      "optimized_mean": 18013.54641703509,
+      "significant": true
+    },
+    "los_s_mean_by_esi_2": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 14536.794333203836,
+      "ci_hi": 1203.8241054814002,
+      "ci_lo": 520.000249158824,
+      "diff_mean": 826.3164328646739,
+      "key": "los_s_mean_by_esi_2",
+      "n_pairs": 10,
+      "optimized_mean": 13710.47790033916,
+      "significant": true
+    },
+    "los_s_mean_by_esi_3": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 13370.359333857175,
+      "ci_hi": -225.43050539956266,
+      "ci_lo": -562.568034102977,
+      "diff_mean": -386.81699092937487,
+      "key": "los_s_mean_by_esi_3",
+      "n_pairs": 10,
+      "optimized_mean": 13757.176324786551,
+      "significant": true
+    },
+    "los_s_mean_by_esi_4": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 20280.947331370688,
+      "ci_hi": 414.4674551888207,
+      "ci_lo": -499.78006304558124,
+      "diff_mean": -128.6644707584579,
+      "key": "los_s_mean_by_esi_4",
+      "n_pairs": 10,
+      "optimized_mean": 20409.611802129144,
+      "significant": false
+    },
+    "los_s_mean_by_esi_5": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 20164.369699230945,
+      "ci_hi": 569.4197596815125,
+      "ci_lo": -2056.811245931604,
+      "diff_mean": -732.6016454713905,
+      "key": "los_s_mean_by_esi_5",
+      "n_pairs": 10,
+      "optimized_mean": 20896.971344702335,
+      "significant": false
+    },
+    "los_s_p90_by_esi_1": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 29261.782329039997,
+      "ci_hi": 3202.5997191630004,
+      "ci_lo": 318.0828819512487,
+      "diff_mean": 1327.598106469999,
+      "key": "los_s_p90_by_esi_1",
+      "n_pairs": 10,
+      "optimized_mean": 27934.184222570002,
+      "significant": true
+    },
+    "los_s_p90_by_esi_2": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 25754.610999000004,
+      "ci_hi": 1959.9173951214173,
+      "ci_lo": 511.107411977411,
+      "diff_mean": 1201.0525001199992,
+      "key": "los_s_p90_by_esi_2",
+      "n_pairs": 10,
+      "optimized_mean": 24553.558498880004,
+      "significant": true
+    },
+    "los_s_p90_by_esi_3": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 29131.60012015,
+      "ci_hi": 43.84697221000279,
+      "ci_lo": -1218.4457790987533,
+      "diff_mean": -533.9466351699997,
+      "key": "los_s_p90_by_esi_3",
+      "n_pairs": 10,
+      "optimized_mean": 29665.546755320003,
+      "significant": false
+    },
+    "los_s_p90_by_esi_4": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 57491.70552230002,
+      "ci_hi": 4052.7600306171903,
+      "ci_lo": -1052.8681336968152,
+      "diff_mean": 534.181878020017,
+      "key": "los_s_p90_by_esi_4",
+      "n_pairs": 10,
+      "optimized_mean": 56957.52364428,
+      "significant": false
+    },
+    "los_s_p90_by_esi_5": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 59360.33387789001,
+      "ci_hi": 742.6404511142478,
+      "ci_lo": -14310.152887296184,
+      "diff_mean": -4207.003481969999,
+      "key": "los_s_p90_by_esi_5",
+      "n_pairs": 10,
+      "optimized_mean": 63567.33735986,
+      "significant": false
+    },
+    "nurse_util": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 0.37226264288497574,
+      "ci_hi": 0.0005310244180670919,
+      "ci_lo": -0.0011955465064886288,
+      "diff_mean": -0.0004756156073081774,
+      "key": "nurse_util",
+      "n_pairs": 10,
+      "optimized_mean": 0.3727382584922839,
+      "significant": false
+    },
+    "provider_util": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 0.6415657777089764,
+      "ci_hi": 0.0012073237518079542,
+      "ci_lo": -0.001150447969999562,
+      "diff_mean": -7.905790007713964e-05,
+      "key": "provider_util",
+      "n_pairs": 10,
+      "optimized_mean": 0.6416448356090536,
+      "significant": false
+    },
+    "staff_frac_cleaning": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 0.06481365402988834,
+      "ci_hi": 3.3971540756161885e-05,
+      "ci_lo": -0.00026096652893102935,
+      "diff_mean": -6.906702071985821e-05,
+      "key": "staff_frac_cleaning",
+      "n_pairs": 10,
+      "optimized_mean": 0.0648827210506082,
+      "significant": false
+    },
+    "staff_frac_direct_care": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 0.22530843864997502,
+      "ci_hi": 0.00010170623016289294,
+      "ci_lo": -0.00031992487149107854,
+      "diff_mean": -0.00012515251537534856,
+      "key": "staff_frac_direct_care",
+      "n_pairs": 10,
+      "optimized_mean": 0.2254335911653504,
+      "significant": false
+    },
+    "staff_frac_documentation": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 0.035478204071430194,
+      "ci_hi": 0.0001326833913048841,
+      "ci_lo": -6.414528456790318e-05,
+      "diff_mean": 1.9395530478395067e-05,
+      "key": "staff_frac_documentation",
+      "n_pairs": 10,
+      "optimized_mean": 0.0354588085409518,
+      "significant": false
+    },
+    "staff_frac_idle": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 0.6609243622791621,
+      "ci_hi": -0.00017912663009913153,
+      "ci_lo": -0.0009559021210773351,
+      "diff_mean": -0.0005730576537649968,
+      "key": "staff_frac_idle",
+      "n_pairs": 10,
+      "optimized_mean": 0.6614974199329271,
+      "significant": true
+    },
+    "staff_frac_walk": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 0.0134753409695443,
+      "ci_hi": 0.0010144628591964727,
+      "ci_lo": 0.00043920218377955974,
+      "diff_mean": 0.0007478816593818081,
+      "key": "staff_frac_walk",
+      "n_pairs": 10,
+      "optimized_mean": 0.012727459310162493,
+      "significant": true
+    },
+    "staff_minutes_walked": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 1979.2580816066668,
+      "ci_hi": 149.0043047587777,
+      "ci_lo": 64.51001675354179,
+      "diff_mean": 109.84885813000001,
+      "key": "staff_minutes_walked",
+      "n_pairs": 10,
+      "optimized_mean": 1869.4092234766667,
+      "significant": true
+    },
+    "turnaround_time_s_mean": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 3316.587961978074,
+      "ci_hi": 1.9361543047801688,
+      "ci_lo": -44.29927408783003,
+      "diff_mean": -18.344754507649895,
+      "key": "turnaround_time_s_mean",
+      "n_pairs": 10,
+      "optimized_mean": 3334.932716485723,
+      "significant": false
+    },
+    "weighted_objective_total": {
+      "alpha_adjusted": 0.05,
+      "baseline_mean": 390407808.8,
+      "ci_hi": 5444257.3549999995,
+      "ci_lo": 1772938.9525000001,
+      "diff_mean": 3649887.6,
+      "key": "weighted_objective_total",
+      "n_pairs": 10,
+      "optimized_mean": 386757921.2,
+      "significant": true
+    },
+    "wip_end_of_week": {
+      "alpha_adjusted": 0.001851851851851852,
+      "baseline_mean": 40.6,
+      "ci_hi": 1.9,
+      "ci_lo": -1.7,
+      "diff_mean": 0.1,
+      "key": "wip_end_of_week",
+      "n_pairs": 10,
+      "optimized_mean": 40.5,
+      "significant": false
+    }
+  },
+  "headline": {
+    "extra_completions_per_week": 0.10000000000002274,
+    "los_s_mean_reduction_overall": 85.35743151017341,
+    "staff_minutes_walked_saved": 109.84885813000005,
+    "weighted_objective_total_saved": 3649887.6
+  },
+  "horizon_s": 604800.0,
+  "scenario": "er_floor_stressed",
+  "schema_version": "1",
+  "seed": 100,
+  "warmup_s": 86400.0
+}

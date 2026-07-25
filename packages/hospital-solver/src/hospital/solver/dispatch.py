@@ -13,21 +13,47 @@ Two oracle-backed levers; this module contains **no** pathfinding of its own
   path (no return-to-start term); 2-opt is first-improvement with a fixed scan
   order → a deterministic local optimum.
 
-Deviation note: ``core.seam.TaskSpec`` carries no acuity/urgency field (the doc
-§7 #13 assumption was superseded by core), so task urgency ``u(t)`` is uniform
-here and the assignment cost is ``w_travel · distance`` — still "nearest
-qualified". Staff role/skills are not in ``DecisionInput`` either, so
-``staff_members`` is supplied explicitly. ``assign_staff`` also takes the
-compiled ``rules``: qualification is judged on
-``task.required_skills | rules.skills_for(task.kind)`` — the SAME union
-:func:`hospital.core.validation.validate` applies — so dispatch can never emit
-a plan the one validator rejects.
+Assignment objective (doc 03 §4.5's ``u(t)``): serve-first (max cardinality,
+via the same instance-derived big-M construction as placement), then ONE
+weighted cost consistent with ``hospital.solver.objective``'s single scalar —
+
+    ``cost(s,t) = w_time · u(t) · (waited_s(t) + travel_s(s,t))
+                  + w_travel · travel_s(s,t)``
+
+where ``waited_s + travel_s`` is the wait the task will have accumulated when
+service starts (staff must arrive first), ``u`` is the one ``acuity_urgency``
+curve read from ``TaskSpec.esi`` (patient-less work — cleaning — prices at the
+curve's floor), and a task left UNSERVED under scarcity is priced as if it
+waits ``config.unplaced_wait_penalty`` more seconds (the same unserved-demand
+constant placement prices with).
+
+``u(t)`` is **priority-augmentable**: :func:`priority_urgencies` folds the
+turnaround/discharge levers' priority outputs into per-task urgencies —
+value-of-unblocking (``solver.turnaround.unblock_value``) added for cleaning
+and discharge tasks, documentation demoted to urgency ``0`` at peak load (the
+soft gate: serve-first still completes it when capacity is idle, but any
+other task outbids it under contention) — and ``assign_staff`` accepts the
+result as ``urgency_override``. That keeps the priorities inside the ONE
+weighted cost (integer, deterministic) instead of a FIFO side-channel the
+matching would ignore. Two prior failure shapes this replaces: with
+travel-only costs the matched subset under scarcity starved the far resus zone
+(ESI-1 clinical inversion); with strict acuity tiers + FIFO-within-tier the
+matching degenerated to the baseline service order and the travel savings
+vanished. The weighted form trades them continuously: urgency buys travel in
+proportion to ``w_time·Δu·unplaced_wait_penalty``, and between equal acuities
+travel alone decides (sunk wait cancels between serving and deferring).
+
+Staff role/skills are not in ``DecisionInput``, so ``staff_members`` is
+supplied explicitly. ``assign_staff`` also takes the compiled ``rules``:
+qualification is judged on ``task.required_skills | rules.skills_for(task.kind)``
+— the SAME union :func:`hospital.core.validation.validate` applies — so
+dispatch can never emit a plan the one validator rejects.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from hospital.core import (
@@ -41,9 +67,11 @@ from hospital.core import (
     TaskId,
     TaskSpec,
 )
-from hospital.solver.objective import ObjectiveConfig
+from hospital.solver.discharge import FloorLoad
+from hospital.solver.objective import ObjectiveConfig, acuity_urgency
 from hospital.solver.oracle import EMPTY_MASK, RouteMask
 from hospital.solver.protocol import RoutingOracle
+from hospital.solver.turnaround import unblock_value
 
 if TYPE_CHECKING:
     from hospital.core import StaffState
@@ -59,14 +87,28 @@ def assign_staff(
     rules: CompiledRules,
     tasks: tuple[TaskSpec, ...] | None = None,
     staff_members: tuple[StaffMember, ...] = (),
+    urgency_override: Mapping[TaskId, int] | None = None,
 ) -> tuple[PlanItem, ...]:
-    """Assign idle qualified staff to pending tasks; emit ``kind="dispatch"`` items."""
+    """Assign idle qualified staff to pending tasks; emit ``kind="dispatch"`` items.
+
+    ``urgency_override`` replaces ``u(t)`` for the named tasks (integers, same
+    currency as ``acuity_urgency``) — the hook :func:`priority_urgencies` uses
+    to make the turnaround/discharge priority outputs actually win contention
+    inside the one weighted cost. It scales both the serving cost and the
+    deferral price, so a boosted task both attracts staff and resists deferral.
+    """
     task_list = sorted(tasks if tasks is not None else di.pending_tasks, key=lambda t: t.id.root)
     idle = sorted(
         (ss for ss in di.staff if ss.current_task is None and ss.busy_until is None),
         key=lambda ss: ss.staff.root,
     )
     members = {m.id: m for m in staff_members}
+    urgency = _task_urgency(task_list, config)
+    if urgency_override:
+        for tid in urgency:
+            if tid in urgency_override:
+                urgency[tid] = urgency_override[tid]
+    waited = {t.id: max(0, (di.now.root - t.ready_at.root) // MICROS_PER_SEC) for t in task_list}
     cost: dict[tuple[StaffId, TaskId], int] = {}
     for ss in idle:
         member = members.get(ss.staff)
@@ -77,23 +119,110 @@ def assign_staff(
             # per-task skills plus the compiled skills for the task kind.
             required = task.required_skills | rules.skills_for(task.kind)
             if member.role == task.required_role and required <= member.skills:
-                dist_s = oracle.distance(ss.at, task.at).root // MICROS_PER_SEC
-                cost[(ss.staff, task.id)] = config.w_travel * dist_s
+                travel_s = oracle.distance(ss.at, task.at).root // MICROS_PER_SEC
+                expected_wait_s = waited[task.id] + travel_s
+                cost[(ss.staff, task.id)] = (
+                    config.w_time * urgency[task.id] * expected_wait_s + config.w_travel * travel_s
+                )
     if not cost:
         return ()
-    matched = _solve_assignment(cost, idle, task_list)
+    deferral = {
+        t.id: config.w_time * urgency[t.id] * (waited[t.id] + config.unplaced_wait_penalty)
+        for t in task_list
+    }
+    matched = _solve_assignment(cost, idle, task_list, deferral)
     return tuple(
         PlanItem(stable_id=f"dispatch:{tid.root}", kind="dispatch", staff=sid, task=tid)
         for (sid, tid) in sorted(matched, key=lambda st: st[1].root)
     )
 
 
+def _task_urgency(tasks: list[TaskSpec], config: ObjectiveConfig) -> dict[TaskId, int]:
+    """``u(t)`` — the one ``acuity_urgency`` curve; patient-less work at the floor.
+
+    A task with no acuity (cleaning) prices at the curve's minimum urgency so it
+    is neutral: it never outranks any patient's urgency, and among themselves
+    such tasks are matched on travel alone.
+    """
+    floor_urgency = min(u for _, u in config.acuity_urgency)
+    return {
+        t.id: acuity_urgency(config, t.esi) if t.esi is not None else floor_urgency for t in tasks
+    }
+
+
+def priority_urgencies(
+    di: DecisionInput,
+    *,
+    config: ObjectiveConfig,
+    rules: CompiledRules,
+    load: FloorLoad | None = None,
+) -> dict[TaskId, int]:
+    """The turnaround/discharge priority outputs as dispatch urgencies (doc 03 §4.5-4.7).
+
+    Folds the two priority levers' quantities into the SAME integer currency
+    ``assign_staff`` prices with, so they genuinely win contention when staff
+    are scarce (a FIFO boost alone is invisible to the global matching):
+
+    * **cleaning** — ``u = floor + unblock_value(bay)``: turnaround's
+      value-of-unblocking, so the clean that frees the most acuity-weighted
+      waiting demand outbids a nearer low-value clean.
+    * **discharge** — ``u = u(esi) + unblock_value(bay)``: a discharge frees
+      its bay exactly as a clean does.
+    * **documentation** — demoted to ``0`` when ``load.is_peak()`` (the soft
+      gate: any other task outbids it under contention, but serve-first still
+      completes it when capacity is idle — never a hard ban). Off-peak it
+      keeps its natural acuity urgency (promoted band).
+
+    Tasks not named keep ``_task_urgency``'s default. ``load`` defaults to the
+    neutral ``FloorLoad()`` — the same v1 stand-in the discharge lever gets
+    (``DecisionInput`` carries no utilization signal).
+    """
+    gate = load if load is not None else FloorLoad()
+    static_bays = {b.id: b for b in di.layout.bays}
+    bay_by_node = {b.node: b for b in di.layout.bays}
+    bay_by_occupant = {
+        bs.occupant: static_bays[bs.bay]
+        for bs in di.bays
+        if bs.occupant is not None and bs.bay in static_bays
+    }
+    floor_urgency = min(u for _, u in config.acuity_urgency)
+    out: dict[TaskId, int] = {}
+    for t in di.pending_tasks:
+        if t.kind == "cleaning":
+            bay = bay_by_node.get(t.at)
+            if bay is not None:
+                value = unblock_value(bay, di.waiting, config=config, rules=rules)
+                out[t.id] = floor_urgency + value
+        elif t.kind == "discharge" and t.patient is not None:
+            bay = bay_by_occupant.get(t.patient)
+            if bay is not None:
+                base = acuity_urgency(config, t.esi) if t.esi is not None else floor_urgency
+                out[t.id] = base + unblock_value(bay, di.waiting, config=config, rules=rules)
+        elif t.kind == "documentation" and gate.is_peak():
+            out[t.id] = 0
+    return out
+
+
 def _solve_assignment(
     cost: dict[tuple[StaffId, TaskId], int],
     idle: list[StaffState],
     tasks: list[TaskSpec],
+    deferral: dict[TaskId, int],
 ) -> list[tuple[StaffId, TaskId]]:
-    """Max-cardinality, min-cost matching (single task = nearest qualified)."""
+    """Serve-first, then min weighted cost (single task = cheapest qualified staff).
+
+    Minimizes ``Σ_served cost[s,t] + Σ_unserved deferral[t]`` subject to
+    serve-first: with ``B = Σ_t (max_s cost[s,t] + deferral[t]) + 1`` and
+    ``reward[t] = deferral[t] + B``, minimizing ``Σ (cost - reward)·y`` makes
+    any matching that serves one more task strictly better (a (k+1)-matching's
+    objective is at most ``-(k+1)B + Σ_t max_s cost``, a k-matching's at least
+    ``-kB - Σ_t deferral``, and ``B`` exceeds their gap by 1) — capacity is
+    never left idle. Among equal-cardinality matchings the residual
+    ``Σ_served (cost - deferral)`` is exactly the weighted objective above with
+    the constant ``Σ_all deferral`` dropped: per served pair it reduces to
+    ``(w_time·u + w_travel)·travel_s - w_time·u·unplaced_wait_penalty`` (sunk
+    wait cancels), so urgency and travel trade continuously — no tiers.
+    """
     if len(tasks) == 1:
         task = tasks[0]
         candidates = [(c, sid) for (sid, tid), c in cost.items() if tid == task.id]
@@ -106,11 +235,11 @@ def _solve_assignment(
 
     model = cp_model.CpModel()
     y = {k: model.new_bool_var(f"y_{k[0].root}_{k[1].root}") for k in cost}
-    # big must dominate the total cost spread so cardinality is strictly
-    # lexicographic: adding ANY match improves the objective by at least 1
-    # (max(cost)+1 would let one cheap match beat two expensive ones,
-    # stranding a coverable task — the myopia this solver exists to avoid).
-    big = sum(cost.values()) + 1
+    max_cost_by_task: dict[TaskId, int] = {}
+    for (_sid, tid), c in cost.items():
+        max_cost_by_task[tid] = max(c, max_cost_by_task.get(tid, 0))
+    big_b = sum(c + deferral[tid] for tid, c in max_cost_by_task.items()) + 1
+    reward = {tid: deferral[tid] + big_b for tid in max_cost_by_task}
     for ss in idle:
         staff_vars = [y[k] for k in cost if k[0] == ss.staff]
         if staff_vars:
@@ -119,8 +248,9 @@ def _solve_assignment(
         task_vars = [y[k] for k in cost if k[1] == task.id]
         if task_vars:
             model.add(sum(task_vars) <= 1)
-    # Maximize matches first (big-M), then minimize travel: minimize Σ(cost-big)·y.
-    model.minimize(sum([(cost[k] - big) * y[k] for k in cost]))
+    # Minimize Σ cost·y + Σ reward·(unmatched) — the constant Σ reward is
+    # dropped, leaving: minimize Σ (cost[s,t] - reward[t])·y[s,t].
+    model.minimize(sum([(cost[k] - reward[k[1]]) * y[k] for k in cost]))
     solver = cp_model.CpSolver()
     solver.parameters.random_seed = 0
     solver.parameters.num_search_workers = 1
@@ -221,4 +351,4 @@ def _nn_two_opt(start: NodeId, stops: list[NodeId], d: _DistFn) -> tuple[NodeId,
     return tuple(tour)
 
 
-__all__ = ["assign_staff", "route_visits"]
+__all__ = ["assign_staff", "priority_urgencies", "route_visits"]

@@ -7,7 +7,11 @@ from pathlib import Path
 
 from _analysis_fixtures import build_sample_log, tiny_layout, tiny_roster
 
-from hospital.analysis.compare import paired_bootstrap
+from hospital.analysis.compare import (
+    WEIGHTED_OBJECTIVE_KEY,
+    paired_bootstrap,
+    paired_scalar_contrast,
+)
 from hospital.analysis.fold import compute_kpis
 from hospital.analysis.report import build_metrics, fold_arm, write_metrics
 from hospital.core import KPI_KEYS, EsiAcuity, EventLog, hours
@@ -74,6 +78,34 @@ def test_metrics_json_serializes_nan_as_null() -> None:
     assert parsed["arms"]["baseline"]["kpis"]["values"]["los_s_mean_by_esi_1"] is None
     # ...and so is a <2-pair contrast CI.
     assert parsed["contrasts"]["completions_per_week"]["ci_lo"] is None
+
+
+def test_weighted_objective_headline_echoes_the_g1_contrast() -> None:
+    """When the comparison carries WEIGHTED_OBJECTIVE_KEY (sim's G1 contrast),
+    the headline echoes its diff_mean and the full contrast survives into
+    ``metrics.contrasts`` — without it, neither appears (KpiVector stays a
+    closed 27-key contract either way)."""
+    layout = tiny_layout()
+    roster = tiny_roster()
+    logs = [build_sample_log(), build_sample_log()]
+    arm = fold_arm(logs, layout, roster, warmup=hours(0))
+    raw = [compute_kpis(log, layout, roster, warmup=hours(0)) for log in logs]
+
+    plain = paired_bootstrap(raw, raw, n_boot=50, seed=2)
+    metrics_plain = build_metrics("s", 1, arm, arm, plain)
+    assert "weighted_objective_total_saved" not in metrics_plain.headline
+    assert WEIGHTED_OBJECTIVE_KEY not in metrics_plain.contrasts
+
+    weighted = paired_scalar_contrast(
+        [1000.0, 1010.0], [900.0, 905.0], key=WEIGHTED_OBJECTIVE_KEY, n_boot=50, seed=2
+    )
+    augmented = plain.model_copy(
+        update={"contrasts": {WEIGHTED_OBJECTIVE_KEY: weighted, **plain.contrasts}}
+    )
+    metrics = build_metrics("s", 1, arm, arm, augmented)
+    assert metrics.headline["weighted_objective_total_saved"] == weighted.diff_mean
+    assert metrics.contrasts[WEIGHTED_OBJECTIVE_KEY] == weighted
+    assert len(metrics.contrasts) == len(KPI_KEYS) + 1
 
 
 def test_acuity_weighted_headline_only_when_weights_passed(tmp_path: Path) -> None:

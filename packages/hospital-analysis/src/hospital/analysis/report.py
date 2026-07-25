@@ -20,7 +20,7 @@ from typing import cast
 from hospital.analysis._index import build_index
 from hospital.analysis._stats import DEFAULT_WARMUP, DEFAULT_WINDOW
 from hospital.analysis.bottleneck import BottleneckReport, ResourceWait, detect_bottleneck
-from hospital.analysis.compare import ComparisonResult, Contrast
+from hospital.analysis.compare import WEIGHTED_OBJECTIVE_KEY, ComparisonResult, Contrast
 from hospital.analysis.fold import compute_kpis
 from hospital.analysis.utilization import (
     StaffSecondBudget,
@@ -330,6 +330,14 @@ def build_metrics(
         if not (math.isnan(bv) or math.isnan(ov)):
             los_reductions.append(bv - ov)
     headline["los_s_mean_reduction_overall"] = _nanmean(los_reductions)
+
+    # The G1 headline: mean per-seed reduction of the one weighted objective
+    # (``solver.objective.weighted_total``; positive = optimized cheaper). The
+    # full contrast (CI + significance) rides in ``contrasts`` under the same
+    # key; this scalar is its scannable headline echo.
+    weighted = comparison.contrasts.get(WEIGHTED_OBJECTIVE_KEY)
+    if weighted is not None:
+        headline["weighted_objective_total_saved"] = weighted.diff_mean
 
     if acuity_weights is not None:
         total = 0.0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from _sim_fixtures import tiny_scenario
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -34,6 +35,14 @@ class TestDeterminism:
         assert a.event_log_jsonl == b.event_log_jsonl
         assert a.run_id == b.run_id
         assert a.objective_hash == b.objective_hash
+
+    def test_optimized_same_seed_twice_is_byte_identical(self) -> None:
+        # the CP-SAT arm is deterministic given its input (fixed random_seed,
+        # one worker, deterministic-time budget): same seed -> same bytes
+        scenario = tiny_scenario(horizon_hours=6, rate_per_hour=3.0)
+        a = run_replication(scenario, "optimized", 11)
+        b = run_replication(scenario, "optimized", 11)
+        assert a.event_log_jsonl == b.event_log_jsonl
 
     def test_different_seeds_differ(self) -> None:
         scenario = tiny_scenario()
@@ -122,7 +131,7 @@ def test_rejected_plan_triggers_a_resolve_and_mutates_nothing() -> None:
     oracle = GraphRoutingOracle(h.layout.graph)
     p = make_patient("p1", esi=EsiAcuity.ESI5)  # ESI5 may not enter resus
     h.world.register_patient(p)
-    h.world.request_bay(p, stage="triage->bay")
+    h.world.request_bay(p, stage="waiting_for_bay")
     resus_bay = next(b.id for b in h.layout.bays if b.zone_type.value == "resus_trauma")
 
     @dataclass
@@ -161,6 +170,62 @@ def test_rejected_plan_triggers_a_resolve_and_mutates_nothing() -> None:
     assert len(placement.calls) == 2  # rejected once, re-solved same instant
     assert h.world.snapshot_bays() == before  # nothing was applied
     assert h.world.waiting_for_bay()  # the patient still waits (honest backlog)
+
+
+def test_callers_objective_drives_policies_and_the_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (M1 review finding 1): run_replication hardcoded
+    # DEFAULT_OBJECTIVE into make_policies while callers scored the logs with
+    # their own objective — the weighted contrast reported an objective that
+    # never drove a decision, and objective_hash misdescribed the run. The
+    # caller's objective must reach BOTH the policies and the recorded hash.
+    import hospital.sim.experiment.replication as replication_mod
+    from hospital.core import CompiledRules, StaffMember
+    from hospital.sim.experiment.replication import DEFAULT_OBJECTIVE
+    from hospital.sim.policies.factory import Arm, make_policies
+    from hospital.sim.policies.protocols import PolicySet
+    from hospital.solver import ObjectiveConfig, RoutingOracle, config_hash
+
+    captured: list[ObjectiveConfig | None] = []
+
+    def spy(
+        kind: Arm,
+        *,
+        oracle: RoutingOracle,
+        rules: CompiledRules,
+        roster: tuple[StaffMember, ...],
+        objective: ObjectiveConfig | None = None,
+    ) -> PolicySet:
+        captured.append(objective)
+        return make_policies(kind, oracle=oracle, rules=rules, roster=roster, objective=objective)
+
+    monkeypatch.setattr(replication_mod, "make_policies", spy)
+    custom = ObjectiveConfig(w_time=7, w_travel=2, unplaced_wait_penalty=99)
+    rep = run_replication(
+        tiny_scenario(horizon_hours=2, rate_per_hour=2.0), "optimized", 3, objective=custom
+    )
+    assert captured == [custom]  # the policies were built from the caller's weights
+    assert rep.objective_hash == config_hash(custom)  # ... and the hash describes them
+    assert rep.objective_hash != config_hash(DEFAULT_OBJECTIVE)
+
+
+def test_solver_status_is_recorded_and_propagates_to_the_scorecard() -> None:
+    # Regression (M1 review finding 4): a non-OPTIMAL solve status vanished at
+    # the end of the run — Replication carried nothing and Scorecard.status
+    # stayed None, so a fallback run was indistinguishable from a proven one.
+    from hospital.sim.experiment.scorecard import fold_scorecard
+    from hospital.solver import ObjectiveConfig, SolverStatus
+
+    scenario = tiny_scenario(horizon_hours=2, rate_per_hour=2.0)
+    optimized = run_replication(scenario, "optimized", 5)
+    assert optimized.solver_status is SolverStatus.OPTIMAL  # tiny instances solve to proof
+    card = fold_scorecard(optimized, ObjectiveConfig())
+    assert card.status is optimized.solver_status
+
+    baseline = run_replication(scenario, "baseline", 5)
+    assert baseline.solver_status is None  # no solver ran; no claim to record
+    assert fold_scorecard(baseline, ObjectiveConfig()).status is None
 
 
 def test_default_rules_cover_every_acuity() -> None:

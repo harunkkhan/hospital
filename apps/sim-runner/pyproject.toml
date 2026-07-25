@@ -11,6 +11,9 @@ dependencies = [
     "hospital-sim",
 ]
 
+[project.scripts]
+hospital-sim = "hospital.sim_runner.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

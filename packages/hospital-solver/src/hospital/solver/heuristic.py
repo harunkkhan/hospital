@@ -36,12 +36,7 @@ from hospital.solver.placement import (
     zone_remaining,
 )
 from hospital.solver.protocol import RoutingOracle, SolveResult, SolverStatus
-from hospital.solver.sequencing import priority_score
-
-# The greedy seed orders by acuity urgency plus a light anti-starvation term, so
-# it stays consistent with ``sequencing`` (doc 03 §4.9). A modest default rate;
-# the exact value is a tuning knob and does not affect feasibility.
-DEFAULT_STARVATION_RATE: int = 1
+from hospital.solver.sequencing import DEFAULT_STARVATION_RATE, priority_score
 
 
 class HeuristicPlacement:

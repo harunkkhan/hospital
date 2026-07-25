@@ -9,10 +9,11 @@ return (doc 00 §5 rule 5). Key disciplines:
   cannot drift; only compatible vars are created (``(C3)`` by omission).
 * The model is **always feasible** — the all-unplaced solution costs
   ``Σ_p reward[p]``. Scarcity surfaces as unplaced patients (penalized, ranked
-  by ``u·waited``), never a crash. The place-first big-M is **derived from the
-  instance's own cost bounds** (see the formulation note), so the objective is
-  *provably* lexicographic: place-first, then acuity-weighted priority, then
-  minimize travel — for every instance and every config, not just tuned ones.
+  by the ONE sequencing score ``u(esi) + alpha·waited``), never a crash. The
+  place-first big-M is **derived from the instance's own cost bounds** (see
+  the formulation note), so the objective is *provably* lexicographic:
+  place-first, then the sequencing score, then minimize travel — for every
+  instance and every config, not just tuned ones.
 * Determinism: fixed ``random_seed``, ``num_search_workers = 1``, sorted
   model-build order, and a **deterministic-time** search budget (never a
   wall-clock cap, whose interrupt point depends on OS scheduling) →
@@ -24,17 +25,22 @@ return (doc 00 §5 rule 5). Key disciplines:
 for the shared helpers the heuristic reuses) never pulls OR-Tools.
 
 Formulation note — the instance-derived place-first big-M. The unplaced penalty
-is ``reward[p] = (wait_penalty[p]·(waited_s + 1) + 1) · B`` with
-``B = Σ_p max_b w[p,b] + 1``. Since any solution's total travel is at most
-``B - 1 < B``: (1) placing one more patient always improves the objective by at
-least ``reward[p] - w[p,b] ≥ B - (B - 1) = 1``, so capacity is never left idle
-to save travel; (2) whenever two placement sets differ in
-``Σ wait_penalty·(waited+1)`` (integers, so by ≥ 1), the reward gap ``≥ B``
-dominates any travel gap ``< B``, so who gets placed under scarcity follows
-``u(esi)·waited`` exactly; (3) travel only breaks the remaining ties. The
-``+1`` second base keeps a just-arrived patient's *priority* acuity-ranked,
-and the ``+1`` reward base enforces place-first even under a degenerate config
-(``w_time`` or ``unplaced_wait_penalty`` of ``0``).
+is ``reward[p] = (wait_penalty[p] + 1) · B`` with ``B = Σ_p max_b w[p,b] + 1``
+and ``wait_penalty[p] = w_time·unplaced_wait_penalty·score(p)``, where
+``score(p) = u(esi) + alpha·waited_s`` is the ONE ``sequencing.priority_score``
+(at the shared ``DEFAULT_STARVATION_RATE``). Since any solution's total travel
+is at most ``B - 1 < B``: (1) placing one more patient always improves the
+objective by at least ``reward[p] - w[p,b] ≥ B - (B - 1) = 1``, so capacity is
+never left idle to save travel; (2) whenever two placement sets differ in
+``Σ wait_penalty`` (integers, so by ≥ 1), the reward gap ``≥ B`` dominates any
+travel gap ``< B``, so who gets placed under scarcity follows the sequencing
+score exactly — the same anti-starvation ranking the ``sequence`` lever enacts
+on the bay queue, so a long-waiting low-acuity patient genuinely overtakes
+(the earlier ``u·(waited+1)`` pricing disagreed with that enacted order,
+making the sequencing override a placement no-op); (3) travel only breaks the
+remaining ties. A just-arrived patient's priority is ``u(esi)`` — acuity-ranked
+from second zero — and the ``+1`` reward base enforces place-first even under
+a degenerate config (``w_time`` or ``unplaced_wait_penalty`` of ``0``).
 """
 
 from __future__ import annotations
@@ -63,6 +69,7 @@ from hospital.core import (
 )
 from hospital.solver.objective import AssignmentCoeffs, ObjectiveConfig, assignment_coeffs
 from hospital.solver.protocol import RoutingOracle, SolveResult, SolverStatus
+from hospital.solver.sequencing import DEFAULT_STARVATION_RATE, priority_score
 
 if TYPE_CHECKING:
     from collections.abc import Container
@@ -134,30 +141,48 @@ def travel_weight(
 ) -> int:
     """``w[p,b]`` — expected downstream travel via the oracle (doc 03 §4.3).
 
-    ``caregiver + imaging + lab`` round-trip seconds, scaled by the acuity travel
-    weight. This is a placement *proxy*, not a physics prediction: the ``2*``
-    round-trip over-counts caregiver travel (dispatch batching amortizes returns),
-    which only *biases* which valid bay is chosen — it never makes a plan infeasible.
+    ``arrival + caregiver + imaging`` seconds, scaled by the acuity travel
+    weight. This is a placement *proxy*, not a physics prediction — doc 03
+    flags every term as a 🟡-tunable heuristic (§4.3/§7) — and it only *biases*
+    which valid bay is chosen; it can never make a plan infeasible. The
+    composition is fitted to what the twin's physics actually walks, with three
+    documented deviations from the doc's literal formula, each toward truth:
+
+    * **arrival** (added): the round trip between the floor's arrival end
+      (``entrances[0]`` — triage sits beside it) and the bay. Both directions
+      are physically walked in-system: the patient (plus, for the
+      non-ambulatory, a porter escort) covers entrance->bay on placement, and
+      the discharge exit retraces bay->entrance at the end of the stay.
+      Omitting it prices a bay across the floor identically to one beside
+      triage — placements drift to the far end and the arrival/exit walks
+      swamp the caregiver savings.
+    * **caregiver is one-way per visit** (the doc's ``2x`` round trip): staff
+      idle in place where they finish and dispatch re-targets them from
+      wherever they stand, so the return leg mostly never happens — the doc
+      itself flags the round trip as an over-count. ``labs`` are bedside
+      draws (the patient never moves; the *sample* travels off-graph), so a
+      lab counts as one more caregiver visit, not the doc's bay<->analyzer
+      round trip that no actor walks.
+    * **imaging is doubled** (patient + escort): every imaging transport is
+      escorted, so two actors walk both legs of every bay<->modality trip.
     """
 
+    def one_way(a: NodeId, b: NodeId) -> int:
+        return _seconds(oracle.distance(a, b))
+
     def round_trip(a: NodeId, b: NodeId) -> int:
-        return _seconds(oracle.distance(a, b)) + _seconds(oracle.distance(b, a))
+        return one_way(a, b) + one_way(b, a)
 
     node = bay.node
-    caregiver = (patient.workup.provider_visits + patient.workup.nurse_visits) * round_trip(
-        bay.serving_station, node
-    )
+    arrival = round_trip(layout.entrances[0], node) if layout.entrances else 0
+    visits = patient.workup.provider_visits + patient.workup.nurse_visits + patient.workup.labs
+    caregiver = visits * one_way(bay.serving_station, node)
     imaging = 0
     for _modality in patient.workup.imaging:
         target = _nearest(node, layout.imaging_nodes, oracle)
         if target is not None:
-            imaging += round_trip(node, target)
-    lab = 0
-    if patient.workup.labs:
-        target = _nearest(node, layout.lab_nodes, oracle)
-        if target is not None:
-            lab += patient.workup.labs * round_trip(node, target)
-    return coeffs.travel_weight * (caregiver + imaging + lab)
+            imaging += 2 * round_trip(node, target)
+    return coeffs.travel_weight * (arrival + caregiver + imaging)
 
 
 def occupied_by_zone_type(di: DecisionInput) -> dict[ZoneType, int]:
@@ -186,8 +211,8 @@ def zone_remaining(di: DecisionInput) -> dict[ZoneId, int]:
     return {zone.id: max(0, zone.capacity - used.get(zone.id, 0)) for zone in di.layout.zones}
 
 
-def _waited_seconds(di: DecisionInput) -> dict[PatientId, int]:
-    return {wp.patient.id: _seconds(wp.waited) for wp in di.waiting}
+def _waited(di: DecisionInput) -> dict[PatientId, Duration]:
+    return {wp.patient.id: wp.waited for wp in di.waiting}
 
 
 class CpSatPlacement:
@@ -213,7 +238,7 @@ class CpSatPlacement:
         layout = di.layout
         patient_by_id = {p.id: p for p in patients}
         bay_by_id = {b.id: b for b in bays}
-        waited = _waited_seconds(di)
+        waited = _waited(di)
         coeffs = {esi: assignment_coeffs(config, esi) for esi in {p.esi for p in patients}}
 
         model = cp_model.CpModel()
@@ -229,8 +254,19 @@ class CpSatPlacement:
             )
             for (pid, bid) in x
         }
+        # Scarcity priority = the ONE sequencing score u(esi) + alpha·waited
+        # (anti-starvation), scaled onto the objective's wait-penalty currency —
+        # so who wins a scarce bay agrees with the enacted queue order.
         wait_penalty = {
-            p.id: coeffs[p.esi].wait_penalty * (waited.get(p.id, 0) + 1) for p in patients
+            p.id: config.w_time
+            * config.unplaced_wait_penalty
+            * priority_score(
+                p.esi,
+                waited.get(p.id, Duration(0)),
+                config=config,
+                starvation_rate=DEFAULT_STARVATION_RATE,
+            )
+            for p in patients
         }
         # Place-first big-M derived from THIS instance's cost bounds (module
         # docstring): B strictly exceeds any solution's total travel (each

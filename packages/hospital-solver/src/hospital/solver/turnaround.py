@@ -33,10 +33,34 @@ from hospital.core import (
     StaffMember,
     StaffRole,
     StaffState,
+    WaitingPatient,
 )
 from hospital.solver.objective import ObjectiveConfig, acuity_urgency
 from hospital.solver.placement import NEEDS_BAY_STAGES, compat_pair
 from hospital.solver.protocol import RoutingOracle
+
+
+def unblock_value(
+    bay: Bay,
+    waiting: tuple[WaitingPatient, ...],
+    *,
+    config: ObjectiveConfig,
+    rules: CompiledRules,
+) -> int:
+    """``value(b) = Σ_{p waiting for a bay, compat[p,b]} u(esi(p))`` (doc 03 §4.6).
+
+    The ONE value-of-unblocking quantity: how much acuity-weighted demand
+    freeing ``bay`` would unblock. Shared by turnaround (a clean frees the
+    bay), discharge (a discharge frees it identically), and dispatch's
+    priority-augmented urgency — never re-derived per lever. Only patients
+    actually waiting FOR A BAY (``NEEDS_BAY_STAGES``) count as demand; a
+    placed patient waiting on providers/labs/documentation is not unblocked.
+    """
+    return sum(
+        acuity_urgency(config, wp.patient.esi)
+        for wp in waiting
+        if wp.stage in NEEDS_BAY_STAGES and compat_pair(wp.patient, bay, rules)
+    )
 
 
 def prioritize_cleaning(
@@ -78,14 +102,7 @@ def prioritize_cleaning(
 
     # Demand a clean unblocks = patients waiting FOR A BAY only; post-placement
     # stages (awaiting provider/labs/documentation) are not freed by a clean.
-    value = {
-        bay.id: sum(
-            acuity_urgency(config, wp.patient.esi)
-            for wp in di.waiting
-            if wp.stage in NEEDS_BAY_STAGES and compat_pair(wp.patient, bay, rules)
-        )
-        for bay in dirty
-    }
+    value = {bay.id: unblock_value(bay, di.waiting, config=config, rules=rules) for bay in dirty}
     matched = _solve_cleaning(oracle, config, dirty, housekeepers, value)
     return tuple(
         PlanItem(stable_id=f"clean:{bid.root}", kind="clean", bay=bid, staff=sid)
@@ -126,4 +143,4 @@ def _solve_cleaning(
     return sorted(matched, key=lambda k: k[1].root)
 
 
-__all__ = ["prioritize_cleaning"]
+__all__ = ["prioritize_cleaning", "unblock_value"]
