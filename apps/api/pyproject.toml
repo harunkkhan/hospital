@@ -1,0 +1,28 @@
+[project]
+name = "hospital-api"
+version = "0.1.0"
+description = "FastAPI operator API (M2): run lifecycle, live state streaming, playback control, validated operator overrides, live KPIs, and baseline-vs-optimized comparison over the existing engine."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "hospital-core",
+    "hospital-data",
+    "hospital-solver",
+    "hospital-analysis",
+    "hospital-sim",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hospital"]
+
+[tool.uv.sources]
+hospital-core = { workspace = true }
+hospital-data = { workspace = true }
+hospital-solver = { workspace = true }
+hospital-analysis = { workspace = true }
+hospital-sim = { workspace = true }
