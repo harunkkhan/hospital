@@ -131,10 +131,12 @@ class SolverDispatch:
     """``DispatchPolicy`` — the global assignment (CP-SAT matching) lever.
 
     ``solver.dispatch.assign_staff`` is serve-first (max-cardinality), then
-    task-priority (strict acuity tiers, FIFO within a tier), then min-travel
-    matching over idle qualified staff x pending tasks (a single task
-    degenerates to "nearest qualified"), judged on the same skill union the
-    validator applies.
+    min weighted cost ``w_time·u(t)·(waited + travel) + w_travel·travel``
+    (urgency and travel trade continuously; deferral under scarcity is priced
+    at ``unplaced_wait_penalty``) over idle qualified staff x pending tasks,
+    judged on the same skill union the validator applies. A new task triggers
+    a same-instant decision tick (``World.add_task`` callers request one), so
+    a high-urgency arrival is reconsidered immediately.
     """
 
     objective: ObjectiveConfig
