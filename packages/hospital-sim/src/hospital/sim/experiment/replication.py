@@ -78,8 +78,35 @@ if TYPE_CHECKING:
     from hospital.solver import RoutingOracle
 
 # Acuity-weighted patient time must dominate staff travel (PLAN §5.1): at 1:1 the
-# solver trades seconds of door-to-provider for staff-walk savings.
-DEFAULT_OBJECTIVE = ObjectiveConfig(w_time=10, w_travel=1)
+# solver trades seconds of door-to-provider for staff-walk savings (M1 stress
+# fit). Two experiment-level tunings of the one weight set:
+#
+# * ``unplaced_wait_penalty`` — the deferral horizon dispatch prices an
+#   unserved task at (placement's use of it is a lexicographic reward scale,
+#   invariant to its magnitude). 150 s sits just above the stressed floor's
+#   maximum walk (~94 s): far tasks stay protectable, while the travel an
+#   acuity step can buy stays on the scale of real walk gaps. At 200-1000 s
+#   every acuity gap dominated all travel — tier-like matching, and the
+#   door-to-provider regression of the lexicographic formulation returned.
+# * ``acuity_urgency`` — convex at the top, compressed at the bottom.
+#   ``priority_weight``'s linear curve couples "ESI-1 always outbids a nearby
+#   task" (needs a large urgency-x-horizon product) to "every ESI step
+#   dominates all travel" (starves the ESI-3/4/5 majority and re-creates the
+#   baseline service order, destroying the walking savings). ESI-1 is priced
+#   as categorical (resuscitation); the ambulatory classes are compressed so
+#   travel decides among them.
+DEFAULT_OBJECTIVE = ObjectiveConfig(
+    w_time=10,
+    w_travel=1,
+    unplaced_wait_penalty=150,
+    acuity_urgency=(
+        (EsiAcuity.ESI1, 12),
+        (EsiAcuity.ESI2, 3),
+        (EsiAcuity.ESI3, 2),
+        (EsiAcuity.ESI4, 2),
+        (EsiAcuity.ESI5, 2),
+    ),
+)
 
 
 class Replication(FrozenModel):

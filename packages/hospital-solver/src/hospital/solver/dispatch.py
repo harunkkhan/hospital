@@ -84,9 +84,7 @@ def assign_staff(
     )
     members = {m.id: m for m in staff_members}
     urgency = _task_urgency(task_list, config)
-    waited = {
-        t.id: max(0, (di.now.root - t.ready_at.root) // MICROS_PER_SEC) for t in task_list
-    }
+    waited = {t.id: max(0, (di.now.root - t.ready_at.root) // MICROS_PER_SEC) for t in task_list}
     cost: dict[tuple[StaffId, TaskId], int] = {}
     for ss in idle:
         member = members.get(ss.staff)
@@ -100,8 +98,7 @@ def assign_staff(
                 travel_s = oracle.distance(ss.at, task.at).root // MICROS_PER_SEC
                 expected_wait_s = waited[task.id] + travel_s
                 cost[(ss.staff, task.id)] = (
-                    config.w_time * urgency[task.id] * expected_wait_s
-                    + config.w_travel * travel_s
+                    config.w_time * urgency[task.id] * expected_wait_s + config.w_travel * travel_s
                 )
     if not cost:
         return ()
@@ -125,8 +122,7 @@ def _task_urgency(tasks: list[TaskSpec], config: ObjectiveConfig) -> dict[TaskId
     """
     floor_urgency = min(u for _, u in config.acuity_urgency)
     return {
-        t.id: acuity_urgency(config, t.esi) if t.esi is not None else floor_urgency
-        for t in tasks
+        t.id: acuity_urgency(config, t.esi) if t.esi is not None else floor_urgency for t in tasks
     }
 
 
