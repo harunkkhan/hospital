@@ -6,7 +6,7 @@ import math
 
 from _analysis_fixtures import full_kpi_values
 
-from hospital.analysis.compare import paired_bootstrap
+from hospital.analysis.compare import paired_bootstrap, paired_scalar_contrast
 from hospital.core import KPI_KEYS, KpiVector
 
 _N_BOOT = 500  # small for test speed; reproducibility/coverage don't need 10_000
@@ -90,3 +90,39 @@ def test_bonferroni_alpha_adjusted() -> None:
     c = result.contrasts["completions_per_week"]
     assert math.isclose(c.alpha_adjusted, 0.05 / len(KPI_KEYS))
     assert result.n_comparisons == len(KPI_KEYS)
+
+
+def test_scalar_contrast_known_difference_significant_at_full_alpha() -> None:
+    # A single pre-registered endpoint runs at m=1: alpha_adjusted is the full
+    # alpha, never a Bonferroni share of the KPI family.
+    baseline = [1000.0 + i for i in range(8)]
+    optimized = [900.0 + i for i in range(8)]
+    c = paired_scalar_contrast(baseline, optimized, key="obj", n_boot=_N_BOOT, seed=6)
+    assert c.key == "obj"
+    assert c.alpha_adjusted == 0.05
+    assert c.n_pairs == 8
+    assert math.isclose(c.diff_mean, 100.0)
+    assert c.significant
+    assert c.ci_lo > 0.0 and c.ci_hi > 0.0
+
+
+def test_scalar_contrast_identical_arms_not_significant_and_reproducible() -> None:
+    xs = [50.0, 51.0, 49.0, 52.0, 48.0]
+    c1 = paired_scalar_contrast(xs, xs, key="obj", n_boot=_N_BOOT, seed=7)
+    c2 = paired_scalar_contrast(xs, xs, key="obj", n_boot=_N_BOOT, seed=7)
+    assert not c1.significant
+    assert math.isclose(c1.diff_mean, 0.0, abs_tol=1e-9)
+    assert (c1.ci_lo, c1.ci_hi) == (c2.ci_lo, c2.ci_hi)
+
+
+def test_scalar_contrast_nan_pair_dropped_and_single_pair_has_nan_ci() -> None:
+    baseline = [float("nan"), 10.0, 11.0]
+    optimized = [5.0, 8.0, 9.0]
+    c = paired_scalar_contrast(baseline, optimized, key="obj", n_boot=_N_BOOT, seed=8)
+    assert c.n_pairs == 2
+    assert math.isclose(c.diff_mean, 2.0)
+
+    single = paired_scalar_contrast([10.0], [8.0], key="obj", n_boot=_N_BOOT, seed=9)
+    assert single.n_pairs == 1
+    assert math.isnan(single.ci_lo) and math.isnan(single.ci_hi)
+    assert not single.significant
