@@ -31,10 +31,8 @@ export function extrapolateProgress(
   edgeTotalUs: number,
   extraSimUs: number,
 ): number {
-  if (edgeTotalUs <= 0) {
-    return 1;
-  }
-  const p = frameProgress + extraSimUs / edgeTotalUs;
+  // Unknown traversal time: hold the server position (no dead-reckoning).
+  const p = edgeTotalUs <= 0 ? frameProgress : frameProgress + extraSimUs / edgeTotalUs;
   return Math.max(0, Math.min(1, p));
 }
 
