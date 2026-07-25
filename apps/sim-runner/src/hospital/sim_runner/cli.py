@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from hospital.analysis import ArmSummary, fold_arm, write_metrics
-from hospital.analysis.compare import ComparisonResult
+from hospital.analysis.compare import WEIGHTED_OBJECTIVE_KEY, ComparisonResult
 from hospital.analysis.report import Metrics, build_metrics
 from hospital.core import KPI_KEYS, Duration, EventLog, TimeWindow, hours
 from hospital.data.layout import generate_floor
@@ -41,7 +41,11 @@ from hospital.sim.experiment.replication import DEFAULT_OBJECTIVE
 
 Arm = Literal["baseline", "optimized"]
 
-# The three KPIs the M1 milestone is judged on (doc 08 §4).
+# The three M1 display KPIs (doc 08 §4). The G1 acceptance headline is the
+# acuity-weighted objective (WEIGHTED_OBJECTIVE_KEY) — plan §G1's objective is
+# acuity-WEIGHTED time, so the honest headline is the solver's weighted_total
+# contrast; the unweighted door-to-provider mean is reported alongside as an
+# explicit, quantified trade.
 HEADLINE_KEYS: tuple[str, ...] = (
     "door_to_provider_s_mean",
     "staff_minutes_walked",
@@ -91,25 +95,39 @@ def _fmt(value: float) -> str:
 
 def _print_table(comparison: ComparisonResult) -> None:
     header = (
-        f"{'KPI':34s} {'baseline':>12s} {'optimized':>12s} {'diff':>10s} "
-        f"{'95% CI (Bonferroni)':>24s} {'sig':>4s}"
+        f"{'KPI':36s} {'baseline':>15s} {'optimized':>15s} {'diff':>13s} "
+        f"{'95% CI':>30s} {'sig':>4s}"
     )
     print(header)
     print("-" * len(header))
-    ordered = [*HEADLINE_KEYS, *[k for k in KPI_KEYS if k not in HEADLINE_KEYS]]
+    # The G1 headline (acuity-weighted objective) leads; then the three M1
+    # display KPIs; then the rest of the closed KPI family.
+    ordered: list[str] = []
+    if WEIGHTED_OBJECTIVE_KEY in comparison.contrasts:
+        ordered.append(WEIGHTED_OBJECTIVE_KEY)
+    ordered += [*HEADLINE_KEYS, *[k for k in KPI_KEYS if k not in HEADLINE_KEYS]]
     for key in ordered:
         c = comparison.contrasts[key]
-        marker = " *" if key in HEADLINE_KEYS else ""
+        if key == WEIGHTED_OBJECTIVE_KEY:
+            marker = "**"
+        elif key in HEADLINE_KEYS:
+            marker = " *"
+        else:
+            marker = ""
         ci = f"[{_fmt(c.ci_lo)}, {_fmt(c.ci_hi)}]"
         sig = "yes" if c.significant else "no"
         print(
-            f"{key + marker:34s} {_fmt(c.baseline_mean):>12s} {_fmt(c.optimized_mean):>12s} "
-            f"{_fmt(c.diff_mean):>10s} {ci:>24s} {sig:>4s}"
+            f"{key + marker:36s} {_fmt(c.baseline_mean):>15s} {_fmt(c.optimized_mean):>15s} "
+            f"{_fmt(c.diff_mean):>13s} {ci:>30s} {sig:>4s}"
         )
     print("-" * len(header))
     print(
         "diff = baseline - optimized (positive favors OPTIMIZED for lower-is-better KPIs); "
-        "* = M1 headline KPI"
+        "* = M1 KPI (Bonferroni family)"
+    )
+    print(
+        "** = G1 headline: acuity-weighted objective (solver weighted_total, lower is "
+        "better), the one pre-registered primary contrast (full alpha=0.05)"
     )
 
 

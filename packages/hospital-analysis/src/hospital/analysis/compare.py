@@ -205,6 +205,4 @@ def paired_scalar_contrast(
             idx = rng.integers(0, n_reps, size=n_reps)
             boot_samples.append(_boot_mean(diff_arr, idx))
 
-    return _contrast(
-        key, baseline_arr, optimized_arr, diff_arr, boot_samples, alpha_adjusted=alpha
-    )
+    return _contrast(key, baseline_arr, optimized_arr, diff_arr, boot_samples, alpha_adjusted=alpha)
