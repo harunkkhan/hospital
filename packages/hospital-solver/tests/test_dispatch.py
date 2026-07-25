@@ -5,15 +5,19 @@ from __future__ import annotations
 import itertools
 
 from _solver_fixtures import (
+    bay_state,
     decision_input,
     default_config,
     demo_compiled,
+    make_patient,
     staff_member,
     staff_state,
     task,
+    waiting,
 )
 
 from hospital.core import (
+    BayStatus,
     DecisionInput,
     Duration,
     EsiAcuity,
@@ -22,10 +26,12 @@ from hospital.core import (
     PlanItem,
     RoutePath,
     StaffRole,
+    TaskId,
     ValidationContext,
     validate,
 )
-from hospital.solver.dispatch import assign_staff, route_visits
+from hospital.solver.discharge import FloorLoad
+from hospital.solver.dispatch import assign_staff, priority_urgencies, route_visits
 from hospital.solver.oracle import EMPTY_MASK, GraphRoutingOracle, RouteMask
 
 
@@ -336,6 +342,121 @@ def test_rule_skills_unioned_with_task_skills() -> None:
         tasks=(t,),
     )
     assert validate(Plan(items=items), ctx) == ()
+
+
+def test_scarce_housekeeper_cleans_the_higher_unblock_value_bay_first() -> None:
+    # Regression (M1 review finding 3): turnaround's value-of-unblocking never
+    # reached the dispatch cost — assign_staff priced every cleaning task at
+    # the urgency floor, so with 2 dirty bays and 1 housekeeper the NEARER bay
+    # always won, even when the farther bay unblocked an ESI-1. The priority
+    # must enter the one weighted cost via priority_urgencies/urgency_override.
+    di = decision_input(
+        waiting_patients=(waiting(make_patient("p-crit", EsiAcuity.ESI1), 60),),
+        bays=(
+            bay_state("bay-1", BayStatus.CLEANING),  # GENERAL: unblocks nobody
+            bay_state("bay-3", BayStatus.CLEANING),  # RESUS: unblocks the ESI-1
+        ),
+        staff=(staff_state("hk", at="gstat"),),
+        tasks=(
+            task("t-near-low", "cleaning", at="b1", role=StaffRole.HOUSEKEEPING),
+            task("t-far-high", "cleaning", at="b3", role=StaffRole.HOUSEKEEPING),
+        ),
+    )
+    members = (staff_member("hk", StaffRole.HOUSEKEEPING),)
+    config = default_config()
+    rules = demo_compiled()
+    overrides = priority_urgencies(di, config=config, rules=rules)
+    # floor urgency 1 + unblock value: u(ESI1)=5 on the resus bay, 0 on general
+    assert overrides == {TaskId("t-near-low"): 1, TaskId("t-far-high"): 6}
+    items = assign_staff(
+        di,
+        _oracle(di),
+        config=config,
+        rules=rules,
+        staff_members=members,
+        urgency_override=overrides,
+    )
+    assert _matching(items) == {"t-far-high": "hk"}  # value beat the shorter walk
+
+
+def test_discharge_priority_prices_the_freed_bays_demand() -> None:
+    # A discharge frees its bay exactly as a clean does: the occupant's task
+    # urgency gains the unblock value of the bay it would free.
+    di = decision_input(
+        waiting_patients=(waiting(make_patient("p-wait", EsiAcuity.ESI3), 30),),
+        bays=(bay_state("bay-1", BayStatus.OCCUPIED, occupant="p-out"),),
+        tasks=(
+            task(
+                "t-dc",
+                "discharge",
+                at="b1",
+                role=StaffRole.NURSE,
+                patient="p-out",
+                esi=EsiAcuity.ESI4,
+            ),
+        ),
+    )
+    overrides = priority_urgencies(di, config=default_config(), rules=demo_compiled())
+    # u(ESI4)=2 for the discharge itself + u(ESI3)=3 waiting demand it unblocks
+    assert overrides == {TaskId("t-dc"): 5}
+
+
+def test_documentation_load_gate_acts_inside_the_dispatch_cost() -> None:
+    # Regression (M1 review finding 3): the documentation load gate emitted
+    # priority bands the matching never read. At peak load documentation must
+    # LOSE contention for the one nurse (demoted to urgency 0 — a soft gate:
+    # serve-first still completes it when capacity is idle); off-peak it keeps
+    # its natural acuity urgency and the nearer task wins on travel.
+    di = decision_input(
+        staff=(staff_state("rn", at="gstat"),),
+        tasks=(
+            task(
+                "t-doc",
+                "documentation",
+                at="b1",  # nearer: wins off-peak on travel
+                role=StaffRole.NURSE,
+                patient="p-a",
+                esi=EsiAcuity.ESI3,
+            ),
+            task(
+                "t-visit",
+                "nurse_visit",
+                at="b3",  # farther, same acuity
+                role=StaffRole.NURSE,
+                patient="p-b",
+                esi=EsiAcuity.ESI3,
+            ),
+        ),
+    )
+    members = (staff_member("rn", StaffRole.NURSE),)
+    config = default_config()
+    rules = demo_compiled()
+
+    off_peak = priority_urgencies(di, config=config, rules=rules, load=FloorLoad())
+    assert off_peak == {}  # promoted band: natural urgency, no override needed
+    served_off_peak = assign_staff(
+        di,
+        _oracle(di),
+        config=config,
+        rules=rules,
+        staff_members=members,
+        urgency_override=off_peak,
+    )
+    assert _matching(served_off_peak) == {"t-doc": "rn"}
+
+    peak = priority_urgencies(
+        di, config=config, rules=rules, load=FloorLoad(provider_utilization=0.9)
+    )
+    assert peak == {TaskId("t-doc"): 0}  # demoted, not banned
+    served_at_peak = assign_staff(
+        di,
+        _oracle(di),
+        config=config,
+        rules=rules,
+        staff_members=members,
+        urgency_override=peak,
+    )
+    assert _matching(served_at_peak) == {"t-visit": "rn"}  # direct care outbids paperwork
 
 
 def _brute_open_path(start: NodeId, stops: list[NodeId], oracle: GraphRoutingOracle) -> int:

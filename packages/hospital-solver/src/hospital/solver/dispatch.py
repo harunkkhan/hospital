@@ -25,7 +25,17 @@ service starts (staff must arrive first), ``u`` is the one ``acuity_urgency``
 curve read from ``TaskSpec.esi`` (patient-less work — cleaning — prices at the
 curve's floor), and a task left UNSERVED under scarcity is priced as if it
 waits ``config.unplaced_wait_penalty`` more seconds (the same unserved-demand
-constant placement prices with). Two prior failure shapes this replaces: with
+constant placement prices with).
+
+``u(t)`` is **priority-augmentable**: :func:`priority_urgencies` folds the
+turnaround/discharge levers' priority outputs into per-task urgencies —
+value-of-unblocking (``solver.turnaround.unblock_value``) added for cleaning
+and discharge tasks, documentation demoted to urgency ``0`` at peak load (the
+soft gate: serve-first still completes it when capacity is idle, but any
+other task outbids it under contention) — and ``assign_staff`` accepts the
+result as ``urgency_override``. That keeps the priorities inside the ONE
+weighted cost (integer, deterministic) instead of a FIFO side-channel the
+matching would ignore. Two prior failure shapes this replaces: with
 travel-only costs the matched subset under scarcity starved the far resus zone
 (ESI-1 clinical inversion); with strict acuity tiers + FIFO-within-tier the
 matching degenerated to the baseline service order and the travel savings
@@ -43,7 +53,7 @@ dispatch can never emit a plan the one validator rejects.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from hospital.core import (
@@ -57,9 +67,11 @@ from hospital.core import (
     TaskId,
     TaskSpec,
 )
+from hospital.solver.discharge import FloorLoad
 from hospital.solver.objective import ObjectiveConfig, acuity_urgency
 from hospital.solver.oracle import EMPTY_MASK, RouteMask
 from hospital.solver.protocol import RoutingOracle
+from hospital.solver.turnaround import unblock_value
 
 if TYPE_CHECKING:
     from hospital.core import StaffState
@@ -75,8 +87,16 @@ def assign_staff(
     rules: CompiledRules,
     tasks: tuple[TaskSpec, ...] | None = None,
     staff_members: tuple[StaffMember, ...] = (),
+    urgency_override: Mapping[TaskId, int] | None = None,
 ) -> tuple[PlanItem, ...]:
-    """Assign idle qualified staff to pending tasks; emit ``kind="dispatch"`` items."""
+    """Assign idle qualified staff to pending tasks; emit ``kind="dispatch"`` items.
+
+    ``urgency_override`` replaces ``u(t)`` for the named tasks (integers, same
+    currency as ``acuity_urgency``) — the hook :func:`priority_urgencies` uses
+    to make the turnaround/discharge priority outputs actually win contention
+    inside the one weighted cost. It scales both the serving cost and the
+    deferral price, so a boosted task both attracts staff and resists deferral.
+    """
     task_list = sorted(tasks if tasks is not None else di.pending_tasks, key=lambda t: t.id.root)
     idle = sorted(
         (ss for ss in di.staff if ss.current_task is None and ss.busy_until is None),
@@ -84,6 +104,10 @@ def assign_staff(
     )
     members = {m.id: m for m in staff_members}
     urgency = _task_urgency(task_list, config)
+    if urgency_override:
+        for tid in urgency:
+            if tid in urgency_override:
+                urgency[tid] = urgency_override[tid]
     waited = {t.id: max(0, (di.now.root - t.ready_at.root) // MICROS_PER_SEC) for t in task_list}
     cost: dict[tuple[StaffId, TaskId], int] = {}
     for ss in idle:
@@ -124,6 +148,59 @@ def _task_urgency(tasks: list[TaskSpec], config: ObjectiveConfig) -> dict[TaskId
     return {
         t.id: acuity_urgency(config, t.esi) if t.esi is not None else floor_urgency for t in tasks
     }
+
+
+def priority_urgencies(
+    di: DecisionInput,
+    *,
+    config: ObjectiveConfig,
+    rules: CompiledRules,
+    load: FloorLoad | None = None,
+) -> dict[TaskId, int]:
+    """The turnaround/discharge priority outputs as dispatch urgencies (doc 03 §4.5-4.7).
+
+    Folds the two priority levers' quantities into the SAME integer currency
+    ``assign_staff`` prices with, so they genuinely win contention when staff
+    are scarce (a FIFO boost alone is invisible to the global matching):
+
+    * **cleaning** — ``u = floor + unblock_value(bay)``: turnaround's
+      value-of-unblocking, so the clean that frees the most acuity-weighted
+      waiting demand outbids a nearer low-value clean.
+    * **discharge** — ``u = u(esi) + unblock_value(bay)``: a discharge frees
+      its bay exactly as a clean does.
+    * **documentation** — demoted to ``0`` when ``load.is_peak()`` (the soft
+      gate: any other task outbids it under contention, but serve-first still
+      completes it when capacity is idle — never a hard ban). Off-peak it
+      keeps its natural acuity urgency (promoted band).
+
+    Tasks not named keep ``_task_urgency``'s default. ``load`` defaults to the
+    neutral ``FloorLoad()`` — the same v1 stand-in the discharge lever gets
+    (``DecisionInput`` carries no utilization signal).
+    """
+    gate = load if load is not None else FloorLoad()
+    static_bays = {b.id: b for b in di.layout.bays}
+    bay_by_node = {b.node: b for b in di.layout.bays}
+    bay_by_occupant = {
+        bs.occupant: static_bays[bs.bay]
+        for bs in di.bays
+        if bs.occupant is not None and bs.bay in static_bays
+    }
+    floor_urgency = min(u for _, u in config.acuity_urgency)
+    out: dict[TaskId, int] = {}
+    for t in di.pending_tasks:
+        if t.kind == "cleaning":
+            bay = bay_by_node.get(t.at)
+            if bay is not None:
+                value = unblock_value(bay, di.waiting, config=config, rules=rules)
+                out[t.id] = floor_urgency + value
+        elif t.kind == "discharge" and t.patient is not None:
+            bay = bay_by_occupant.get(t.patient)
+            if bay is not None:
+                base = acuity_urgency(config, t.esi) if t.esi is not None else floor_urgency
+                out[t.id] = base + unblock_value(bay, di.waiting, config=config, rules=rules)
+        elif t.kind == "documentation" and gate.is_peak():
+            out[t.id] = 0
+    return out
 
 
 def _solve_assignment(
@@ -274,4 +351,4 @@ def _nn_two_opt(start: NodeId, stops: list[NodeId], d: _DistFn) -> tuple[NodeId,
     return tuple(tour)
 
 
-__all__ = ["assign_staff", "route_visits"]
+__all__ = ["assign_staff", "priority_urgencies", "route_visits"]

@@ -40,9 +40,9 @@ from hospital.core import (
     TaskSpec,
 )
 from hospital.core.models import FrozenModel
-from hospital.solver.objective import ObjectiveConfig, acuity_urgency
-from hospital.solver.placement import NEEDS_BAY_STAGES, compat_pair
+from hospital.solver.objective import ObjectiveConfig
 from hospital.solver.protocol import RoutingOracle
+from hospital.solver.turnaround import unblock_value
 
 # Above this provider/nurse utilization, documentation is demoted (doc 03 §4.7).
 DEFAULT_LOAD_THRESHOLD: float = 0.8
@@ -80,26 +80,22 @@ def prioritize_discharge(
         if bay is not None and bs.occupant is not None:
             bay_by_occupant[bs.occupant] = bay
 
-    def unblock_value(task: TaskSpec) -> int:
+    def task_unblock_value(task: TaskSpec) -> int:
         if task.patient is None:
             return 0
         bay = bay_by_occupant.get(task.patient)
         if bay is None:
             return 0
-        # Only bay-waiting stages count: a discharge frees a BAY, so demand from
-        # post-placement stages (providers/labs/documentation) is not unblocked.
-        return sum(
-            acuity_urgency(config, wp.patient.esi)
-            for wp in di.waiting
-            if wp.stage in NEEDS_BAY_STAGES and compat_pair(wp.patient, bay, rules)
-        )
+        # A discharge frees a BAY exactly as a clean does: the one shared
+        # value-of-unblocking quantity (solver.turnaround.unblock_value).
+        return unblock_value(bay, di.waiting, config=config, rules=rules)
 
     discharge_tasks = [
         t for t in di.pending_tasks if t.kind == "discharge" and t.patient is not None
     ]
     doc_tasks = [t for t in di.pending_tasks if t.kind == "documentation" and t.patient is not None]
 
-    ranked = sorted(discharge_tasks, key=lambda t: (-unblock_value(t), t.id.root))
+    ranked = sorted(discharge_tasks, key=lambda t: (-task_unblock_value(t), t.id.root))
     items = [
         PlanItem(
             stable_id=f"discharge:{t.id.root}",

@@ -30,7 +30,7 @@ from hospital.core import (
     validate,
 )
 from hospital.sim.policies.factory import make_policies
-from hospital.sim.policies.optimized import SolverPlacement, SolverSequencing
+from hospital.sim.policies.optimized import SolverDispatch, SolverPlacement, SolverSequencing
 from hospital.sim.seam_adapter import build_decision_input, validation_context
 from hospital.solver import (
     GraphRoutingOracle,
@@ -436,6 +436,53 @@ class TestOptimizedPolicies:
         assert items[0].kind == "sequence"
         # same waited time -> pure acuity order: the critical patient first
         assert items[0].order == ("p_critical", "p_routine")
+
+    def test_scarce_housekeeper_is_sent_to_the_higher_unblock_value_bay(self) -> None:
+        # Regression (M1 review finding 3): SolverDispatch ignored the
+        # turnaround lever's value-of-unblocking — with 2 dirty bays and 1
+        # housekeeper, the clean the housekeeper was standing next to always
+        # won, even when the OTHER bay unblocked a waiting ESI-1. The adapter
+        # must fold priority_urgencies into the assignment cost.
+        h = build_physics()
+        rules = tiny_rules()
+        oracle = GraphRoutingOracle(h.layout.graph)
+        bays = {b.zone_type: b for b in h.layout.bays}
+        gen_bay = bays[ZoneType.GENERAL]
+        resus_bay = bays[ZoneType.RESUS_TRAUMA]
+        occupants = (make_patient("p-gen"), make_patient("p-resus"))
+        for occupant, bay in zip(occupants, (gen_bay, resus_bay), strict=True):
+            h.world.register_patient(occupant)
+            h.world.assign_bay(bay.id, occupant.id)
+            h.world.vacate_bay(bay.id)  # both bays now CLEANING
+        for bay in (gen_bay, resus_bay):
+            h.world.add_task(
+                kind="cleaning",
+                patient=None,
+                at=bay.node,
+                required_role=StaffRole.HOUSEKEEPING,
+                activity=Activity.CLEANING,
+                duration=minutes(10),
+                bay=bay.id,
+            )
+        # Only the resus bay unblocks demand: an ESI-1 waits for a bay.
+        critical = make_patient("p-crit", esi=EsiAcuity.ESI1)
+        h.world.register_patient(critical)
+        h.world.request_bay(critical, stage="waiting_for_bay")
+        # Park the one housekeeper AT the general bay: travel alone would pick
+        # the general clean; the unblock value must outbid the shorter walk.
+        housekeeper = next(m for m in h.roster if m.role == StaffRole.HOUSEKEEPING)
+        h.world.set_staff_position(housekeeper.id, gen_bay.node)
+
+        di = build_decision_input(h.world, SimTime(0), ())
+        dispatch = SolverDispatch(objective=ObjectiveConfig(), rules=rules, roster=h.roster)
+        items = dispatch.dispatch(di, oracle)
+        by_staff = {i.staff: i.task for i in items if i.kind == "dispatch"}
+        resus_task = next(
+            t.id
+            for t in di.pending_tasks
+            if t.kind == "cleaning" and h.world.task(t.id).bay == resus_bay.id
+        )
+        assert by_staff[housekeeper.id] == resus_task
 
     def test_optimized_decide_produces_a_validate_clean_plan(self) -> None:
         # End-to-end through the real CP-SAT backend: whatever the arm proposes

@@ -23,7 +23,11 @@ Adapter-shape notes (judgment calls, recorded in the build report):
 * **Turnaround/discharge** hold the oracle from construction: their lever
   Protocols pass only the ``DecisionInput`` (doc 04 §3.6), while the solver
   functions price response travel through the oracle — a read-only query
-  surface, threaded once by the factory.
+  surface, threaded once by the factory. Their PRIORITY outputs reach physics
+  through the dispatch cost (``SolverDispatch`` folds
+  ``solver.dispatch.priority_urgencies`` into ``u(t)``): the enacted
+  ``clean``/``discharge`` items only boost a FIFO the global matching never
+  reads, so a priority that stayed out of the cost was a no-op under scarcity.
 * **Discharge** feeds the load gate the neutral ``FloorLoad()`` default:
   ``DecisionInput`` deliberately carries no utilization signal (no hidden
   fields), so in v1 documentation is always in the promoted band.
@@ -53,6 +57,7 @@ from hospital.solver import (
     get_backend,
     prioritize_cleaning,
     prioritize_discharge,
+    priority_urgencies,
     stamp,
 )
 from hospital.solver.discharge import FloorLoad
@@ -134,6 +139,13 @@ class SolverDispatch:
     judged on the same skill union the validator applies. A new task triggers
     a same-instant decision tick (``World.add_task`` callers request one), so
     a high-urgency arrival is reconsidered immediately.
+
+    ``u(t)`` is priority-augmented via ``solver.dispatch.priority_urgencies``:
+    the turnaround/discharge levers' value-of-unblocking and the documentation
+    load gate enter the SAME weighted cost the matching minimizes — dispatch
+    is the actuator (it hands tasks to staff), so a priority that never
+    reaches its cost is a no-op under scarcity. The neutral ``FloorLoad()``
+    default mirrors ``SolverDischarge`` (v1: no utilization signal).
     """
 
     objective: ObjectiveConfig
@@ -143,8 +155,14 @@ class SolverDispatch:
     def dispatch(self, di: DecisionInput, oracle: RoutingOracle) -> tuple[PlanItem, ...]:
         if not di.pending_tasks:
             return ()
+        overrides = priority_urgencies(di, config=self.objective, rules=self.rules)
         return assign_staff(
-            di, oracle, config=self.objective, rules=self.rules, staff_members=self.roster
+            di,
+            oracle,
+            config=self.objective,
+            rules=self.rules,
+            staff_members=self.roster,
+            urgency_override=overrides,
         )
 
 
