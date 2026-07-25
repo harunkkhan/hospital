@@ -53,6 +53,7 @@ from hospital.solver import (
     ObjectiveConfig,
     RoutingOracle,
     Solver,
+    SolverStatus,
     assign_staff,
     get_backend,
     prioritize_cleaning,
@@ -71,13 +72,25 @@ if TYPE_CHECKING:
 PLACEMENT_BACKEND = "placement_cpsat"
 
 
+# Ordering of solve claims by strength: OPTIMAL is a proof, FEASIBLE a
+# cap-truncated incumbent, HEURISTIC a constructive fallback with no claim.
+# The "worst observed" over a run is the weakest claim any tick relied on.
+_STATUS_SEVERITY: dict[SolverStatus, int] = {
+    SolverStatus.OPTIMAL: 0,
+    SolverStatus.FEASIBLE: 1,
+    SolverStatus.HEURISTIC: 2,
+}
+
+
 @dataclass
 class SolverPlacement:
     """``PlacementPolicy`` — marshal to the registry placement backend + stamp.
 
     Holds the previous stamped plan as the next solve's warm start (the rolling
     re-solve of doc 03 §4.3). ``last_status`` exposes the most recent solve's
-    ``SolverStatus`` claim — recorded, never hidden (PLAN §5).
+    ``SolverStatus`` claim and ``worst_status`` the weakest claim observed over
+    the whole run — recorded, never hidden (PLAN §5): a week that ever fell
+    back to the greedy heuristic must not present itself as proven-optimal.
     """
 
     backend: Solver
@@ -89,7 +102,13 @@ class SolverPlacement:
     def last_status(self) -> str | None:
         return self._last_status
 
+    @property
+    def worst_status(self) -> SolverStatus | None:
+        """The weakest solve claim of the run (None until the first solve)."""
+        return self._worst_status
+
     _last_status: str | None = field(default=None, init=False, repr=False)
+    _worst_status: SolverStatus | None = field(default=None, init=False, repr=False)
 
     def place(self, di: DecisionInput, oracle: RoutingOracle) -> tuple[PlanItem, ...]:
         if not di.waiting or not any(bs.status is BayStatus.FREE for bs in di.bays):
@@ -102,6 +121,10 @@ class SolverPlacement:
         )
         self._warm = stamped.plan
         self._last_status = stamped.status.value
+        if self._worst_status is None or (
+            _STATUS_SEVERITY[stamped.status] > _STATUS_SEVERITY[self._worst_status]
+        ):
+            self._worst_status = stamped.status
         return stamped.plan.items
 
 

@@ -62,7 +62,9 @@ class Scorecard(FrozenModel):
     objective_total: int
     completions: int
     wip: int
-    status: SolverStatus | None = None  # the optimized arm's solve claim (next phase)
+    # The optimized arm's WORST-observed placement solve claim over the run
+    # (None for baseline): a fallback week is distinguishable from a proven one.
+    status: SolverStatus | None = None
 
 
 def objective_inputs(log: EventLog, horizon: OperatingWeek) -> tuple[dict[EsiAcuity, int], int]:
@@ -132,6 +134,7 @@ def fold_scorecard(
         objective_total=total,
         completions=int(kpis.values["completions_per_week"]),
         wip=int(kpis.values["wip_end_of_week"]),
+        status=rep.solver_status,
     )
 
 

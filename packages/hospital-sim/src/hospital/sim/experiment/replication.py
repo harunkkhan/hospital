@@ -67,8 +67,9 @@ from hospital.sim.physics.resources import build_resources
 from hospital.sim.physics.service_times import ServiceTimes, default_service_table
 from hospital.sim.physics.world import World
 from hospital.sim.policies.factory import Arm, make_policies
+from hospital.sim.policies.optimized import SolverPlacement
 from hospital.sim.seam_adapter import apply_plan, build_decision_input, validation_context
-from hospital.solver import GraphRoutingOracle, ObjectiveConfig, config_hash
+from hospital.solver import GraphRoutingOracle, ObjectiveConfig, SolverStatus, config_hash
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -110,7 +111,13 @@ DEFAULT_OBJECTIVE = ObjectiveConfig(
 
 
 class Replication(FrozenModel):
-    """One finished run: the byte-stable log plus everything needed to fold it."""
+    """One finished run: the byte-stable log plus everything needed to fold it.
+
+    ``solver_status`` is the optimized arm's worst-observed placement solve
+    claim over the whole run (``None`` for the baseline arm): a week that ever
+    fell back below OPTIMAL is distinguishable downstream (``Scorecard.status``,
+    CLI/comparison) — recorded, never hidden (PLAN §5).
+    """
 
     run_id: RunId
     arm: Arm
@@ -119,6 +126,7 @@ class Replication(FrozenModel):
     event_log_jsonl: str
     objective_hash: str
     horizon: OperatingWeek
+    solver_status: SolverStatus | None = None
 
 
 class _TapEventLog(EventLog):
@@ -280,6 +288,8 @@ def run_replication(
 
     # 12-13: one continuous horizon, half-open [start, end); return the record
     env.run(until=horizon.end.root)
+    placement = policies.placement
+    solver_status = placement.worst_status if isinstance(placement, SolverPlacement) else None
     return Replication(
         run_id=RunId(f"{scenario.name}-{arm}-{seed}"),
         arm=arm,
@@ -288,6 +298,7 @@ def run_replication(
         event_log_jsonl=log.to_jsonl(),
         objective_hash=config_hash(objective),
         horizon=horizon,
+        solver_status=solver_status,
     )
 
 

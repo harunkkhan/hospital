@@ -358,7 +358,10 @@ class TestFactory:
 
 @dataclass
 class _StubBackend:
-    """A canned ``Solver`` — proves the placement adapter is a pure marshaller."""
+    """A canned ``Solver`` — proves the placement adapter is a pure marshaller.
+
+    ``statuses`` scripts each successive solve's claim (OPTIMAL once drained).
+    """
 
     plan: Plan
     name: ClassVar[str] = "stub_backend"
@@ -366,6 +369,7 @@ class _StubBackend:
     calls: list[tuple[DecisionInput, Plan | None]] = field(
         default_factory=list[tuple[DecisionInput, "Plan | None"]]
     )
+    statuses: list[SolverStatus] = field(default_factory=list[SolverStatus])
 
     def solve(
         self,
@@ -378,9 +382,10 @@ class _StubBackend:
         warm_start: Plan | None = None,
     ) -> SolveResult:
         self.calls.append((di, warm_start))
+        status = self.statuses.pop(0) if self.statuses else SolverStatus.OPTIMAL
         return SolveResult(
             plan=self.plan,
-            status=SolverStatus.OPTIMAL,
+            status=status,
             objective_value=0,
             solve_wall_us=1,
             backend=self.name,
@@ -413,6 +418,32 @@ class TestOptimizedPolicies:
         # the previous stamped plan warm-starts the next solve (rolling re-solve)
         placement.place(di, oracle)
         assert stub.calls[1][1] == canned
+
+    def test_worst_status_keeps_the_weakest_solve_claim(self) -> None:
+        # Regression (M1 review finding 4): only the LAST solve's status was
+        # kept, so a run that fell back to the greedy heuristic mid-week ended
+        # reporting whatever its final tick claimed. The worst-observed status
+        # must survive the run (a claim is never upgraded).
+        h = build_physics()
+        oracle = GraphRoutingOracle(h.layout.graph)
+        p = make_patient("p1", esi=EsiAcuity.ESI3)
+        h.world.register_patient(p)
+        h.world.request_bay(p, stage="waiting_for_bay")
+        stub = _StubBackend(
+            plan=Plan(items=()),
+            statuses=[SolverStatus.OPTIMAL, SolverStatus.HEURISTIC, SolverStatus.FEASIBLE],
+        )
+        placement = SolverPlacement(backend=stub, objective=ObjectiveConfig(), rules=tiny_rules())
+        di = build_decision_input(h.world, SimTime(0), ())
+
+        assert placement.worst_status is None  # no solve yet
+        placement.place(di, oracle)
+        assert placement.worst_status is SolverStatus.OPTIMAL
+        placement.place(di, oracle)
+        assert placement.worst_status is SolverStatus.HEURISTIC
+        placement.place(di, oracle)  # a later, stronger claim never upgrades
+        assert placement.worst_status is SolverStatus.HEURISTIC
+        assert placement.last_status == "feasible"  # the per-solve view still moves
 
     def test_placement_skips_the_solve_when_there_is_nothing_to_place(self) -> None:
         h = build_physics()

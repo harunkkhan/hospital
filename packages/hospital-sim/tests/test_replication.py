@@ -210,6 +210,24 @@ def test_callers_objective_drives_policies_and_the_hash(
     assert rep.objective_hash != config_hash(DEFAULT_OBJECTIVE)
 
 
+def test_solver_status_is_recorded_and_propagates_to_the_scorecard() -> None:
+    # Regression (M1 review finding 4): a non-OPTIMAL solve status vanished at
+    # the end of the run — Replication carried nothing and Scorecard.status
+    # stayed None, so a fallback run was indistinguishable from a proven one.
+    from hospital.sim.experiment.scorecard import fold_scorecard
+    from hospital.solver import ObjectiveConfig, SolverStatus
+
+    scenario = tiny_scenario(horizon_hours=2, rate_per_hour=2.0)
+    optimized = run_replication(scenario, "optimized", 5)
+    assert optimized.solver_status is SolverStatus.OPTIMAL  # tiny instances solve to proof
+    card = fold_scorecard(optimized, ObjectiveConfig())
+    assert card.status is optimized.solver_status
+
+    baseline = run_replication(scenario, "baseline", 5)
+    assert baseline.solver_status is None  # no solver ran; no claim to record
+    assert fold_scorecard(baseline, ObjectiveConfig()).status is None
+
+
 def test_default_rules_cover_every_acuity() -> None:
     from hospital.core import EsiAcuity, compile_rules
 
