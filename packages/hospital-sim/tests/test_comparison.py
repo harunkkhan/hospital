@@ -6,6 +6,7 @@ import math
 
 from _sim_fixtures import tiny_scenario
 
+from hospital.analysis import WEIGHTED_OBJECTIVE_KEY
 from hospital.core import KPI_KEYS, hours
 from hospital.sim.experiment.comparison import run_paired_comparison
 from hospital.solver import ObjectiveConfig
@@ -23,7 +24,8 @@ def test_null_comparison_baseline_vs_itself_shows_zero_signal() -> None:
         n_boot=200,
         warmup=hours(1),
     )
-    assert [c.key for c in contrasts] == list(KPI_KEYS)  # one contrast per KPI key
+    # the G1 weighted-objective headline leads, then one contrast per KPI key
+    assert [c.key for c in contrasts] == [WEIGHTED_OBJECTIVE_KEY, *KPI_KEYS]
     for c in contrasts:
         assert not c.significant
         if not math.isnan(c.diff):
