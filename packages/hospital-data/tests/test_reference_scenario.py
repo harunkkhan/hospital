@@ -6,7 +6,7 @@ from pathlib import Path
 
 from hospital.core import RandomStreams
 from hospital.data.layout import generate_floor
-from hospital.data.scenario import load_arm, load_scenario
+from hospital.data.scenario import dump_scenario, load_arm, load_scenario
 from hospital.data.workload import generate_workload
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -40,6 +40,29 @@ def test_er_floor_yaml_produces_a_full_week_of_arrivals() -> None:
         scenario.workload, RandomStreams(scenario.seed), disruptions=scenario.disruptions
     )
     assert arrivals == again
+
+
+def test_er_floor_stressed_yaml_loads_and_round_trips(tmp_path: Path) -> None:
+    """The committed M1 operating point (the scenario the comparison/goldens pin).
+
+    It must be exactly the reference floor + demand under a leaner roster, and
+    it must survive the codec byte-identically (``dump_scenario`` is canonical,
+    so re-dumping the loaded model reproduces the committed file).
+    """
+    src = _SCENARIOS / "er_floor_stressed.yaml"
+    scenario = load_scenario(src)
+    assert scenario.name == "er_floor_stressed"
+
+    reference = load_scenario(_SCENARIOS / "er_floor.yaml")
+    assert scenario.seed == reference.seed
+    assert scenario.facility == reference.facility
+    assert scenario.workload == reference.workload  # identical demand (CRN-comparable)
+    assert scenario.staffing != reference.staffing  # the stress is staffing only
+
+    out = tmp_path / "er_floor_stressed.yaml"
+    dump_scenario(scenario, out)
+    assert out.read_text() == src.read_text()
+    assert load_scenario(out) == scenario
 
 
 def test_baseline_and_surge_arms_share_the_identical_base_week() -> None:
