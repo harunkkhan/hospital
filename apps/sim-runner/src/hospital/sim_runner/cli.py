@@ -192,6 +192,22 @@ def run_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _positive_int(text: str) -> int:
+    """argparse type for ``--reps``: an integer >= 1, rejected at parse time.
+
+    ``--reps 0`` (or a negative count) used to sail through and "succeed" with
+    an empty report — zero replications, empty contrasts — which reads like a
+    real run. A rep count that cannot produce a comparison is a usage error.
+    """
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hospital-sim",
@@ -206,7 +222,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="base seed (default: the scenario's own seed); rep i runs at seed+i",
     )
-    run.add_argument("--reps", type=int, default=5, help="paired replications per arm (default 5)")
+    run.add_argument(
+        "--reps",
+        type=_positive_int,
+        default=5,
+        help="paired replications per arm (default 5; must be >= 1)",
+    )
     run.add_argument(
         "--arm",
         choices=("baseline", "optimized", "both"),
