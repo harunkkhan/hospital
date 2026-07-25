@@ -162,9 +162,10 @@ def test_scarce_staff_serves_critical_before_nearer_low_acuity() -> None:
     # Regression (M1 stress finding): with travel-only costs the matched SUBSET
     # under scarcity followed distance alone — the far resus-zone ESI-1 task
     # lost to nearer low-acuity work tick after tick (ESI-1 LOS +22 min while
-    # the solver "saved walking"). Priority is strict acuity tiers: the one
-    # idle physician takes the just-created ESI-1 task at the FAR node over a
-    # nearer ESI-4 task that has already waited 600 s.
+    # the solver "saved walking"). In the weighted cost the urgency gap prices
+    # deferral at w_time·Δu·unplaced_wait_penalty, which dwarfs any on-floor
+    # travel gap: the one idle physician takes the just-created ESI-1 task at
+    # the FAR node over a nearer ESI-4 task that has already waited 600 s.
     di = decision_input(staff=(staff_state("doc", at="gstat"),), now_us=600_000_000)
     members = (staff_member("doc", StaffRole.PHYSICIAN, skills=frozenset({"md"})),)
     tasks = (
@@ -198,10 +199,12 @@ def test_scarce_staff_serves_critical_before_nearer_low_acuity() -> None:
     assert _matching(items) == {"t-crit": "doc"}
 
 
-def test_same_tier_dispatch_is_fifo_not_travel() -> None:
-    # Within one acuity tier the longest-waiting task wins over a nearer fresh
-    # one — aging is bounded (no starvation within a tier), and travel cannot
-    # buy its way past a longer wait.
+def test_equal_acuity_dispatch_is_travel_not_fifo() -> None:
+    # Between equal acuities the NEARER task wins even against a longer wait:
+    # sunk wait cancels between serving and deferring (both sides of the
+    # weighted objective carry it), so travel alone decides — this is where
+    # the walking savings live. FIFO-within-tier (state B) re-created the
+    # baseline service order and destroyed them.
     di = decision_input(staff=(staff_state("doc", at="gstat"),), now_us=600_000_000)
     members = (staff_member("doc", StaffRole.PHYSICIAN, skills=frozenset({"md"})),)
     tasks = (
@@ -232,11 +235,11 @@ def test_same_tier_dispatch_is_fifo_not_travel() -> None:
         tasks=tasks,
         staff_members=members,
     )
-    assert _matching(items) == {"t-far-aged": "doc"}
+    assert _matching(items) == {"t-near-fresh": "doc"}
 
 
 def test_equal_priority_ties_break_on_travel() -> None:
-    # Same tier, same wait -> the third lexicographic level (min travel) decides.
+    # Same acuity, same wait -> the travel term alone decides.
     di = decision_input(staff=(staff_state("doc", at="gstat"),))
     members = (staff_member("doc", StaffRole.PHYSICIAN, skills=frozenset({"md"})),)
     tasks = (
