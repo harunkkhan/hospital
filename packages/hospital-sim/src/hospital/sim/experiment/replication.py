@@ -221,8 +221,21 @@ def _spawn_arrivals(
         )
 
 
-def run_replication(scenario: Scenario, arm: Arm, seed: int) -> Replication:
-    """Run one full horizon of ``scenario`` under ``arm`` — deterministic in ``seed``."""
+def run_replication(
+    scenario: Scenario,
+    arm: Arm,
+    seed: int,
+    *,
+    objective: ObjectiveConfig = DEFAULT_OBJECTIVE,
+) -> Replication:
+    """Run one full horizon of ``scenario`` under ``arm`` — deterministic in ``seed``.
+
+    ``objective`` is the ONE weight set for the run: it drives the optimized
+    arm's decisions (through ``make_policies``) AND is the config whose hash is
+    recorded on the ``Replication``. A caller that scores the run under some
+    objective must pass that same objective here — otherwise the reported
+    ``objective_hash`` would describe weights that never drove a decision.
+    """
     # 1-2: the single CRN source; randomness-free floor construction
     streams = RandomStreams(seed)
     layout = generate_floor(scenario.facility)
@@ -240,9 +253,8 @@ def run_replication(scenario: Scenario, arm: Arm, seed: int) -> Replication:
     service_times = ServiceTimes(streams, default_service_table())
     executor = TaskExecutor(env, world, log)
 
-    # 6-8: oracle + objective + compiled rules + the chosen arm
+    # 6-8: oracle + the caller's objective + compiled rules + the chosen arm
     oracle = GraphRoutingOracle(layout.graph)
-    objective = DEFAULT_OBJECTIVE
     rules = compile_rules(scenario.rules if scenario.rules else default_rules())
     policies = make_policies(arm, oracle=oracle, rules=rules, roster=roster, objective=objective)
     world.set_decision_hook(_make_tick(world, oracle, policies, rules, executor, log))

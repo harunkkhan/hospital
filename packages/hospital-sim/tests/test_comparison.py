@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 from _sim_fixtures import tiny_scenario
 
 from hospital.analysis import WEIGHTED_OBJECTIVE_KEY
@@ -32,6 +33,37 @@ def test_null_comparison_baseline_vs_itself_shows_zero_signal() -> None:
             assert c.diff == 0.0
         if not math.isnan(c.baseline) and not math.isnan(c.optimized):
             assert c.baseline == c.optimized  # the pairing really used the same seed
+
+
+def test_paired_comparison_threads_its_objective_into_the_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (M1 review finding 1): the pairing loop ran replications under
+    # DEFAULT_OBJECTIVE but scored them with the caller-supplied objective —
+    # the weighted contrast reported weights that never drove the optimized
+    # arm. Every replication must be run under the comparison's own objective.
+    import hospital.sim.experiment.comparison as comparison_mod
+    from hospital.data.scenario import Scenario
+    from hospital.sim.experiment.replication import Replication, run_replication
+    from hospital.sim.policies.factory import Arm
+
+    captured: list[ObjectiveConfig] = []
+
+    def spy(scenario: Scenario, arm: Arm, seed: int, *, objective: ObjectiveConfig) -> Replication:
+        captured.append(objective)
+        return run_replication(scenario, arm, seed, objective=objective)
+
+    monkeypatch.setattr(comparison_mod, "run_replication", spy)
+    custom = ObjectiveConfig(w_time=5, w_travel=3)
+    run_paired_comparison(
+        tiny_scenario(horizon_hours=2, rate_per_hour=2.0),
+        (1,),
+        objective=custom,
+        arms=("baseline", "baseline"),
+        n_boot=50,
+        warmup=hours(1),
+    )
+    assert captured == [custom, custom]  # both arms of the pair, same weights
 
 
 def test_diff_direction_is_baseline_minus_optimized() -> None:

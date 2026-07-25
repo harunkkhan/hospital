@@ -115,9 +115,19 @@ def run_paired_comparison(
     bootstrap_seed: int = 0,
     warmup: Duration | None = None,
 ) -> tuple[KpiContrast, ...]:
-    """Per seed: run both arms under identical CRN, fold, then delegate the stats."""
-    baseline_reps = [run_replication(scenario, arms[0], seed) for seed in seeds]
-    optimized_reps = [run_replication(scenario, arms[1], seed) for seed in seeds]  # SAME seeds
+    """Per seed: run both arms under identical CRN, fold, then delegate the stats.
+
+    The caller's ``objective`` both DRIVES the optimized arm's decisions
+    (threaded into ``run_replication`` -> ``make_policies``) and scores the
+    logs (``fold_scorecard``) — one weight set, decisions and headline agree.
+    """
+    baseline_reps = [
+        run_replication(scenario, arms[0], seed, objective=objective) for seed in seeds
+    ]
+    optimized_reps = [
+        run_replication(scenario, arms[1], seed, objective=objective)  # SAME seeds (CRN)
+        for seed in seeds
+    ]
     result = compare_replications(
         baseline_reps,
         optimized_reps,

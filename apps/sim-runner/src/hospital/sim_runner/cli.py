@@ -38,6 +38,7 @@ from hospital.data.scenario import Scenario, load_scenario, realize_staff
 from hospital.sim import Replication, run_replication
 from hospital.sim.experiment.comparison import compare_replications
 from hospital.sim.experiment.replication import DEFAULT_OBJECTIVE
+from hospital.solver import ObjectiveConfig
 
 Arm = Literal["baseline", "optimized"]
 
@@ -65,13 +66,20 @@ def _default_warmup(scenario: Scenario) -> Duration:
 
 
 def _run_arm(
-    scenario: Scenario, arm: Arm, seeds: tuple[int, ...], *, echo: bool
+    scenario: Scenario,
+    arm: Arm,
+    seeds: tuple[int, ...],
+    *,
+    objective: ObjectiveConfig,
+    echo: bool,
 ) -> list[Replication]:
+    # The SAME objective that later scores the logs drives the optimized arm's
+    # decisions — the runs and the report can never describe different weights.
     reps: list[Replication] = []
     for seed in seeds:
         if echo:
             print(f"  running {arm} seed={seed} ...", flush=True)
-        reps.append(run_replication(scenario, arm, seed))
+        reps.append(run_replication(scenario, arm, seed, objective=objective))
     return reps
 
 
@@ -150,8 +158,8 @@ def run_command(args: argparse.Namespace) -> int:
     print(f"scenario={scenario.name} seeds={list(seeds)} arm={args.arm}")
 
     if args.arm == "both":
-        baseline_reps = _run_arm(scenario, "baseline", seeds, echo=True)
-        optimized_reps = _run_arm(scenario, "optimized", seeds, echo=True)
+        baseline_reps = _run_arm(scenario, "baseline", seeds, objective=objective, echo=True)
+        optimized_reps = _run_arm(scenario, "optimized", seeds, objective=objective, echo=True)
         baseline_summary = _summarize(scenario, baseline_reps, warmup)
         optimized_summary = _summarize(scenario, optimized_reps, warmup)
         comparison = compare_replications(
@@ -173,7 +181,7 @@ def run_command(args: argparse.Namespace) -> int:
         return 0
 
     arm = cast("Arm", args.arm)
-    reps = _run_arm(scenario, arm, seeds, echo=True)
+    reps = _run_arm(scenario, arm, seeds, objective=objective, echo=True)
     summary = _summarize(scenario, reps, warmup)
     metrics = Metrics(
         schema_version="1",
