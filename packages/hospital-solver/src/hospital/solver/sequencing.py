@@ -15,6 +15,12 @@ from __future__ import annotations
 from hospital.core import MICROS_PER_SEC, DecisionInput, Duration, EsiAcuity, PlanItem
 from hospital.solver.objective import ObjectiveConfig, acuity_urgency
 
+# The canonical anti-starvation escalation rate (points per waited second,
+# doc 03 §4.4) — the ONE default every consumer of ``priority_score`` shares
+# (the sequencing lever, the greedy placement seed, and CP-SAT's scarcity
+# pricing), so "who is served next" is ranked identically everywhere.
+DEFAULT_STARVATION_RATE: int = 1
+
 
 def priority_score(
     esi: EsiAcuity, waited: Duration, *, config: ObjectiveConfig, starvation_rate: int
@@ -53,4 +59,4 @@ def sequence(
     )
 
 
-__all__ = ["priority_score", "sequence"]
+__all__ = ["DEFAULT_STARVATION_RATE", "priority_score", "sequence"]

@@ -92,7 +92,27 @@ def test_zone_capacity_leaves_lowest_priority_unplaced() -> None:
     result = _solve(di)
     assigned = _assignments(result.plan)
     assert len(assigned) == 2
-    assert "p-short" not in assigned  # lowest u*(waited) dropped under scarcity
+    assert "p-short" not in assigned  # lowest sequencing score dropped under scarcity
+    assert validate(result.plan, _ctx(di)) == ()
+
+
+def test_one_bay_scarcity_follows_the_sequencing_score() -> None:
+    # Regression (M1 review finding 2): the sequencing lever ranks by the
+    # additive anti-starvation score u(esi) + alpha*waited, but placement
+    # priced scarcity by the multiplicative u(esi)*(waited+1) — so the enacted
+    # queue order (long-waiting ESI-3 first) never won the one free bay; the
+    # fresher ESI-2 always did, and the sequencing rank was a placement no-op.
+    # Scores (default urgency u2=4, u3=3, alpha=1): ESI-3 waited 600 s -> 603
+    # beats ESI-2 waited 500 s -> 504; the old pricing had 3*601=1803 < 4*501.
+    di = decision_input(
+        waiting_patients=(
+            waiting(make_patient("p-esi2-fresh", EsiAcuity.ESI2), 500),
+            waiting(make_patient("p-esi3-starved", EsiAcuity.ESI3), 600),
+        ),
+        bays=(bay_state("bay-1"),),  # ONE free bay, compatible with both
+    )
+    result = _solve(di)
+    assert _assignments(result.plan) == {"p-esi3-starved": "bay-1"}
     assert validate(result.plan, _ctx(di)) == ()
 
 

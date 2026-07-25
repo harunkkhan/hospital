@@ -89,8 +89,12 @@ if TYPE_CHECKING:
 # raises rather than spinning (the executor's zero-delay guard is the other half).
 _MAX_TICKS_PER_INSTANT: Final[int] = 200
 
-# Rank assigned to non-overridden queue entries by a `sequence` plan item; an
-# explicitly ordered patient always sorts ahead of unordered peers in its tier.
+# Rank of queue entries not named by the last enacted `sequence` plan item.
+# The enacted rank is the PRIMARY queue key (an override genuinely reorders
+# across acuity tiers — anti-starvation must be able to put a long-waiting
+# ESI-5 ahead of an ESI-2); unranked entries sort after every ranked one,
+# falling back to (acuity, arrival). With no override ever enacted (the
+# baseline arm) every entry is unranked and the native acuity-tier FIFO holds.
 _UNRANKED: Final[int] = 2**31
 
 
@@ -131,7 +135,9 @@ class _QueueEntry:
     override: int = field(default=_UNRANKED)
 
     def sort_key(self) -> tuple[int, int, int, int]:
-        return (int(self.patient.esi), self.override, self.patient.arrival_time.root, self.seq)
+        # Enacted sequence rank FIRST: a `sequence` plan item is authoritative
+        # over the acuity tiers (it already priced acuity + anti-starvation).
+        return (self.override, int(self.patient.esi), self.patient.arrival_time.root, self.seq)
 
 
 class World:
@@ -504,8 +510,9 @@ class World:
     def request_bay(self, p: Patient, stage: str) -> simpy.Event:
         """Enqueue with infinite patience; yield the returned event for the grant.
 
-        The queue key is ``(esi, sequence-override, arrival_time, seq)`` —
-        strict acuity tiers, FIFO within a tier. The event is succeeded only by
+        The queue key is ``(sequence-override, esi, arrival_time, seq)`` — an
+        enacted ``sequence`` order is authoritative; with no override, strict
+        acuity tiers, FIFO within a tier. The event is succeeded only by
         :meth:`grant_bay` with the granted ``BayId`` as its value; there is no
         timeout branch (patients never abandon, ``PLAN §1.3``).
         """
@@ -529,12 +536,18 @@ class World:
         )
 
     def resequence_waiting(self, order: tuple[str, ...]) -> None:
-        """Apply a ``sequence`` plan item: explicit rank within each acuity tier."""
+        """Apply a ``sequence`` plan item: the enacted rank IS the service order.
+
+        The override is the queue's primary sort key (ahead of acuity), so the
+        enacted order is authoritative — the sequencing lever already priced
+        acuity and anti-starvation into its ranking, and re-tiering by ESI here
+        would silently undo it. Entries not named by ``order`` (enqueued since
+        the plan was solved) reset to unranked and sort after every ranked
+        entry until the next tick re-sequences the full queue.
+        """
         ranks = {pid: i for i, pid in enumerate(order)}
         for entry in self._queue:
-            rank = ranks.get(entry.patient.id.root)
-            if rank is not None:
-                entry.override = rank
+            entry.override = ranks.get(entry.patient.id.root, _UNRANKED)
 
     def is_waiting(self, p: PatientId) -> bool:
         """Whether ``p`` is currently in the bay wait queue (a ``grant_bay`` precondition)."""

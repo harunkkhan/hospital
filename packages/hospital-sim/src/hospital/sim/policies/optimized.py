@@ -56,6 +56,7 @@ from hospital.solver import (
     stamp,
 )
 from hospital.solver.discharge import FloorLoad
+from hospital.solver.sequencing import DEFAULT_STARVATION_RATE
 from hospital.solver.sequencing import sequence as score_sequence
 
 if TYPE_CHECKING:
@@ -63,10 +64,6 @@ if TYPE_CHECKING:
 
 # The registry name of the default placement backend (doc 03 §3.2).
 PLACEMENT_BACKEND = "placement_cpsat"
-
-# Anti-starvation escalation for the sequencing score (points per waited
-# second, doc 03 §4.4) — the solver default the greedy backend also uses.
-DEFAULT_STARVATION_RATE = 1
 
 
 @dataclass
