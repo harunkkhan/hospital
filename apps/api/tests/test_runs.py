@@ -13,6 +13,7 @@ from _api_fixtures import (
     run_to_finish,
     session_of,
 )
+from hospital.core import FloorLayout
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -107,3 +108,19 @@ def test_start_playing_launches_the_driver(tmp_path: Path) -> None:
         handle = create_run(client, start="playing")
         assert handle["state"] == "playing"
         run_to_finish(client, handle["run"])
+
+
+def test_layout_returns_the_static_geometry_verbatim(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        handle = create_run(client)
+        response = client.get(f"/runs/{handle['run']}/layout")
+        assert response.status_code == 200
+        # The API owns no geometry model: the body re-validates as the core model,
+        # equal to the session's own layout (fetched once, never per frame).
+        layout = FloorLayout.model_validate(response.json())
+        assert layout == session_of(app, handle["run"]).layout
+        assert layout.bays, "geometry must carry the static bays"
+        assert layout.graph.nodes, "geometry must carry the route graph"
+
+        assert client.get("/runs/nope/layout").status_code == 404

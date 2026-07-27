@@ -26,6 +26,50 @@
         "title": "ArrivalMode",
         "type": "string"
       },
+      "Bay": {
+        "additionalProperties": false,
+        "description": "A static bay descriptor. Deliberately has **no** ``status`` field.",
+        "properties": {
+          "equipment": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Equipment",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "id": {
+            "$ref": "#/components/schemas/BayId"
+          },
+          "isolation_capable": {
+            "title": "Isolation Capable",
+            "type": "boolean"
+          },
+          "node": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "serving_station": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "zone": {
+            "$ref": "#/components/schemas/ZoneId"
+          },
+          "zone_type": {
+            "$ref": "#/components/schemas/ZoneType"
+          }
+        },
+        "required": [
+          "id",
+          "zone",
+          "zone_type",
+          "node",
+          "serving_station",
+          "isolation_capable",
+          "equipment"
+        ],
+        "title": "Bay",
+        "type": "object"
+      },
       "BayAssigned": {
         "additionalProperties": false,
         "properties": {
@@ -641,6 +685,12 @@
         "title": "DisruptionSpec",
         "type": "object"
       },
+      "Distance": {
+        "description": "A non-negative distance in centimetres.",
+        "minimum": 0.0,
+        "title": "Distance",
+        "type": "integer"
+      },
       "DocumentationCompleted": {
         "additionalProperties": false,
         "properties": {
@@ -974,6 +1024,68 @@
           }
         },
         "title": "FacilitySpec",
+        "type": "object"
+      },
+      "FloorLayout": {
+        "additionalProperties": false,
+        "description": "The static floor: route graph plus zones/bays/stations/entrances.",
+        "properties": {
+          "bays": {
+            "items": {
+              "$ref": "#/components/schemas/Bay"
+            },
+            "title": "Bays",
+            "type": "array"
+          },
+          "entrances": {
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "title": "Entrances",
+            "type": "array"
+          },
+          "graph": {
+            "$ref": "#/components/schemas/RouteGraph"
+          },
+          "imaging_nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "title": "Imaging Nodes",
+            "type": "array"
+          },
+          "lab_nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "title": "Lab Nodes",
+            "type": "array"
+          },
+          "stations": {
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "title": "Stations",
+            "type": "array"
+          },
+          "zones": {
+            "items": {
+              "$ref": "#/components/schemas/Zone"
+            },
+            "title": "Zones",
+            "type": "array"
+          }
+        },
+        "required": [
+          "graph",
+          "zones",
+          "bays",
+          "stations",
+          "entrances",
+          "imaging_nodes",
+          "lab_nodes"
+        ],
+        "title": "FloorLayout",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1666,6 +1778,92 @@
           "task"
         ],
         "title": "RerouteAction",
+        "type": "object"
+      },
+      "RouteEdge": {
+        "additionalProperties": false,
+        "description": "A weighted edge. ``seconds`` is the routing cost; ``distance`` breaks ties.\n\nFor an ordinary corridor ``seconds`` is derived from ``distance``/speed, but\nthe two may be deliberately decoupled (e.g. an elevator: small distance,\nlarge ``seconds``) \u2014 routing always uses ``seconds``.",
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "b": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "bidirectional": {
+            "default": true,
+            "title": "Bidirectional",
+            "type": "boolean"
+          },
+          "distance": {
+            "$ref": "#/components/schemas/Distance"
+          },
+          "seconds": {
+            "$ref": "#/components/schemas/Duration"
+          }
+        },
+        "required": [
+          "a",
+          "b",
+          "distance",
+          "seconds"
+        ],
+        "title": "RouteEdge",
+        "type": "object"
+      },
+      "RouteGraph": {
+        "additionalProperties": false,
+        "description": "An immutable weighted graph with a deterministic Dijkstra.",
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/RouteEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/RouteNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "nodes",
+          "edges"
+        ],
+        "title": "RouteGraph",
+        "type": "object"
+      },
+      "RouteNode": {
+        "additionalProperties": false,
+        "description": "A graph vertex. ``x_cm``/``y_cm`` are viz-only, never used in routing.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "x_cm": {
+            "title": "X Cm",
+            "type": "integer"
+          },
+          "y_cm": {
+            "title": "Y Cm",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "x_cm",
+          "y_cm"
+        ],
+        "title": "RouteNode",
         "type": "object"
       },
       "RunHandle": {
@@ -2705,6 +2903,34 @@
         "title": "WorkupProfile",
         "type": "object"
       },
+      "Zone": {
+        "additionalProperties": false,
+        "description": "A care zone with a static capacity.",
+        "properties": {
+          "capacity": {
+            "title": "Capacity",
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ZoneId"
+          },
+          "zone_type": {
+            "$ref": "#/components/schemas/ZoneType"
+          }
+        },
+        "required": [
+          "id",
+          "zone_type",
+          "capacity"
+        ],
+        "title": "Zone",
+        "type": "object"
+      },
+      "ZoneId": {
+        "description": "Identifies a zone.",
+        "title": "ZoneId",
+        "type": "string"
+      },
       "ZoneQuota": {
         "additionalProperties": false,
         "description": "One acute-care zone's bay allocation (a ``facility.zones`` entry).",
@@ -2962,6 +3188,46 @@
           }
         },
         "summary": "Post Control"
+      }
+    },
+    "/runs/{run_id}/layout": {
+      "get": {
+        "description": "The run's static floor geometry (doc 07 \u00a73.8): route graph, zones, bays,\nstations, entrances \u2014 the ``core.entities.FloorLayout`` verbatim. Fetched once\non connect; the per-tick stream frame carries only the mutable projection.",
+        "operationId": "get_layout_runs__run_id__layout_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FloorLayout"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Layout"
       }
     },
     "/runs/{run_id}/metrics": {

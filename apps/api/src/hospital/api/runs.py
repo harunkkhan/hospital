@@ -37,6 +37,7 @@ from hospital.core import (
     KPI_KEYS,
     Duration,
     EventLog,
+    FloorLayout,
     FrozenModel,
     KpiVector,
     RunId,
@@ -312,6 +313,15 @@ async def delete_run(run_id: str, request: Request) -> Response:
     if not removed:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
     return Response(status_code=204)
+
+
+@router.get("/runs/{run_id}/layout", response_model=FloorLayout)
+async def get_layout(run_id: str, request: Request) -> Response:
+    """The run's static floor geometry (doc 07 §3.8): route graph, zones, bays,
+    stations, entrances — the ``core.entities.FloorLayout`` verbatim. Fetched once
+    on connect; the per-tick stream frame carries only the mutable projection."""
+    session = require_session(cast("FastAPI", request.app), run_id)
+    return _pydantic_json(session.layout)
 
 
 @router.get("/runs/{run_id}/metrics", response_model=KpiVector)
