@@ -278,26 +278,36 @@ async def stream_websocket(websocket: WebSocket, run_id: str) -> None:
         session.unsubscribe(queue)
 
 
+def _sse(frame: StreamFrame) -> str:
+    return f"data: {frame.model_dump_json()}\n\n"
+
+
+async def sse_frames(session: RunSession, request: Request) -> AsyncIterator[str]:
+    """SSE ``data:`` lines: one snapshot, then deltas/heartbeats until the peer goes.
+
+    The loop ends on :meth:`Request.is_disconnected` so a browser that closes its
+    ``EventSource`` releases its subscriber (and stops its heartbeat) at once — a
+    plain ``while True`` would leak both, since this ASGI path is told a client
+    left only through the disconnect signal, never a raised ``send``.
+    """
+    queue = session.subscribe()
+    try:
+        async with session.lock:
+            snapshot = build_frame(session, kind="snapshot")
+        yield _sse(snapshot)
+        while not await request.is_disconnected():
+            yield _sse(await _next_frame(session, queue))
+    finally:
+        session.unsubscribe(queue)
+
+
 @router.get("/runs/{run_id}/stream")
 async def stream_sse(run_id: str, request: Request) -> StreamingResponse:
     """SSE fallback (read-only): the same frames as ``data:`` lines."""
     session = _registry(cast("FastAPI", request.app)).get(run_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-
-    async def gen() -> AsyncIterator[str]:
-        queue = session.subscribe()
-        try:
-            async with session.lock:
-                frame = build_frame(session, kind="snapshot")
-            yield f"data: {frame.model_dump_json()}\n\n"
-            while True:
-                frame = await _next_frame(session, queue)
-                yield f"data: {frame.model_dump_json()}\n\n"
-        finally:
-            session.unsubscribe(queue)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(sse_frames(session, request), media_type="text/event-stream")
 
 
 __all__ = [
@@ -310,4 +320,5 @@ __all__ = [
     "build_frame",
     "coalesce_frames",
     "router",
+    "sse_frames",
 ]
