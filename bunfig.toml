@@ -1,0 +1,8 @@
+# Repo-root bun config. `bun test` from the root discovers apps/web's tests but
+# does NOT pick up apps/web/bunfig.toml — bun only reads the bunfig in its cwd.
+# Without these preloads the happy-dom globals never install and every RTL test
+# dies on `document is not defined`. Mirror apps/web/bunfig.toml's preloads here
+# (paths resolve relative to this file) so `bun test` is green from BOTH the
+# repo root (CI's frontend job) and apps/web.
+[test]
+preload = ["./apps/web/tests/setup.ts", "./apps/web/tests/setup-rtl.ts"]
