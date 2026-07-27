@@ -44,7 +44,14 @@ from hospital.api.runs import (
     ScenarioSummary,
 )
 from hospital.api.sessions import ControlCommand, SessionState
-from hospital.api.stream import BayFrame, PatientChip, QueueFrame, StaffKinematic, StreamFrame
+from hospital.api.stream import (
+    BayFrame,
+    PatientChip,
+    PendingTask,
+    QueueFrame,
+    StaffKinematic,
+    StreamFrame,
+)
 from hospital.core import EventEnvelope, KpiVector, Plan, PlanItem, Violation
 from hospital.data.scenario import Scenario
 
@@ -57,6 +64,7 @@ WIRE_MODELS: tuple[type[BaseModel], ...] = (
     BayFrame,
     QueueFrame,
     PatientChip,
+    PendingTask,
 )
 
 
@@ -101,6 +109,7 @@ __all__ = [
     "OverrideRejected",
     "OverrideRequest",
     "PatientChip",
+    "PendingTask",
     "Plan",
     "PlanItem",
     "QueueFrame",

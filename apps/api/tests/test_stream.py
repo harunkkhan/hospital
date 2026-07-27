@@ -10,11 +10,19 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from _api_fixtures import create_run, make_app, quiet_scenario, run_to_finish, session_of, step
+from _api_fixtures import (
+    create_run,
+    make_app,
+    make_patient,
+    quiet_scenario,
+    run_to_finish,
+    session_of,
+    step,
+)
 from hospital.api.overrides import PinRegistry
 from hospital.api.sessions import RunSession
 from hospital.api.stream import StreamFrame, coalesce_frames, sse_frames
-from hospital.core import RunId
+from hospital.core import Activity, EsiAcuity, RunId, StaffRole, seconds
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -152,3 +160,52 @@ def test_coalesce_frames_merges_event_tails(tmp_path: Path) -> None:
         assert merged.bays == second.bays
         assert merged.events == (*first.events, *second.events)
         assert session.frame_seq == second.seq
+
+
+def test_pending_tasks_carry_real_ids_the_operator_reroutes_by(tmp_path: Path) -> None:
+    app = make_app(tmp_path, {"quiet": quiet_scenario()})
+    with TestClient(app) as client:
+        handle = create_run(client, scenario_id="quiet")
+        run_id = handle["run"]
+        session = session_of(app, run_id)
+
+        patient = make_patient("pt_task", esi=EsiAcuity.ESI3)
+        session.world.register_patient(patient)
+        session.world.set_patient_position(patient.id, session.layout.entrances[0])
+        task = session.world.add_task(
+            kind="provider_visit",
+            patient=patient.id,
+            at=session.layout.entrances[0],
+            required_role=StaffRole.PHYSICIAN,
+            activity=Activity.PROVIDER_VISIT,
+            duration=seconds(120),
+        )
+        real_id = task.spec.id.root
+
+        with client.websocket_connect(f"/runs/{run_id}/stream") as ws:
+            frame = cast("dict[str, Any]", ws.receive_json())
+        pending = {t["task"]: t for t in frame["pending_tasks"]}
+        assert real_id in pending, "the frame must expose the real TaskSpec id"
+        assert pending[real_id]["kind"] == "provider_visit"
+        assert pending[real_id]["at"] == session.layout.entrances[0].root
+        assert StaffRole(pending[real_id]["role"]) is StaffRole.PHYSICIAN
+
+        # The operator reroutes using the id the frame just exposed -> accepted,
+        # stamped by the operator, threaded straight through the one validate().
+        physician = next(m for m in session.roster if m.role == StaffRole.PHYSICIAN)
+        accepted = client.post(
+            f"/runs/{run_id}/override",
+            json={"action": {"kind": "reroute", "staff": physician.id.root, "task": real_id}},
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert session.world.staff_task(physician.id) == task.spec.id
+
+        # A fabricated id the frame never showed is rejected -- ids are not minted
+        # by the operator, only echoed back.
+        bogus = client.post(
+            f"/runs/{run_id}/override",
+            json={
+                "action": {"kind": "reroute", "staff": physician.id.root, "task": "task_999999"}
+            },
+        )
+        assert bogus.status_code == 422

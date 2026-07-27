@@ -59,6 +59,7 @@ from hospital.core import (
     TaskId,
     UnknownEntity,
 )
+from hospital.core.seam import TaskKind
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -117,6 +118,24 @@ class PatientChip(FrozenModel):
     waited: Duration
 
 
+class PendingTask(FrozenModel):
+    """A pending unit of work carrying its REAL ``TaskSpec.id`` (doc 07 §7.2).
+
+    The sim mints opaque task ids (``task_000001``); an operator ``reroute`` names
+    one verbatim, and a fabricated id is rejected by ``validate()`` — so the
+    console must see the true id. Render-only like every frame field: the id
+    crosses the wire as a reference the operator echoes back, never as authority.
+    ``role`` is the role the task requires, so the console can offer only staff
+    who could actually serve it.
+    """
+
+    task: TaskId
+    kind: TaskKind
+    at: NodeId
+    patient: PatientId | None = None
+    role: StaffRole
+
+
 class StreamFrame(FrozenModel):
     """One streamed projection of live world state (doc 07 §7.2)."""
 
@@ -130,6 +149,7 @@ class StreamFrame(FrozenModel):
     bays: tuple[BayFrame, ...]
     queues: tuple[QueueFrame, ...]
     patients: tuple[PatientChip, ...]
+    pending_tasks: tuple[PendingTask, ...]
     events: tuple[EventEnvelope, ...]
     kpi_preview: KpiVector | None = None
 
@@ -196,6 +216,20 @@ def _patient_chips(world: World) -> tuple[PatientChip, ...]:
     return tuple(chips)
 
 
+def _pending_task_frames(world: World) -> tuple[PendingTask, ...]:
+    """Project the world's real pending ``TaskSpec``s — ids the operator reroutes by."""
+    return tuple(
+        PendingTask(
+            task=spec.id,
+            kind=spec.kind,
+            at=spec.at,
+            patient=spec.patient,
+            role=spec.required_role,
+        )
+        for spec in world.pending_tasks()
+    )
+
+
 def build_frame(session: RunSession, *, kind: Literal["snapshot", "delta"]) -> StreamFrame:
     """Project the session's ``World`` into one frame (caller holds the session lock).
 
@@ -225,6 +259,7 @@ def build_frame(session: RunSession, *, kind: Literal["snapshot", "delta"]) -> S
         ),
         queues=_queue_frames(world),
         patients=_patient_chips(world),
+        pending_tasks=_pending_task_frames(world),
         events=events,
     )
 
@@ -314,6 +349,7 @@ __all__ = [
     "HEARTBEAT_SECONDS",
     "BayFrame",
     "PatientChip",
+    "PendingTask",
     "QueueFrame",
     "StaffKinematic",
     "StreamFrame",

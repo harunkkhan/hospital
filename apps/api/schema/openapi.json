@@ -1341,6 +1341,54 @@
         "title": "PatientMoved",
         "type": "object"
       },
+      "PendingTask": {
+        "additionalProperties": false,
+        "description": "A pending unit of work carrying its REAL ``TaskSpec.id`` (doc 07 \u00a77.2).\n\nThe sim mints opaque task ids (``task_000001``); an operator ``reroute`` names\none verbatim, and a fabricated id is rejected by ``validate()`` \u2014 so the\nconsole must see the true id. Render-only like every frame field: the id\ncrosses the wire as a reference the operator echoes back, never as authority.\n``role`` is the role the task requires, so the console can offer only staff\nwho could actually serve it.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "kind": {
+            "enum": [
+              "provider_visit",
+              "nurse_visit",
+              "transport",
+              "imaging",
+              "lab",
+              "cleaning",
+              "discharge",
+              "documentation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "patient": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PatientId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "role": {
+            "$ref": "#/components/schemas/StaffRole"
+          },
+          "task": {
+            "$ref": "#/components/schemas/TaskId"
+          }
+        },
+        "required": [
+          "task",
+          "kind",
+          "at",
+          "role"
+        ],
+        "title": "PendingTask",
+        "type": "object"
+      },
       "Plan": {
         "additionalProperties": false,
         "description": "A complete, revisable set of decisions.",
@@ -2242,6 +2290,13 @@
             "title": "Patients",
             "type": "array"
           },
+          "pending_tasks": {
+            "items": {
+              "$ref": "#/components/schemas/PendingTask"
+            },
+            "title": "Pending Tasks",
+            "type": "array"
+          },
           "queues": {
             "items": {
               "$ref": "#/components/schemas/QueueFrame"
@@ -2292,6 +2347,7 @@
           "bays",
           "queues",
           "patients",
+          "pending_tasks",
           "events"
         ],
         "title": "StreamFrame",
