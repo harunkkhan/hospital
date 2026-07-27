@@ -14,22 +14,30 @@ export interface Polled<T> {
 export function usePolled<T>(fetcher: (() => Promise<T>) | null, intervalMs: number): Polled<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const epochRef = useRef(0);
+  // Every load() gets a strictly-increasing request id. A resolved request may
+  // update state only if its id is not older than the latest already applied —
+  // so when two polls overlap, the SLOWER-but-OLDER response can never clobber
+  // the newer one, regardless of which promise settles first.
+  const nextIdRef = useRef(0);
+  const appliedRef = useRef(0);
 
   const load = useCallback(() => {
     if (fetcher === null) {
       return;
     }
-    const epoch = epochRef.current;
+    const id = nextIdRef.current;
+    nextIdRef.current += 1;
     fetcher().then(
       (value) => {
-        if (epochRef.current === epoch) {
+        if (id >= appliedRef.current) {
+          appliedRef.current = id;
           setData(value);
           setError(null);
         }
       },
       (err: unknown) => {
-        if (epochRef.current === epoch) {
+        if (id >= appliedRef.current) {
+          appliedRef.current = id;
           setError(err instanceof Error ? err.message : String(err));
         }
       },
@@ -37,7 +45,9 @@ export function usePolled<T>(fetcher: (() => Promise<T>) | null, intervalMs: num
   }, [fetcher]);
 
   useEffect(() => {
-    epochRef.current += 1;
+    // Fetcher/interval change: retire every in-flight request (their ids are
+    // all below the current counter) and clear the view for the new source.
+    appliedRef.current = nextIdRef.current;
     setData(null);
     setError(null);
     if (fetcher === null) {
