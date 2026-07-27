@@ -24,6 +24,7 @@ import type {
   OverrideOutcome,
   PatientChip,
   PatientId,
+  PendingTask,
   Plan,
   PlanItem,
   QueueFrame,
@@ -714,6 +715,24 @@ export class MockEngine {
     };
   }
 
+  /**
+   * Reroutable tasks the operator can target. The mock's task ids encode
+   * kind+node (`nurse_visit:bay-g1`) so applyOverride can decode them, but the
+   * console treats them as opaque — it echoes whatever id the frame carries.
+   */
+  private pendingTasks(): PendingTask[] {
+    const out: PendingTask[] = [];
+    for (const bay of this.bays.values()) {
+      if (bay.status === "cleaning") {
+        out.push({ id: `cleaning:${bay.id}`, kind: "cleaning", at: bay.id });
+      } else if (bay.status === "occupied") {
+        out.push({ id: `nurse_visit:${bay.id}`, kind: "nurse_visit", at: bay.id });
+        out.push({ id: `provider_visit:${bay.id}`, kind: "provider_visit", at: bay.id });
+      }
+    }
+    return out;
+  }
+
   buildFrame(kind: "snapshot" | "delta"): StreamFrame {
     this.seq += 1;
     const staff: StaffKinematic[] = [...this.staff.values()].map((m) => this.staffKinematic(m));
@@ -747,6 +766,7 @@ export class MockEngine {
       bays,
       queues,
       patients: chips,
+      pending_tasks: this.pendingTasks(),
       events,
       kpi_preview: null,
     };

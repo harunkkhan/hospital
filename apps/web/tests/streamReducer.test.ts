@@ -112,6 +112,21 @@ describe("applyFrame delta", () => {
     expect(sequences[sequences.length - 1]).toBe(frames * perFrame - 1);
   });
 
+  test("pending_tasks: snapshot sets, omitted delta keeps, present delta replaces", () => {
+    const task = { id: "task_000042", kind: "cleaning", at: "bay-g1" } as const;
+    const snap = applyFrame(
+      initialWorld(),
+      frame({ seq: 0, kind: "snapshot", pending_tasks: [task] }),
+    );
+    expect(snap.pendingTasks).toEqual([task]);
+
+    const kept = applyFrame(snap, frame({ seq: 1, kind: "delta" }));
+    expect(kept.pendingTasks).toEqual([task]); // omitted ⇒ unchanged
+
+    const cleared = applyFrame(kept, frame({ seq: 2, kind: "delta", pending_tasks: [] }));
+    expect(cleared.pendingTasks).toEqual([]); // present (empty) ⇒ authoritative
+  });
+
   test("kpi_preview is kept from the last frame that carried one", () => {
     const withKpi = applyFrame(
       base,

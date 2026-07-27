@@ -20,6 +20,7 @@ import type {
   KpiVector,
   PatientChip,
   PatientId,
+  PendingTask,
   QueueFrame,
   RunId,
   RunState,
@@ -42,6 +43,8 @@ export interface WorldView {
   bays: Readonly<Record<BayId, BayFrame>>;
   queues: readonly QueueFrame[];
   patients: Readonly<Record<PatientId, PatientChip>>;
+  /** Reroutable tasks at the last applied frame (real ids from the sim). */
+  pendingTasks: readonly PendingTask[];
   /** Bounded ring of recent events, oldest first. */
   events: readonly EventEnvelope[];
   kpiPreview: KpiVector | null;
@@ -60,6 +63,7 @@ export function initialWorld(): WorldView {
     bays: {},
     queues: [],
     patients: {},
+    pendingTasks: [],
     events: [],
     kpiPreview: null,
     desynced: false,
@@ -108,6 +112,7 @@ export function applyFrame(world: WorldView, frame: StreamFrame): WorldView {
       bays: keyBy(frame.bays, (b) => b.bay),
       queues: frame.queues,
       patients: keyBy(frame.patients, (p) => p.patient),
+      pendingTasks: frame.pending_tasks ?? [],
       events: appendEvents(world.run === frame.run ? world.events : [], frame.events),
       kpiPreview: frame.kpi_preview ?? null,
       desynced: false,
@@ -152,6 +157,8 @@ export function applyFrame(world: WorldView, frame: StreamFrame): WorldView {
     bays: frame.bays.length > 0 ? { ...world.bays, ...keyBy(frame.bays, (b) => b.bay) } : world.bays,
     queues: frame.queues.length > 0 || frame.patients.length > 0 ? frame.queues : world.queues,
     patients,
+    // Present (even empty) is authoritative; omitted keeps the last known set.
+    pendingTasks: frame.pending_tasks ?? world.pendingTasks,
     events: appendEvents(world.events, frame.events),
     kpiPreview: frame.kpi_preview ?? world.kpiPreview,
     desynced: false,

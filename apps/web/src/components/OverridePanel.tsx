@@ -69,20 +69,21 @@ export function OverridePanel({ layout, world, selected, onSubmit }: OverridePan
     () => Object.values(world.staff).sort((a, b) => a.staff.localeCompare(b.staff)),
     [world.staff],
   );
-  /** Pending-work targets derived from the live world (mock task vocabulary). */
-  const tasks = useMemo(() => {
-    const out: { id: string; label: string }[] = [];
-    for (const bayFrame of Object.values(world.bays)) {
-      if (bayFrame.status === "cleaning") {
-        out.push({ id: `cleaning:${bayFrame.bay}`, label: `clean ${bayFrame.bay}` });
-      }
-      if (bayFrame.status === "occupied") {
-        out.push({ id: `nurse_visit:${bayFrame.bay}`, label: `nurse visit ${bayFrame.bay}` });
-        out.push({ id: `provider_visit:${bayFrame.bay}`, label: `provider visit ${bayFrame.bay}` });
-      }
-    }
-    return out;
-  }, [world.bays]);
+  /**
+   * Reroute targets come STRAIGHT from the frame's pending tasks — their ids
+   * are the sim's own opaque handles. Synthesizing ids from kind+bay (as this
+   * panel used to) produced strings the sim never minted, so every live
+   * reroute was rejected. When the frame carries none, reroute is disabled.
+   */
+  const tasks = useMemo(
+    () =>
+      world.pendingTasks.map((t) => ({
+        id: t.id,
+        label: `${t.kind.replace(/_/g, " ")} @ ${t.at}`,
+      })),
+    [world.pendingTasks],
+  );
+  const noReroutableTasks = tasks.length === 0;
 
   const buildAction = (): OperatorAction | null => {
     switch (kind) {
@@ -217,10 +218,22 @@ export function OverridePanel({ layout, world, selected, onSubmit }: OverridePan
                 ))}
               </select>
             </label>
-            <label className="field">
+            <label
+              className="field"
+              title={
+                noReroutableTasks
+                  ? "No reroutable tasks on this frame — nothing to reroute staff onto."
+                  : undefined
+              }
+            >
               task
-              <select aria-label="task" value={task} onChange={(e) => setTask(e.target.value)}>
-                <option value="">choose…</option>
+              <select
+                aria-label="task"
+                value={task}
+                disabled={noReroutableTasks}
+                onChange={(e) => setTask(e.target.value)}
+              >
+                <option value="">{noReroutableTasks ? "no pending tasks" : "choose…"}</option>
                 {tasks.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.label}
@@ -228,6 +241,9 @@ export function OverridePanel({ layout, world, selected, onSubmit }: OverridePan
                 ))}
               </select>
             </label>
+            {noReroutableTasks && (
+              <div className="small muted">No reroutable tasks on this frame.</div>
+            )}
           </>
         )}
 

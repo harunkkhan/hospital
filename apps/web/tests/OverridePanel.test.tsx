@@ -102,6 +102,52 @@ describe("OverridePanel reject path", () => {
   });
 });
 
+describe("OverridePanel reroute (finding #2: real task ids from the frame)", () => {
+  test("lists the frame's pending tasks and echoes the opaque id verbatim", () => {
+    const requests: OverrideRequest[] = [];
+    const w: WorldView = {
+      ...world(),
+      pendingTasks: [{ id: "task_000042", kind: "cleaning", at: "bay-g1" }],
+    };
+    render(
+      <OverridePanel
+        layout={LAYOUT}
+        world={w}
+        selected={null}
+        onSubmit={(req) => {
+          requests.push(req);
+          return Promise.resolve({ status: "applied", plan: { items: [] }, applied_at: 0 });
+        }}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("override action"), { target: { value: "reroute" } });
+    fireEvent.change(screen.getByLabelText("staff"), { target: { value: "hk-1" } });
+    const taskSelect = screen.getByLabelText("task") as HTMLSelectElement;
+    expect(taskSelect.disabled).toBe(false);
+    fireEvent.change(taskSelect, { target: { value: "task_000042" } });
+    fireEvent.click(screen.getByRole("button", { name: /submit override/i }));
+
+    expect(requests[0]?.action).toEqual({ kind: "reroute", staff: "hk-1", task: "task_000042" });
+  });
+
+  test("reroute is disabled when the frame carries no pending tasks", () => {
+    render(
+      <OverridePanel
+        layout={LAYOUT}
+        world={world()}
+        selected={null}
+        onSubmit={() => Promise.reject(new Error("unused"))}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("override action"), { target: { value: "reroute" } });
+    fireEvent.change(screen.getByLabelText("staff"), { target: { value: "hk-1" } });
+    expect((screen.getByLabelText("task") as HTMLSelectElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /submit override/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+});
+
 describe("OverridePanel map selection", () => {
   test("a selected bay prefills the bay field", () => {
     render(

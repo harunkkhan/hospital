@@ -452,6 +452,19 @@ export interface PatientChip {
   waited: Duration;
 }
 
+/**
+ * A unit of pending work an operator can reroute a staff member onto. The
+ * `id` is OPAQUE (the sim mints it, e.g. `task_000001`) — the console must
+ * echo it back verbatim in a `reroute` override and MUST NOT synthesize its
+ * own from kind+bay, or the id will never match a real task. `kind`/`at` are
+ * for labelling the picker only.
+ */
+export interface PendingTask {
+  id: TaskId;
+  kind: Activity;
+  at: NodeId;
+}
+
 export type FrameKind = "snapshot" | "delta";
 
 export interface StreamFrame {
@@ -468,5 +481,11 @@ export interface StreamFrame {
   patients: readonly PatientChip[];
   /** core.events verbatim: events since the previous frame (never dropped). */
   events: readonly EventEnvelope[];
+  /**
+   * Reroutable tasks live at this instant. Present (even empty) ⇒ authoritative;
+   * omitted on a delta ⇒ unchanged. A frame that never carries it leaves the
+   * reroute picker empty, which the OverridePanel disables.
+   */
+  pending_tasks?: readonly PendingTask[] | null;
   kpi_preview?: KpiVector | null;
 }
