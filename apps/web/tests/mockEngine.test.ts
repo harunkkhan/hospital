@@ -1,10 +1,21 @@
 import { describe, expect, test } from "bun:test";
 
 import { MockEngine } from "../src/mock/engine";
-import { synthesizeCompare } from "../src/mock/mockApi";
+import { createMockApi, synthesizeCompare } from "../src/mock/mockApi";
 
 const HOUR_US = 3600 * 1_000_000;
 const S = 1_000_000;
+
+function countArrivals(engine: MockEngine, totalUs: number): number {
+  let arrivals = 0;
+  for (let elapsed = 0; elapsed < totalUs; elapsed += HOUR_US) {
+    engine.advance(HOUR_US);
+    arrivals += engine
+      .buildFrame("delta")
+      .events.filter((e) => e.event.kind === "patient_arrived").length;
+  }
+  return arrivals;
+}
 
 function occupiedBay(engine: MockEngine): { bay: string; occupant: string } | null {
   // advance until some bay is occupied (bounded)
@@ -53,6 +64,60 @@ describe("MockEngine determinism", () => {
     // and at least one non-significant contrast
     expect(one.contrasts.some((c) => c.delta < 0)).toBe(true);
     expect(one.contrasts.some((c) => !c.significant)).toBe(true);
+  });
+});
+
+describe("MockEngine scenario threading (finding #6: overrides are not placebo)", () => {
+  test("workload.arrival_rate_multiplier tightens the arrival load", () => {
+    const plain = new MockEngine("r", 11, "optimized");
+    const busy = new MockEngine("r", 11, "optimized", {
+      base: "er_floor",
+      overrides: { "workload.arrival_rate_multiplier": 3 },
+    });
+    const window = 6 * HOUR_US;
+    expect(countArrivals(busy, window)).toBeGreaterThan(countArrivals(plain, window));
+  });
+
+  test("workload.ambulance_share is honored and stays deterministic per seed", () => {
+    const walkOnly = new MockEngine("r", 3, "optimized", {
+      base: "er_floor",
+      overrides: { "workload.ambulance_share": 0 },
+    });
+    walkOnly.advance(8 * HOUR_US);
+    const modes = walkOnly
+      .buildFrame("snapshot")
+      .events.filter((e) => e.event.kind === "patient_arrived");
+    expect(modes.length).toBeGreaterThan(0);
+    expect(modes.every((e) => e.event.kind === "patient_arrived" && e.event.mode === "walk_in")).toBe(
+      true,
+    );
+  });
+});
+
+describe("mock scenario persistence (finding #6: saved scenarios retained)", () => {
+  test("a saved scenario's overrides are replayed when re-run by id", async () => {
+    const api = createMockApi();
+    const { id } = await api.createScenario({
+      base: "er_floor",
+      overrides: { "workload.arrival_rate_multiplier": 5 },
+    });
+    const busy = await api.createRun({ scenario: { id }, seed: 5, arm: "optimized", start: "paused" });
+    const plain = await api.createRun({
+      scenario: { id: "er_floor" },
+      seed: 5,
+      arm: "optimized",
+      start: "paused",
+    });
+    const stepFor = { action: "step", granularity: "tick", count: 4 * 3600 } as const;
+    await api.control(busy.run, stepFor);
+    await api.control(plain.run, stepFor);
+
+    const busyWip = (await api.getMetrics(busy.run)).values["wip_end_of_week"] ?? 0;
+    const plainWip = (await api.getMetrics(plain.run)).values["wip_end_of_week"] ?? 0;
+    expect(busyWip).toBeGreaterThan(plainWip);
+
+    await api.deleteRun(busy.run);
+    await api.deleteRun(plain.run);
   });
 });
 

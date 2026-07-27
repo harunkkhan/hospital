@@ -18,7 +18,7 @@ import type {
   SessionState,
   StepGranularity,
 } from "../api/types";
-import { MockEngine, mulberry32, WEEK_US } from "./engine";
+import { MockEngine, mulberry32, WEEK_US, type ScenarioConfig } from "./engine";
 
 const TICK_MS = 100;
 const HEARTBEAT_TICKS = 20;
@@ -95,8 +95,20 @@ const CANNED_SCENARIOS: ScenarioSummary[] = [
 export function createMockApi(): ConsoleApi {
   const runs = new Map<RunId, MockRun>();
   const scenarios: ScenarioSummary[] = [...CANNED_SCENARIOS];
+  // Overrides for every SAVED scenario, so re-running one by id replays its
+  // parameters instead of silently reverting to the canned defaults.
+  const savedOverrides = new Map<string, Readonly<Record<string, number>>>();
   let runCounter = 0;
   let scenarioCounter = 0;
+
+  /** Resolve a run request's scenario ref/inline into concrete engine inputs. */
+  const resolveScenario = (req: RunRequest): ScenarioConfig => {
+    const scenario = req.scenario;
+    if ("base" in scenario) {
+      return { base: scenario.base, overrides: scenario.overrides };
+    }
+    return { base: scenario.id, overrides: savedOverrides.get(scenario.id) ?? {} };
+  };
 
   const handleOf = (run: MockRun, shadow: RunId | null = null): RunHandle => ({
     run: run.engine.runId,
@@ -176,7 +188,7 @@ export function createMockApi(): ConsoleApi {
     async createRun(req: RunRequest) {
       runCounter += 1;
       const id = `run-${String(runCounter).padStart(2, "0")}-${req.arm}`;
-      const engine = new MockEngine(id, req.seed, req.arm);
+      const engine = new MockEngine(id, req.seed, req.arm, resolveScenario(req));
       const run: MockRun = {
         engine,
         subscribers: new Set(),
@@ -268,6 +280,9 @@ export function createMockApi(): ConsoleApi {
     async createScenario(req) {
       scenarioCounter += 1;
       const id = `scn-${String(scenarioCounter).padStart(2, "0")}`;
+      // Retain the overrides so a later createRun({ scenario: { id } }) replays
+      // them — otherwise a saved scenario would be a hollow name.
+      savedOverrides.set(id, req.overrides);
       scenarios.push({
         id,
         name: `${req.base} (custom ${scenarioCounter})`,

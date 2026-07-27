@@ -135,6 +135,12 @@ export function gini(values: number[]): number {
   return Math.max(0, Math.min(1, g));
 }
 
+/** Scenario inputs that shape a mock run (base id + numeric parameter overrides). */
+export interface ScenarioConfig {
+  base: string;
+  overrides: Readonly<Record<string, number>>;
+}
+
 export class MockEngine {
   readonly runId: RunId;
   readonly arm: "baseline" | "optimized";
@@ -142,10 +148,18 @@ export class MockEngine {
   readonly layout: FloorLayout;
   readonly horizonUs = WEEK_US;
 
+  /** The resolved scenario this run was generated from (never discarded). */
+  readonly scenario: ScenarioConfig;
+
   simTimeUs = 0;
   state: RunState = "created";
   speed = 60;
   seq = -1;
+
+  /** Interarrival divisor: >1 packs arrivals tighter, <1 spreads them out. */
+  private readonly arrivalMultiplier: number;
+  /** P(ambulance) for each arrival. */
+  private readonly ambulanceShare: number;
 
   private rng: () => number;
   private accUs = 0;
@@ -175,13 +189,23 @@ export class MockEngine {
   private adjacency = new Map<NodeId, NodeId[]>();
   private edgeUs = new Map<string, number>();
 
-  constructor(runId: RunId, seed: number, arm: "baseline" | "optimized") {
+  constructor(
+    runId: RunId,
+    seed: number,
+    arm: "baseline" | "optimized",
+    scenario: ScenarioConfig = { base: "er_floor", overrides: {} },
+  ) {
     this.runId = runId;
     this.seed = seed;
     this.arm = arm;
+    this.scenario = scenario;
+    const overrides = scenario.overrides;
+    this.arrivalMultiplier = Math.max(0.1, overrides["workload.arrival_rate_multiplier"] ?? 1);
+    const share = overrides["workload.ambulance_share"];
+    this.ambulanceShare = share === undefined ? 0.25 : Math.max(0, Math.min(1, share));
     this.layout = makeMockLayout();
     this.rng = mulberry32(seed);
-    this.nextArrivalUs = Math.round(30 * S + this.rng() * 120 * S);
+    this.nextArrivalUs = Math.round((30 * S + this.rng() * 120 * S) / this.arrivalMultiplier);
 
     for (const bay of this.layout.bays) {
       this.bays.set(bay.id, {
@@ -331,7 +355,7 @@ export class MockEngine {
       this.patientCounter += 1;
       const id = `p-${String(this.patientCounter).padStart(4, "0")}`;
       const esi = this.drawEsi();
-      const mode = this.rng() < 0.25 ? "ambulance" : "walk_in";
+      const mode = this.rng() < this.ambulanceShare ? "ambulance" : "walk_in";
       const complaint = COMPLAINTS[Math.floor(this.rng() * COMPLAINTS.length)] ?? "unwell";
       const atNode = mode === "ambulance" ? "entr-ambo" : "entr-main";
       this.patients.set(id, {
@@ -348,8 +372,9 @@ export class MockEngine {
         priority: 0,
       });
       this.emit({ kind: "patient_arrived", occurred_at: this.simTimeUs, patient: id, mode });
-      // exponential-ish interarrival, mean ~10 min
-      this.nextArrivalUs += Math.round(-Math.log(1 - this.rng()) * 600 * S);
+      // exponential-ish interarrival, mean ~10 min, tightened by the workload
+      // arrival-rate override so scenario knobs actually move the load.
+      this.nextArrivalUs += Math.round((-Math.log(1 - this.rng()) * 600 * S) / this.arrivalMultiplier);
     }
   }
 
