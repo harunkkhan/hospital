@@ -1,0 +1,3139 @@
+{
+  "components": {
+    "schemas": {
+      "Activity": {
+        "description": "Unit of work \u2014 the service-time/forecast join key. Adding one is a contract change.",
+        "enum": [
+          "triage",
+          "provider_visit",
+          "nurse_visit",
+          "imaging",
+          "lab",
+          "documentation",
+          "discharge",
+          "cleaning",
+          "transport"
+        ],
+        "title": "Activity",
+        "type": "string"
+      },
+      "ArrivalMode": {
+        "description": "How a patient reached the ED.",
+        "enum": [
+          "walk_in",
+          "ambulance"
+        ],
+        "title": "ArrivalMode",
+        "type": "string"
+      },
+      "BayAssigned": {
+        "additionalProperties": false,
+        "properties": {
+          "bay": {
+            "$ref": "#/components/schemas/BayId"
+          },
+          "by": {
+            "enum": [
+              "solver",
+              "operator",
+              "baseline"
+            ],
+            "title": "By",
+            "type": "string"
+          },
+          "kind": {
+            "const": "bay_assigned",
+            "default": "bay_assigned",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "bay",
+          "by"
+        ],
+        "title": "BayAssigned",
+        "type": "object"
+      },
+      "BayCleaningCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "bay": {
+            "$ref": "#/components/schemas/BayId"
+          },
+          "kind": {
+            "const": "bay_cleaning_completed",
+            "default": "bay_cleaning_completed",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "bay",
+          "staff"
+        ],
+        "title": "BayCleaningCompleted",
+        "type": "object"
+      },
+      "BayCleaningStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "bay": {
+            "$ref": "#/components/schemas/BayId"
+          },
+          "kind": {
+            "const": "bay_cleaning_started",
+            "default": "bay_cleaning_started",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "bay",
+          "staff"
+        ],
+        "title": "BayCleaningStarted",
+        "type": "object"
+      },
+      "BayFrame": {
+        "additionalProperties": false,
+        "description": "Per-frame mutable bay state (the static ``Bay`` geometry is fetched once).",
+        "properties": {
+          "bay": {
+            "$ref": "#/components/schemas/BayId"
+          },
+          "cleaning_eta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimTime"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "occupant": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PatientId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "$ref": "#/components/schemas/BayStatus"
+          }
+        },
+        "required": [
+          "bay",
+          "status"
+        ],
+        "title": "BayFrame",
+        "type": "object"
+      },
+      "BayId": {
+        "description": "Identifies a bay.",
+        "title": "BayId",
+        "type": "string"
+      },
+      "BayRequested": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "bay_requested",
+            "default": "bay_requested",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient"
+        ],
+        "title": "BayRequested",
+        "type": "object"
+      },
+      "BayStatus": {
+        "description": "Dynamic bay status (lives in ``sim.physics.world``, never in ``core.Bay``).",
+        "enum": [
+          "free",
+          "occupied",
+          "cleaning",
+          "closed"
+        ],
+        "title": "BayStatus",
+        "type": "string"
+      },
+      "BlockEdgeAction": {
+        "additionalProperties": false,
+        "description": "Block a corridor edge \u2014 a routing-mask delta, not a plan item.",
+        "properties": {
+          "edge": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "title": "Edge",
+            "type": "array"
+          },
+          "kind": {
+            "const": "block_edge",
+            "default": "block_edge",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "edge"
+        ],
+        "title": "BlockEdgeAction",
+        "type": "object"
+      },
+      "BumpPriorityAction": {
+        "additionalProperties": false,
+        "description": "Move a waiting patient to the head of the bay queue -> ``sequence`` item.",
+        "properties": {
+          "kind": {
+            "const": "bump_priority",
+            "default": "bump_priority",
+            "title": "Kind",
+            "type": "string"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "patient"
+        ],
+        "title": "BumpPriorityAction",
+        "type": "object"
+      },
+      "CapacityRule": {
+        "additionalProperties": false,
+        "description": "A per-zone-type concurrent-occupancy cap.",
+        "properties": {
+          "kind": {
+            "const": "capacity",
+            "default": "capacity",
+            "title": "Kind",
+            "type": "string"
+          },
+          "max_occupancy": {
+            "title": "Max Occupancy",
+            "type": "integer"
+          },
+          "zone_type": {
+            "$ref": "#/components/schemas/ZoneType"
+          }
+        },
+        "required": [
+          "zone_type",
+          "max_occupancy"
+        ],
+        "title": "CapacityRule",
+        "type": "object"
+      },
+      "CloseBayAction": {
+        "additionalProperties": false,
+        "description": "Hold/close a bay \u2014 a ``ValidationContext`` delta, not a plan item.",
+        "properties": {
+          "bay": {
+            "$ref": "#/components/schemas/BayId"
+          },
+          "kind": {
+            "const": "close_bay",
+            "default": "close_bay",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bay"
+        ],
+        "title": "CloseBayAction",
+        "type": "object"
+      },
+      "CompareResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "baseline_run": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "contrasts": {
+            "items": {
+              "$ref": "#/components/schemas/KpiContrast"
+            },
+            "title": "Contrasts",
+            "type": "array"
+          },
+          "optimized_run": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "replications": {
+            "title": "Replications",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "baseline_run",
+          "optimized_run",
+          "replications",
+          "contrasts"
+        ],
+        "title": "CompareResponse",
+        "type": "object"
+      },
+      "CompatibilityRule": {
+        "additionalProperties": false,
+        "description": "The single acuity->zone_type / isolation / equipment mapping.",
+        "properties": {
+          "allowed_zone_types": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/components/schemas/EsiAcuity"
+                },
+                {
+                  "$ref": "#/components/schemas/ZoneType"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Allowed Zone Types",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "isolation_enforced": {
+            "default": true,
+            "title": "Isolation Enforced",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "compat",
+            "default": "compat",
+            "title": "Kind",
+            "type": "string"
+          },
+          "required_equipment": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/components/schemas/EsiAcuity"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Required Equipment",
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "title": "CompatibilityRule",
+        "type": "object"
+      },
+      "ControlCommand": {
+        "additionalProperties": false,
+        "description": "``POST /runs/{id}/control`` body (doc 07 \u00a73.3).",
+        "properties": {
+          "action": {
+            "enum": [
+              "play",
+              "pause",
+              "step",
+              "speed"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "count": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "granularity": {
+            "default": "decision",
+            "enum": [
+              "decision",
+              "event",
+              "tick"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplier"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "ControlCommand",
+        "type": "object"
+      },
+      "CostSpec": {
+        "additionalProperties": false,
+        "description": "DEFERRED \u2014 mirrors ``core.cost``. No dollar rates in M1.\n\nEmpty now, but ``extra=\"forbid\"`` (inherited from ``FrozenModel``) means a\nfuture stray cost key is validated the day it is added, not silently accepted.",
+        "properties": {},
+        "title": "CostSpec",
+        "type": "object"
+      },
+      "DeteriorationDetected": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "deterioration_detected",
+            "default": "deterioration_detected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "news2": {
+            "title": "News2",
+            "type": "integer"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "news2"
+        ],
+        "title": "DeteriorationDetected",
+        "type": "object"
+      },
+      "DischargeCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "discharge_completed",
+            "default": "discharge_completed",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient"
+        ],
+        "title": "DischargeCompleted",
+        "type": "object"
+      },
+      "DischargeStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "discharge_started",
+            "default": "discharge_started",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient"
+        ],
+        "title": "DischargeStarted",
+        "type": "object"
+      },
+      "DispositionDecided": {
+        "additionalProperties": false,
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/DispositionKind"
+          },
+          "kind": {
+            "const": "disposition_decided",
+            "default": "disposition_decided",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "disposition"
+        ],
+        "title": "DispositionDecided",
+        "type": "object"
+      },
+      "DispositionKind": {
+        "description": "Terminal disposition of a patient.",
+        "enum": [
+          "discharge",
+          "admit",
+          "transfer"
+        ],
+        "title": "DispositionKind",
+        "type": "string"
+      },
+      "DisruptionEvent": {
+        "additionalProperties": false,
+        "description": "A scheduled disruption. ``data`` owns the schedule; ``sim`` owns the mechanism.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "duration": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "kind": {
+            "enum": [
+              "surge",
+              "staff_absence",
+              "zone_closure",
+              "imaging_outage"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "magnitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Magnitude"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "kind",
+          "at",
+          "duration"
+        ],
+        "title": "DisruptionEvent",
+        "type": "object"
+      },
+      "DisruptionInjected": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "disruption": {
+            "title": "Disruption",
+            "type": "string"
+          },
+          "kind": {
+            "const": "disruption_injected",
+            "default": "disruption_injected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "disruption"
+        ],
+        "title": "DisruptionInjected",
+        "type": "object"
+      },
+      "DisruptionSpec": {
+        "additionalProperties": false,
+        "description": "The disruption schedule carried by a ``Scenario`` (empty by default).",
+        "properties": {
+          "events": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DisruptionEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "title": "DisruptionSpec",
+        "type": "object"
+      },
+      "DocumentationCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "documentation_completed",
+            "default": "documentation_completed",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "staff"
+        ],
+        "title": "DocumentationCompleted",
+        "type": "object"
+      },
+      "DocumentationStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "documentation_started",
+            "default": "documentation_started",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "staff"
+        ],
+        "title": "DocumentationStarted",
+        "type": "object"
+      },
+      "Duration": {
+        "description": "A signed span in microseconds (may be zero; a delta of two instants).",
+        "title": "Duration",
+        "type": "integer"
+      },
+      "EmergencyRaised": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "emergency_raised",
+            "default": "emergency_raised",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient"
+        ],
+        "title": "EmergencyRaised",
+        "type": "object"
+      },
+      "EsiAcuity": {
+        "description": "Emergency Severity Index. **1 = most critical**, 5 = least critical.",
+        "enum": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "title": "EsiAcuity",
+        "type": "integer"
+      },
+      "EventEnvelope": {
+        "additionalProperties": false,
+        "description": "An event plus its global sequence and optional causal parent sequence.",
+        "properties": {
+          "caused_by": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Caused By"
+          },
+          "event": {
+            "discriminator": {
+              "mapping": {
+                "bay_assigned": "#/components/schemas/BayAssigned",
+                "bay_cleaning_completed": "#/components/schemas/BayCleaningCompleted",
+                "bay_cleaning_started": "#/components/schemas/BayCleaningStarted",
+                "bay_requested": "#/components/schemas/BayRequested",
+                "deterioration_detected": "#/components/schemas/DeteriorationDetected",
+                "discharge_completed": "#/components/schemas/DischargeCompleted",
+                "discharge_started": "#/components/schemas/DischargeStarted",
+                "disposition_decided": "#/components/schemas/DispositionDecided",
+                "disruption_injected": "#/components/schemas/DisruptionInjected",
+                "documentation_completed": "#/components/schemas/DocumentationCompleted",
+                "documentation_started": "#/components/schemas/DocumentationStarted",
+                "emergency_raised": "#/components/schemas/EmergencyRaised",
+                "nurse_visit_completed": "#/components/schemas/NurseVisitCompleted",
+                "nurse_visit_started": "#/components/schemas/NurseVisitStarted",
+                "patient_arrived": "#/components/schemas/PatientArrived",
+                "patient_moved": "#/components/schemas/PatientMoved",
+                "provider_visit_completed": "#/components/schemas/ProviderVisitCompleted",
+                "provider_visit_started": "#/components/schemas/ProviderVisitStarted",
+                "staff_idle": "#/components/schemas/StaffIdle",
+                "staff_moved": "#/components/schemas/StaffMoved",
+                "test_ordered": "#/components/schemas/TestOrdered",
+                "test_resulted": "#/components/schemas/TestResulted",
+                "triage_completed": "#/components/schemas/TriageCompleted",
+                "triage_started": "#/components/schemas/TriageStarted",
+                "vitals_sampled": "#/components/schemas/VitalsSampled"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PatientArrived"
+              },
+              {
+                "$ref": "#/components/schemas/TriageStarted"
+              },
+              {
+                "$ref": "#/components/schemas/TriageCompleted"
+              },
+              {
+                "$ref": "#/components/schemas/BayRequested"
+              },
+              {
+                "$ref": "#/components/schemas/BayAssigned"
+              },
+              {
+                "$ref": "#/components/schemas/PatientMoved"
+              },
+              {
+                "$ref": "#/components/schemas/ProviderVisitStarted"
+              },
+              {
+                "$ref": "#/components/schemas/ProviderVisitCompleted"
+              },
+              {
+                "$ref": "#/components/schemas/NurseVisitStarted"
+              },
+              {
+                "$ref": "#/components/schemas/NurseVisitCompleted"
+              },
+              {
+                "$ref": "#/components/schemas/TestOrdered"
+              },
+              {
+                "$ref": "#/components/schemas/TestResulted"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentationStarted"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentationCompleted"
+              },
+              {
+                "$ref": "#/components/schemas/DispositionDecided"
+              },
+              {
+                "$ref": "#/components/schemas/DischargeStarted"
+              },
+              {
+                "$ref": "#/components/schemas/DischargeCompleted"
+              },
+              {
+                "$ref": "#/components/schemas/BayCleaningStarted"
+              },
+              {
+                "$ref": "#/components/schemas/BayCleaningCompleted"
+              },
+              {
+                "$ref": "#/components/schemas/StaffMoved"
+              },
+              {
+                "$ref": "#/components/schemas/StaffIdle"
+              },
+              {
+                "$ref": "#/components/schemas/DisruptionInjected"
+              },
+              {
+                "$ref": "#/components/schemas/VitalsSampled"
+              },
+              {
+                "$ref": "#/components/schemas/DeteriorationDetected"
+              },
+              {
+                "$ref": "#/components/schemas/EmergencyRaised"
+              }
+            ],
+            "title": "Event"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event",
+          "sequence"
+        ],
+        "title": "EventEnvelope",
+        "type": "object"
+      },
+      "ExpediteCleanAction": {
+        "additionalProperties": false,
+        "description": "Prioritize the pending cleaning task for a bay -> ``clean`` item.",
+        "properties": {
+          "bay": {
+            "$ref": "#/components/schemas/BayId"
+          },
+          "kind": {
+            "const": "expedite_clean",
+            "default": "expedite_clean",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bay"
+        ],
+        "title": "ExpediteCleanAction",
+        "type": "object"
+      },
+      "ExpediteDischargeAction": {
+        "additionalProperties": false,
+        "description": "Prioritize a patient's pending documentation -> ``discharge`` item.",
+        "properties": {
+          "kind": {
+            "const": "expedite_discharge",
+            "default": "expedite_discharge",
+            "title": "Kind",
+            "type": "string"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "patient"
+        ],
+        "title": "ExpediteDischargeAction",
+        "type": "object"
+      },
+      "FacilitySpec": {
+        "additionalProperties": false,
+        "description": "The ``scale`` argument to ``generate_floor`` \u2014 a pure geometry spec.",
+        "properties": {
+          "aspect_ratio": {
+            "default": 1.55,
+            "exclusiveMinimum": 0.0,
+            "title": "Aspect Ratio",
+            "type": "number"
+          },
+          "corridor_margin_cm": {
+            "default": 600,
+            "exclusiveMinimum": 0.0,
+            "title": "Corridor Margin Cm",
+            "type": "integer"
+          },
+          "imaging_suites": {
+            "default": 3,
+            "minimum": 0.0,
+            "title": "Imaging Suites",
+            "type": "integer"
+          },
+          "lab_stations": {
+            "default": 2,
+            "minimum": 0.0,
+            "title": "Lab Stations",
+            "type": "integer"
+          },
+          "room_depth_cm": {
+            "default": 420,
+            "exclusiveMinimum": 0.0,
+            "title": "Room Depth Cm",
+            "type": "integer"
+          },
+          "target_area_sqft": {
+            "default": 100000,
+            "exclusiveMinimum": 0.0,
+            "title": "Target Area Sqft",
+            "type": "integer"
+          },
+          "triage_rooms": {
+            "default": 6,
+            "minimum": 0.0,
+            "title": "Triage Rooms",
+            "type": "integer"
+          },
+          "walk_speed_cm_s": {
+            "default": 120,
+            "exclusiveMinimum": 0.0,
+            "title": "Walk Speed Cm S",
+            "type": "integer"
+          },
+          "zones": {
+            "items": {
+              "$ref": "#/components/schemas/ZoneQuota"
+            },
+            "title": "Zones",
+            "type": "array"
+          }
+        },
+        "title": "FacilitySpec",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "KpiContrast": {
+        "additionalProperties": false,
+        "description": "One key's baseline-vs-optimized contrast \u2014 a projection of\n``analysis.compare.Contrast`` (``significant`` is mirrored, never re-derived).",
+        "properties": {
+          "baseline": {
+            "title": "Baseline",
+            "type": "number"
+          },
+          "ci_hi": {
+            "title": "Ci Hi",
+            "type": "number"
+          },
+          "ci_lo": {
+            "title": "Ci Lo",
+            "type": "number"
+          },
+          "delta": {
+            "title": "Delta",
+            "type": "number"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "optimized": {
+            "title": "Optimized",
+            "type": "number"
+          },
+          "significant": {
+            "title": "Significant",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "baseline",
+          "optimized",
+          "delta",
+          "ci_lo",
+          "ci_hi",
+          "significant"
+        ],
+        "title": "KpiContrast",
+        "type": "object"
+      },
+      "KpiVector": {
+        "additionalProperties": false,
+        "description": "A complete KPI reading \u2014 keys are exactly ``KPI_KEYS`` (closed contract).",
+        "properties": {
+          "values": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "title": "KpiVector",
+        "type": "object"
+      },
+      "NodeId": {
+        "description": "Identifies a vertex in the ``RouteGraph``.",
+        "title": "NodeId",
+        "type": "string"
+      },
+      "NurseVisitCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "nurse_visit_completed",
+            "default": "nurse_visit_completed",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "staff"
+        ],
+        "title": "NurseVisitCompleted",
+        "type": "object"
+      },
+      "NurseVisitStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "nurse_visit_started",
+            "default": "nurse_visit_started",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "staff"
+        ],
+        "title": "NurseVisitStarted",
+        "type": "object"
+      },
+      "OperatingWeek": {
+        "additionalProperties": false,
+        "description": "The scoring week, ``[start, end)`` (half-open).\n\nThe half-open convention is the definition of WIP/LOS censoring: a patient\nwhose ``DischargeCompleted`` lands at *exactly* ``end`` is **still WIP**, not\na completion \u2014 applied identically across arms so they stay comparable.",
+        "properties": {
+          "end": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "start": {
+            "$ref": "#/components/schemas/SimTime"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "OperatingWeek",
+        "type": "object"
+      },
+      "OverrideAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "applied_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "status": {
+            "const": "applied",
+            "default": "applied",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan",
+          "applied_at"
+        ],
+        "title": "OverrideAccepted",
+        "type": "object"
+      },
+      "OverrideRejected": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "rejected",
+            "default": "rejected",
+            "title": "Status",
+            "type": "string"
+          },
+          "violations": {
+            "items": {
+              "$ref": "#/components/schemas/Violation"
+            },
+            "title": "Violations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "violations"
+        ],
+        "title": "OverrideRejected",
+        "type": "object"
+      },
+      "OverrideRequest": {
+        "additionalProperties": false,
+        "description": "``POST /runs/{id}/override`` body (doc 07 \u00a73.4).",
+        "properties": {
+          "action": {
+            "discriminator": {
+              "mapping": {
+                "block_edge": "#/components/schemas/BlockEdgeAction",
+                "bump_priority": "#/components/schemas/BumpPriorityAction",
+                "close_bay": "#/components/schemas/CloseBayAction",
+                "expedite_clean": "#/components/schemas/ExpediteCleanAction",
+                "expedite_discharge": "#/components/schemas/ExpediteDischargeAction",
+                "reassign": "#/components/schemas/ReassignAction",
+                "reroute": "#/components/schemas/RerouteAction"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReassignAction"
+              },
+              {
+                "$ref": "#/components/schemas/BumpPriorityAction"
+              },
+              {
+                "$ref": "#/components/schemas/RerouteAction"
+              },
+              {
+                "$ref": "#/components/schemas/ExpediteCleanAction"
+              },
+              {
+                "$ref": "#/components/schemas/ExpediteDischargeAction"
+              },
+              {
+                "$ref": "#/components/schemas/CloseBayAction"
+              },
+              {
+                "$ref": "#/components/schemas/BlockEdgeAction"
+              }
+            ],
+            "title": "Action"
+          },
+          "pin": {
+            "default": true,
+            "title": "Pin",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "OverrideRequest",
+        "type": "object"
+      },
+      "PatientArrived": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "patient_arrived",
+            "default": "patient_arrived",
+            "title": "Kind",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ArrivalMode"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "mode"
+        ],
+        "title": "PatientArrived",
+        "type": "object"
+      },
+      "PatientChip": {
+        "additionalProperties": false,
+        "description": "A patient marker: acuity color key, position, stage, and time waited.",
+        "properties": {
+          "at_node": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "esi": {
+            "$ref": "#/components/schemas/EsiAcuity"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "waited": {
+            "$ref": "#/components/schemas/Duration"
+          }
+        },
+        "required": [
+          "patient",
+          "esi",
+          "at_node",
+          "stage",
+          "waited"
+        ],
+        "title": "PatientChip",
+        "type": "object"
+      },
+      "PatientId": {
+        "description": "Identifies a patient.",
+        "title": "PatientId",
+        "type": "string"
+      },
+      "PatientMoved": {
+        "additionalProperties": false,
+        "properties": {
+          "edge": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "title": "Edge",
+            "type": "array"
+          },
+          "kind": {
+            "const": "patient_moved",
+            "default": "patient_moved",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "seconds": {
+            "$ref": "#/components/schemas/Duration"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "edge",
+          "seconds"
+        ],
+        "title": "PatientMoved",
+        "type": "object"
+      },
+      "Plan": {
+        "additionalProperties": false,
+        "description": "A complete, revisable set of decisions.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlanItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "Plan",
+        "type": "object"
+      },
+      "PlanItem": {
+        "additionalProperties": false,
+        "description": "One decision. ``stable_id`` lets plans diff cleanly across re-solves.\n\nPayload fields are per-kind and optional; a given ``kind`` populates the\nsubset it needs (e.g. ``assign_bay`` uses ``patient``+``bay``; ``dispatch``\nuses ``staff``+``task``; ``sequence`` uses ``patient``+``order``).",
+        "properties": {
+          "bay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BayId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "assign_bay",
+              "sequence",
+              "dispatch",
+              "clean",
+              "discharge",
+              "staffing"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "order": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order"
+          },
+          "patient": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PatientId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/NodeId"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "stable_id": {
+            "title": "Stable Id",
+            "type": "string"
+          },
+          "staff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaffId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "stable_id",
+          "kind"
+        ],
+        "title": "PlanItem",
+        "type": "object"
+      },
+      "PrecedenceRule": {
+        "additionalProperties": false,
+        "description": "Activity ``before`` must precede activity ``after`` in a patient's order.",
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/Activity"
+          },
+          "before": {
+            "$ref": "#/components/schemas/Activity"
+          },
+          "kind": {
+            "const": "precedence",
+            "default": "precedence",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "before",
+          "after"
+        ],
+        "title": "PrecedenceRule",
+        "type": "object"
+      },
+      "ProviderVisitCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "provider_visit_completed",
+            "default": "provider_visit_completed",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "staff"
+        ],
+        "title": "ProviderVisitCompleted",
+        "type": "object"
+      },
+      "ProviderVisitStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "provider_visit_started",
+            "default": "provider_visit_started",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "staff"
+        ],
+        "title": "ProviderVisitStarted",
+        "type": "object"
+      },
+      "QueueFrame": {
+        "additionalProperties": false,
+        "description": "One waiting stage: its depth and the first-N patients for chip rendering.",
+        "properties": {
+          "depth": {
+            "title": "Depth",
+            "type": "integer"
+          },
+          "head": {
+            "items": {
+              "$ref": "#/components/schemas/PatientId"
+            },
+            "title": "Head",
+            "type": "array"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "depth",
+          "head"
+        ],
+        "title": "QueueFrame",
+        "type": "object"
+      },
+      "ReassignAction": {
+        "additionalProperties": false,
+        "description": "Reassign a waiting patient to a bay -> ``PlanItem(kind=\"assign_bay\")``.",
+        "properties": {
+          "bay": {
+            "$ref": "#/components/schemas/BayId"
+          },
+          "kind": {
+            "const": "reassign",
+            "default": "reassign",
+            "title": "Kind",
+            "type": "string"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "patient",
+          "bay"
+        ],
+        "title": "ReassignAction",
+        "type": "object"
+      },
+      "RerouteAction": {
+        "additionalProperties": false,
+        "description": "Direct a specific staff member to a pending task -> ``dispatch`` item.",
+        "properties": {
+          "kind": {
+            "const": "reroute",
+            "default": "reroute",
+            "title": "Kind",
+            "type": "string"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          },
+          "task": {
+            "$ref": "#/components/schemas/TaskId"
+          }
+        },
+        "required": [
+          "staff",
+          "task"
+        ],
+        "title": "RerouteAction",
+        "type": "object"
+      },
+      "RunHandle": {
+        "additionalProperties": false,
+        "description": "The run resource representation.",
+        "properties": {
+          "arm": {
+            "enum": [
+              "baseline",
+              "optimized"
+            ],
+            "title": "Arm",
+            "type": "string"
+          },
+          "horizon": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "integer"
+          },
+          "shadow": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sim_time": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "state": {
+            "enum": [
+              "created",
+              "playing",
+              "paused",
+              "stepping",
+              "finished"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "stream_url": {
+            "title": "Stream Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "arm",
+          "seed",
+          "horizon",
+          "state",
+          "sim_time",
+          "stream_url"
+        ],
+        "title": "RunHandle",
+        "type": "object"
+      },
+      "RunId": {
+        "description": "Identifies a single simulation run/replication.",
+        "title": "RunId",
+        "type": "string"
+      },
+      "RunRequest": {
+        "additionalProperties": false,
+        "description": "``POST /runs`` body (doc 07 \u00a73.1).",
+        "properties": {
+          "arm": {
+            "enum": [
+              "baseline",
+              "optimized"
+            ],
+            "title": "Arm",
+            "type": "string"
+          },
+          "compare_to": {
+            "anyOf": [
+              {
+                "enum": [
+                  "baseline",
+                  "optimized"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compare To"
+          },
+          "scenario": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScenarioRef"
+              },
+              {
+                "$ref": "#/components/schemas/ScenarioInline"
+              }
+            ],
+            "title": "Scenario"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "integer"
+          },
+          "start": {
+            "default": "paused",
+            "enum": [
+              "paused",
+              "playing"
+            ],
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scenario",
+          "seed",
+          "arm"
+        ],
+        "title": "RunRequest",
+        "type": "object"
+      },
+      "Scenario": {
+        "additionalProperties": false,
+        "description": "The complete, versioned scenario: facility + workload + staffing + schedule.",
+        "properties": {
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disruptions": {
+            "$ref": "#/components/schemas/DisruptionSpec",
+            "default": {
+              "events": []
+            }
+          },
+          "facility": {
+            "$ref": "#/components/schemas/FacilitySpec"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rules": {
+            "default": [],
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "capacity": "#/components/schemas/CapacityRule",
+                  "compat": "#/components/schemas/CompatibilityRule",
+                  "precedence": "#/components/schemas/PrecedenceRule",
+                  "skill": "#/components/schemas/SkillRule"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/CompatibilityRule"
+                },
+                {
+                  "$ref": "#/components/schemas/CapacityRule"
+                },
+                {
+                  "$ref": "#/components/schemas/SkillRule"
+                },
+                {
+                  "$ref": "#/components/schemas/PrecedenceRule"
+                }
+              ]
+            },
+            "title": "Rules",
+            "type": "array"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "integer"
+          },
+          "staffing": {
+            "$ref": "#/components/schemas/StaffingSpec"
+          },
+          "workload": {
+            "$ref": "#/components/schemas/WorkloadSpec"
+          }
+        },
+        "required": [
+          "name",
+          "seed",
+          "facility",
+          "workload",
+          "staffing"
+        ],
+        "title": "Scenario",
+        "type": "object"
+      },
+      "ScenarioCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ScenarioCreated",
+        "type": "object"
+      },
+      "ScenarioInline": {
+        "additionalProperties": false,
+        "description": "A stored base scenario plus dotted-path slider overrides.\n\nKeys are dotted paths into the ``Scenario`` document (e.g.\n``\"workload.base_rate_per_hour\"``); values replace the addressed leaf. The\ncompiled overlay is validated by ``data.scenario.apply_overlay``.",
+        "properties": {
+          "base": {
+            "title": "Base",
+            "type": "string"
+          },
+          "overrides": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Overrides",
+            "type": "object"
+          }
+        },
+        "required": [
+          "base",
+          "overrides"
+        ],
+        "title": "ScenarioInline",
+        "type": "object"
+      },
+      "ScenarioRef": {
+        "additionalProperties": false,
+        "description": "A stored scenario, by id.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ScenarioRef",
+        "type": "object"
+      },
+      "ScenarioSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "horizon": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "horizon",
+          "note"
+        ],
+        "title": "ScenarioSummary",
+        "type": "object"
+      },
+      "SessionState": {
+        "additionalProperties": false,
+        "description": "The authoritative playback state returned by every control call.",
+        "properties": {
+          "horizon": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "sim_time": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "speed": {
+            "title": "Speed",
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "created",
+              "playing",
+              "paused",
+              "stepping",
+              "finished"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "state",
+          "sim_time",
+          "speed",
+          "horizon"
+        ],
+        "title": "SessionState",
+        "type": "object"
+      },
+      "ShiftBlock": {
+        "additionalProperties": false,
+        "description": "A staffing window with its role headcounts (M1: a static input, not solved).",
+        "properties": {
+          "role_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/StaffRole"
+            },
+            "title": "Role Counts",
+            "type": "object"
+          },
+          "window": {
+            "$ref": "#/components/schemas/TimeWindow"
+          }
+        },
+        "required": [
+          "window",
+          "role_counts"
+        ],
+        "title": "ShiftBlock",
+        "type": "object"
+      },
+      "SimTime": {
+        "description": "An absolute instant in microseconds since the scenario epoch (>= 0).",
+        "minimum": 0.0,
+        "title": "SimTime",
+        "type": "integer"
+      },
+      "SkillRule": {
+        "additionalProperties": false,
+        "description": "Skills a task-kind requires of the staff performing it.",
+        "properties": {
+          "kind": {
+            "const": "skill",
+            "default": "skill",
+            "title": "Kind",
+            "type": "string"
+          },
+          "required_skills": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Skills",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "task_kind": {
+            "title": "Task Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_kind"
+        ],
+        "title": "SkillRule",
+        "type": "object"
+      },
+      "StaffId": {
+        "description": "Identifies a staff member.",
+        "title": "StaffId",
+        "type": "string"
+      },
+      "StaffIdle": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "kind": {
+            "const": "staff_idle",
+            "default": "staff_idle",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "staff",
+          "at"
+        ],
+        "title": "StaffIdle",
+        "type": "object"
+      },
+      "StaffKinematic": {
+        "additionalProperties": false,
+        "description": "Rendering-shaped staff state \u2014 NOT a domain type (doc 07 \u00a77.2).",
+        "properties": {
+          "activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Activity"
+              },
+              {
+                "const": "idle",
+                "type": "string"
+              }
+            ],
+            "title": "Activity"
+          },
+          "at_node": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "edge": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/components/schemas/NodeId"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NodeId"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Edge"
+          },
+          "edge_progress": {
+            "default": 0.0,
+            "title": "Edge Progress",
+            "type": "number"
+          },
+          "role": {
+            "$ref": "#/components/schemas/StaffRole"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "staff",
+          "role",
+          "at_node",
+          "activity"
+        ],
+        "title": "StaffKinematic",
+        "type": "object"
+      },
+      "StaffMoved": {
+        "additionalProperties": false,
+        "properties": {
+          "edge": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "title": "Edge",
+            "type": "array"
+          },
+          "kind": {
+            "const": "staff_moved",
+            "default": "staff_moved",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "seconds": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "staff",
+          "edge",
+          "seconds"
+        ],
+        "title": "StaffMoved",
+        "type": "object"
+      },
+      "StaffRole": {
+        "description": "A staff member's role.",
+        "enum": [
+          "physician",
+          "nurse",
+          "tech",
+          "porter",
+          "housekeeping"
+        ],
+        "title": "StaffRole",
+        "type": "string"
+      },
+      "StaffingSpec": {
+        "additionalProperties": false,
+        "description": "Static staffing input: explicit shift blocks plus a default coverage level.",
+        "properties": {
+          "blocks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ShiftBlock"
+            },
+            "title": "Blocks",
+            "type": "array"
+          },
+          "default_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/StaffRole"
+            },
+            "title": "Default Counts",
+            "type": "object"
+          }
+        },
+        "title": "StaffingSpec",
+        "type": "object"
+      },
+      "StreamFrame": {
+        "additionalProperties": false,
+        "description": "One streamed projection of live world state (doc 07 \u00a77.2).",
+        "properties": {
+          "bays": {
+            "items": {
+              "$ref": "#/components/schemas/BayFrame"
+            },
+            "title": "Bays",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EventEnvelope"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "snapshot",
+              "delta"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "kpi_preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KpiVector"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "patients": {
+            "items": {
+              "$ref": "#/components/schemas/PatientChip"
+            },
+            "title": "Patients",
+            "type": "array"
+          },
+          "queues": {
+            "items": {
+              "$ref": "#/components/schemas/QueueFrame"
+            },
+            "title": "Queues",
+            "type": "array"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunId"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "sim_time": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "speed": {
+            "title": "Speed",
+            "type": "number"
+          },
+          "staff": {
+            "items": {
+              "$ref": "#/components/schemas/StaffKinematic"
+            },
+            "title": "Staff",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "playing",
+              "paused",
+              "stepping",
+              "finished"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "sim_time",
+          "seq",
+          "kind",
+          "state",
+          "speed",
+          "staff",
+          "bays",
+          "queues",
+          "patients",
+          "events"
+        ],
+        "title": "StreamFrame",
+        "type": "object"
+      },
+      "TaskId": {
+        "description": "Identifies a unit of pending work.",
+        "title": "TaskId",
+        "type": "string"
+      },
+      "TestOrdered": {
+        "additionalProperties": false,
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/Activity"
+          },
+          "kind": {
+            "const": "test_ordered",
+            "default": "test_ordered",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "activity"
+        ],
+        "title": "TestOrdered",
+        "type": "object"
+      },
+      "TestResulted": {
+        "additionalProperties": false,
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/Activity"
+          },
+          "kind": {
+            "const": "test_resulted",
+            "default": "test_resulted",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "activity"
+        ],
+        "title": "TestResulted",
+        "type": "object"
+      },
+      "TimeWindow": {
+        "additionalProperties": false,
+        "description": "A half-open interval ``[start, end)`` of the sim clock.",
+        "properties": {
+          "end": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "start": {
+            "$ref": "#/components/schemas/SimTime"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "TimeWindow",
+        "type": "object"
+      },
+      "TriageCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "esi": {
+            "$ref": "#/components/schemas/EsiAcuity"
+          },
+          "kind": {
+            "const": "triage_completed",
+            "default": "triage_completed",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "esi"
+        ],
+        "title": "TriageCompleted",
+        "type": "object"
+      },
+      "TriageStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "triage_started",
+            "default": "triage_started",
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          },
+          "staff": {
+            "$ref": "#/components/schemas/StaffId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "staff"
+        ],
+        "title": "TriageStarted",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "Violation": {
+        "additionalProperties": false,
+        "description": "A single rule breach. ``kind`` discriminates; ``entity`` names the culprit.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "entity": {
+            "title": "Entity",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "unknown_entity",
+              "bay_incompatible",
+              "capacity_exceeded",
+              "isolation_violated",
+              "staff_lacks_skill",
+              "double_booked",
+              "precedence_violated"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "detail",
+          "entity"
+        ],
+        "title": "Violation",
+        "type": "object"
+      },
+      "VitalsSampled": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "vitals_sampled",
+            "default": "vitals_sampled",
+            "title": "Kind",
+            "type": "string"
+          },
+          "news2": {
+            "title": "News2",
+            "type": "integer"
+          },
+          "occurred_at": {
+            "$ref": "#/components/schemas/SimTime"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/PatientId"
+          }
+        },
+        "required": [
+          "occurred_at",
+          "patient",
+          "news2"
+        ],
+        "title": "VitalsSampled",
+        "type": "object"
+      },
+      "WorkloadSpec": {
+        "additionalProperties": false,
+        "description": "The one-week arrival + attribute-mix spec consumed by ``generate_workload``.",
+        "properties": {
+          "ambulance_fraction": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Ambulance Fraction",
+            "type": "number"
+          },
+          "base_rate_per_hour": {
+            "minimum": 0.0,
+            "title": "Base Rate Per Hour",
+            "type": "number"
+          },
+          "complaint_mix": {
+            "additionalProperties": true,
+            "title": "Complaint Mix",
+            "type": "object"
+          },
+          "dow_profile": {
+            "items": {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "title": "Dow Profile",
+            "type": "array"
+          },
+          "esi_mix": {
+            "additionalProperties": true,
+            "title": "Esi Mix",
+            "type": "object"
+          },
+          "esi_workup_scale": {
+            "additionalProperties": true,
+            "title": "Esi Workup Scale",
+            "type": "object"
+          },
+          "horizon": {
+            "$ref": "#/components/schemas/OperatingWeek"
+          },
+          "hourly_profile": {
+            "items": {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "title": "Hourly Profile",
+            "type": "array"
+          },
+          "isolation_fraction": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Isolation Fraction",
+            "type": "number"
+          },
+          "workups": {
+            "additionalProperties": true,
+            "title": "Workups",
+            "type": "object"
+          }
+        },
+        "required": [
+          "base_rate_per_hour",
+          "hourly_profile",
+          "dow_profile",
+          "esi_mix",
+          "complaint_mix",
+          "ambulance_fraction",
+          "isolation_fraction",
+          "workups"
+        ],
+        "title": "WorkloadSpec",
+        "type": "object"
+      },
+      "WorkupProfile": {
+        "additionalProperties": false,
+        "description": "A complaint-keyed profile driving ``distributions.sample_workup``.",
+        "properties": {
+          "imaging_prob": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/ZoneType"
+            },
+            "title": "Imaging Prob",
+            "type": "object"
+          },
+          "labs_mean": {
+            "minimum": 0.0,
+            "title": "Labs Mean",
+            "type": "number"
+          },
+          "nurse_visits_mean": {
+            "minimum": 0.0,
+            "title": "Nurse Visits Mean",
+            "type": "number"
+          },
+          "procedure_prob": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Procedure Prob",
+            "type": "number"
+          },
+          "provider_visits_mean": {
+            "minimum": 1.0,
+            "title": "Provider Visits Mean",
+            "type": "number"
+          }
+        },
+        "required": [
+          "provider_visits_mean",
+          "nurse_visits_mean",
+          "labs_mean",
+          "procedure_prob"
+        ],
+        "title": "WorkupProfile",
+        "type": "object"
+      },
+      "ZoneQuota": {
+        "additionalProperties": false,
+        "description": "One acute-care zone's bay allocation (a ``facility.zones`` entry).",
+        "properties": {
+          "bays": {
+            "minimum": 0.0,
+            "title": "Bays",
+            "type": "integer"
+          },
+          "equipment": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Equipment",
+            "type": "array"
+          },
+          "isolation_bays": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Isolation Bays",
+            "type": "integer"
+          },
+          "max_bays_per_station": {
+            "default": 12,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Bays Per Station",
+            "type": "integer"
+          },
+          "zone_type": {
+            "$ref": "#/components/schemas/ZoneType"
+          }
+        },
+        "required": [
+          "zone_type",
+          "bays"
+        ],
+        "title": "ZoneQuota",
+        "type": "object"
+      },
+      "ZoneType": {
+        "description": "Functional type of a care zone.",
+        "enum": [
+          "triage",
+          "general",
+          "resus_trauma",
+          "fast_track",
+          "observation",
+          "imaging",
+          "lab"
+        ],
+        "title": "ZoneType",
+        "type": "string"
+      }
+    }
+  },
+  "info": {
+    "title": "hospital-api",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/runs": {
+      "post": {
+        "description": "Create a run session at ``t=0`` (paused unless ``start=\"playing\"``);\n``compare_to`` spins a same-seed shadow arm so CRN holds.",
+        "operationId": "create_run_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunHandle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Run"
+      }
+    },
+    "/runs/{run_id}": {
+      "delete": {
+        "operationId": "delete_run_runs__run_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Run"
+      },
+      "get": {
+        "operationId": "get_run_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunHandle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run"
+      }
+    },
+    "/runs/{run_id}/compare": {
+      "get": {
+        "description": "Baseline-vs-optimized deltas via the one ``analysis`` bootstrap.\n\nBoth paired logs are folded at the same cut (the lagging arm's ``sim_time``)\nso the contrast compares the same realized window under CRN.",
+        "operationId": "get_compare_runs__run_id__compare_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompareResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Compare"
+      }
+    },
+    "/runs/{run_id}/control": {
+      "post": {
+        "description": "Playback control. Commands mirror to the paired shadow arm so a live\ncomparison advances both arms under the same operator clock.",
+        "operationId": "post_control_runs__run_id__control_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ControlCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Control"
+      }
+    },
+    "/runs/{run_id}/metrics": {
+      "get": {
+        "description": "The live ``core.kpi.KpiVector``: the one fold over the log so far.",
+        "operationId": "get_metrics_runs__run_id__metrics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpiVector"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Metrics"
+      }
+    },
+    "/runs/{run_id}/override": {
+      "post": {
+        "description": "A validated operator action: applied atomically or rejected verbatim.",
+        "operationId": "post_override_runs__run_id__override_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideRejected"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Post Override"
+      }
+    },
+    "/runs/{run_id}/stream": {
+      "get": {
+        "description": "SSE fallback (read-only): the same frames as ``data:`` lines.",
+        "operationId": "stream_sse_runs__run_id__stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Sse"
+      }
+    },
+    "/scenarios": {
+      "get": {
+        "operationId": "list_scenarios_scenarios_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScenarioSummary"
+                  },
+                  "title": "Response List Scenarios Scenarios Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Scenarios"
+      },
+      "post": {
+        "description": "Validate slider overrides through ``data.scenario`` and store the result.",
+        "operationId": "create_scenario_scenarios_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScenarioInline"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScenarioCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Scenario"
+      }
+    },
+    "/scenarios/{scenario_id}": {
+      "get": {
+        "description": "The stored ``hospital.data.scenario.Scenario``, verbatim.",
+        "operationId": "get_scenario_scenarios__scenario_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Scenario"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scenario"
+      }
+    }
+  }
+}
