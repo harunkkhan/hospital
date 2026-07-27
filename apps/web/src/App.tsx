@@ -11,13 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { createHttpApi, type ConsoleApi } from "./api/client";
-import type {
-  FloorLayout,
-  OverrideOutcome,
-  OverrideRequest,
-  RunHandle,
-  RunRequest,
-} from "./api/types";
+import type { OverrideOutcome, OverrideRequest, RunRequest } from "./api/types";
 import { BottleneckPanel } from "./components/BottleneckPanel";
 import { CompareView } from "./components/CompareView";
 import { formatSimTime } from "./components/format";
@@ -27,6 +21,7 @@ import { OverridePanel } from "./components/OverridePanel";
 import { PlaybackControls } from "./components/PlaybackControls";
 import { ScenarioControls } from "./components/ScenarioControls";
 import { usePolled } from "./hooks/usePolled";
+import { useRunManager } from "./hooks/useRunManager";
 import { useStream } from "./hooks/useStream";
 import { createMockApi } from "./mock/mockApi";
 import { FloorMap2D } from "./render/FloorMap2D";
@@ -47,39 +42,18 @@ function makeApi(): ConsoleApi {
 
 export function App() {
   const api = useMemo(makeApi, []);
-  const [handle, setHandle] = useState<RunHandle | null>(null);
-  const [layout, setLayout] = useState<FloorLayout | null>(null);
-  const [bootError, setBootError] = useState<string | null>(null);
+  const { handle, layout, error: bootError, start } = useRunManager(api, DEFAULT_RUN);
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [scrubIndex, setScrubIndex] = useState<number | null>(null);
 
-  const launchRun = useCallback(
-    (req: RunRequest, previous: RunHandle | null): void => {
-      void (async () => {
-        try {
-          if (previous !== null) {
-            await api.deleteRun(previous.run).catch(() => undefined);
-          }
-          const nextHandle = await api.createRun(req);
-          const nextLayout = await api.getLayout(nextHandle.run);
-          setLayout(nextLayout);
-          setHandle(nextHandle);
-          setSelected(null);
-          setScrubIndex(null);
-          setBootError(null);
-        } catch (err) {
-          setBootError(err instanceof Error ? err.message : String(err));
-        }
-      })();
-    },
-    [api],
-  );
-
-  useEffect(() => {
-    launchRun(DEFAULT_RUN, null);
-  }, [launchRun]);
-
   const run = handle?.run ?? null;
+
+  // A run switch invalidates the map selection and the local scrub position.
+  useEffect(() => {
+    setSelected(null);
+    setScrubIndex(null);
+  }, [run]);
+
   const { world: liveWorld, status, buffer, resync } = useStream(api, run);
   const scrubbedWorld =
     scrubIndex !== null ? (buffer.at(scrubIndex)?.world ?? liveWorld) : liveWorld;
@@ -170,7 +144,7 @@ export function App() {
         <ScenarioControls
           scenarios={scenarios.data}
           currentSeed={handle?.seed ?? DEFAULT_RUN.seed}
-          onRerun={(req) => launchRun(req, handle)}
+          onRerun={start}
           onSaveScenario={(req) => api.createScenario(req)}
         />
       </aside>
