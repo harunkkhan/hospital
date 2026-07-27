@@ -4,6 +4,7 @@ import { MockEngine } from "../src/mock/engine";
 import { synthesizeCompare } from "../src/mock/mockApi";
 
 const HOUR_US = 3600 * 1_000_000;
+const S = 1_000_000;
 
 function occupiedBay(engine: MockEngine): { bay: string; occupant: string } | null {
   // advance until some bay is occupied (bounded)
@@ -52,6 +53,51 @@ describe("MockEngine determinism", () => {
     // and at least one non-significant contrast
     expect(one.contrasts.some((c) => c.delta < 0)).toBe(true);
     expect(one.contrasts.some((c) => !c.significant)).toBe(true);
+  });
+});
+
+describe("MockEngine bump_priority (finding #7: ordering vs timestamps)", () => {
+  test("reorders the queue without inflating the displayed wait", () => {
+    const engine = new MockEngine("run-x", 7, "optimized");
+    let target: { patient: string; stage: string } | null = null;
+    let beforeWaited = -1;
+    // advance until some queue holds at least two patients (bounded)
+    for (let i = 0; i < 400 && target === null; i += 1) {
+      engine.advance(3 * 60 * S);
+      const frame = engine.buildFrame("delta");
+      const queue = frame.queues.find((q) => q.depth >= 2);
+      if (queue === undefined) {
+        continue;
+      }
+      const second = queue.head[1];
+      const chip = frame.patients.find((p) => p.patient === second);
+      if (second === undefined || chip === undefined) {
+        continue;
+      }
+      target = { patient: second, stage: queue.stage };
+      beforeWaited = chip.waited;
+    }
+    expect(target).not.toBeNull();
+    if (target === null) {
+      return;
+    }
+    expect(beforeWaited).toBeGreaterThanOrEqual(0);
+
+    const outcome = engine.applyOverride(
+      { kind: "bump_priority", patient: target.patient, priority: 9 },
+      false,
+    );
+    expect(outcome.status).toBe("applied");
+
+    // No sim time has advanced, so the displayed wait MUST be identical — the
+    // old bug zeroed stageSinceUs and ballooned it to the full sim clock.
+    const after = engine.buildFrame("delta");
+    const afterChip = after.patients.find((p) => p.patient === target!.patient);
+    expect(afterChip?.waited).toBe(beforeWaited);
+
+    // ...and the bump still did its job: the patient now leads its queue.
+    const afterQueue = after.queues.find((q) => q.stage === target!.stage);
+    expect(afterQueue?.head[0]).toBe(target.patient);
   });
 });
 

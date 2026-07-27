@@ -66,6 +66,12 @@ interface MockPatient {
   bay: BayId | null;
   remainingUs: number;
   pinned: boolean;
+  /**
+   * Queue-ordering priority ONLY — higher jumps the FIFO. Kept distinct from
+   * stageSinceUs (stage-entry time) so a bump reorders the queue WITHOUT
+   * rewriting the timestamps that drive displayed wait and boarding metrics.
+   */
+  priority: number;
 }
 
 interface MockBay {
@@ -339,6 +345,7 @@ export class MockEngine {
         bay: null,
         remainingUs: 0,
         pinned: false,
+        priority: 0,
       });
       this.emit({ kind: "patient_arrived", occurred_at: this.simTimeUs, patient: id, mode });
       // exponential-ish interarrival, mean ~10 min
@@ -349,7 +356,12 @@ export class MockEngine {
   private waitingByStage(stage: "waiting_triage" | "waiting_bay"): MockPatient[] {
     return [...this.patients.values()]
       .filter((p) => p.stage === stage)
-      .sort((a, b) => a.stageSinceUs - b.stageSinceUs || a.id.localeCompare(b.id));
+      .sort(
+        (a, b) =>
+          b.priority - a.priority ||
+          a.stageSinceUs - b.stageSinceUs ||
+          a.id.localeCompare(b.id),
+      );
   }
 
   private bayFixture(id: BayId) {
@@ -948,7 +960,9 @@ export class MockEngine {
           patient.remainingUs = Math.min(patient.remainingUs, 120 * S);
         }
         if (action.kind === "bump_priority") {
-          patient.stageSinceUs = 0; // jumps the FIFO in the mock's queues
+          // Reorder only — never touch stageSinceUs, or the chip's displayed
+          // wait and the boarding metric would both balloon (finding #7).
+          patient.priority = action.priority;
         }
         break;
       }
