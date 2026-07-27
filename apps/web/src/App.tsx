@@ -141,6 +141,7 @@ export function App() {
             world={scrubbedWorld}
             selected={selected}
             onSelect={setSelected}
+            live={scrubIndex === null}
           />
         ) : (
           <div style={{ padding: 20 }} className="muted">

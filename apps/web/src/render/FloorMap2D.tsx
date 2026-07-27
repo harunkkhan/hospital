@@ -26,7 +26,7 @@ import {
   STAFF_DOT_COLOR,
   STAFF_DOT_RING,
 } from "./colors";
-import { indexNodes, kinematicPosition } from "./interpolate";
+import { deadReckonSimUs, indexNodes, kinematicPosition } from "./interpolate";
 import { makeProjection } from "./projection";
 
 const BAY_W_CM = 260;
@@ -37,6 +37,8 @@ interface FloorMapProps {
   world: WorldView;
   selected: SelectedEntity | null;
   onSelect: (selected: SelectedEntity | null) => void;
+  /** True only for the live head; a scrubbed buffered view must not extrapolate. */
+  live: boolean;
 }
 
 interface Size {
@@ -44,7 +46,7 @@ interface Size {
   height: number;
 }
 
-export function FloorMap2D({ layout, world, selected, onSelect }: FloorMapProps) {
+export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState<Size>({ width: 800, height: 520 });
@@ -78,15 +80,16 @@ export function FloorMap2D({ layout, world, selected, onSelect }: FloorMapProps)
     return map;
   }, [layout]);
 
-  // Latest world + its wall arrival time, readable from the rAF loop without
-  // retriggering React renders.
-  const frameRef = useRef<{ world: WorldView; wallMs: number }>({
+  // Latest world + its wall arrival time + whether it is the live head,
+  // readable from the rAF loop without retriggering React renders.
+  const frameRef = useRef<{ world: WorldView; wallMs: number; live: boolean }>({
     world,
     wallMs: performance.now(),
+    live,
   });
   useEffect(() => {
-    frameRef.current = { world, wallMs: performance.now() };
-  }, [world]);
+    frameRef.current = { world, wallMs: performance.now(), live };
+  }, [world, live]);
 
   // The dynamic layer: patients + staff at display rate.
   useEffect(() => {
@@ -101,13 +104,18 @@ export function FloorMap2D({ layout, world, selected, onSelect }: FloorMapProps)
 
     let raf = 0;
     const draw = (): void => {
-      const { world: w, wallMs } = frameRef.current;
+      const { world: w, wallMs, live: isLive } = frameRef.current;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, size.width, size.height);
 
-      // Dead-reckon only while playing; a paused world holds still.
-      const extraSimUs =
-        w.state === "playing" ? (performance.now() - wallMs) * w.speed * 1000 : 0;
+      // Dead-reckon only on the live, playing head — a scrubbed or paused view
+      // is a frozen instant (finding #8).
+      const extraSimUs = deadReckonSimUs({
+        live: isLive,
+        state: w.state,
+        speed: w.speed,
+        wallElapsedMs: performance.now() - wallMs,
+      });
 
       // patient chips, fanned out when several share a node
       const perNode = new Map<NodeId, number>();

@@ -8,11 +8,29 @@
  * Progress is clamped to [0, 1] — dead-reckoning never overshoots the node.
  */
 
-import type { NodeId, RouteNode, StaffKinematic } from "../api/types";
+import type { NodeId, RouteNode, RunState, StaffKinematic } from "../api/types";
 
 export interface CmPoint {
   x_cm: number;
   y_cm: number;
+}
+
+/**
+ * Sim-µs to dead-reckon past the last applied frame. ONLY a LIVE, playing
+ * world extrapolates. A scrubbed view addresses a buffered historical frame —
+ * that instant is fixed; advancing it by current wall-time would invent motion
+ * that never happened (finding #8). A paused world holds still too.
+ */
+export function deadReckonSimUs(opts: {
+  live: boolean;
+  state: RunState | null;
+  speed: number;
+  wallElapsedMs: number;
+}): number {
+  if (!opts.live || opts.state !== "playing") {
+    return 0;
+  }
+  return Math.max(0, opts.wallElapsedMs) * opts.speed * 1000;
 }
 
 export type NodeIndex = ReadonlyMap<NodeId, RouteNode>;

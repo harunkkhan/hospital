@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import type { StaffKinematic } from "../src/api/types";
-import { extrapolateProgress, indexNodes, kinematicPosition } from "../src/render/interpolate";
+import {
+  deadReckonSimUs,
+  extrapolateProgress,
+  indexNodes,
+  kinematicPosition,
+} from "../src/render/interpolate";
 
 const NODES = indexNodes([
   { id: "a", label: "A", x_cm: 0, y_cm: 0 },
@@ -35,6 +40,24 @@ describe("extrapolateProgress", () => {
 
   test("zero elapsed lands exactly on the server position (snap on frame)", () => {
     expect(extrapolateProgress(0.37, 10_000_000, 0)).toBe(0.37);
+  });
+});
+
+describe("deadReckonSimUs (finding #8: no extrapolation on buffered views)", () => {
+  test("the live playing head dead-reckons by wall-time × speed", () => {
+    expect(deadReckonSimUs({ live: true, state: "playing", speed: 60, wallElapsedMs: 250 })).toBe(
+      250 * 60 * 1000,
+    );
+  });
+
+  test("a scrubbed (non-live) view never extrapolates, even if it was playing", () => {
+    expect(deadReckonSimUs({ live: false, state: "playing", speed: 60, wallElapsedMs: 5000 })).toBe(
+      0,
+    );
+  });
+
+  test("a paused live view holds still", () => {
+    expect(deadReckonSimUs({ live: true, state: "paused", speed: 60, wallElapsedMs: 5000 })).toBe(0);
   });
 });
 
