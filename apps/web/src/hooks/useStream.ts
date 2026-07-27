@@ -4,7 +4,7 @@
  * yields a fresh snapshot) whenever a seq gap desyncs the view.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ConsoleApi, StreamStatus } from "../api/client";
 import type { RunId, StreamFrame } from "../api/types";
@@ -15,6 +15,8 @@ export interface StreamView {
   world: WorldView;
   status: StreamStatus;
   buffer: FrameBuffer;
+  /** Force a reconnect, which yields a fresh authoritative snapshot. */
+  resync: () => void;
 }
 
 export function useStream(api: ConsoleApi, run: RunId | null): StreamView {
@@ -24,6 +26,10 @@ export function useStream(api: ConsoleApi, run: RunId | null): StreamView {
   const worldRef = useRef(world);
   const bufferRef = useRef<FrameBuffer | null>(null);
   bufferRef.current ??= new FrameBuffer();
+
+  // Re-subscribing (bumping epoch) reruns the effect below, which closes and
+  // reopens the stream — the reconnect protocol re-snapshots from scratch.
+  const resync = useCallback(() => setEpoch((e) => e + 1), []);
 
   useEffect(() => {
     if (run === null) {
@@ -66,5 +72,5 @@ export function useStream(api: ConsoleApi, run: RunId | null): StreamView {
     };
   }, [api, run, epoch]);
 
-  return { world, status, buffer: bufferRef.current };
+  return { world, status, buffer: bufferRef.current, resync };
 }

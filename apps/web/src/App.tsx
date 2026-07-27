@@ -80,7 +80,7 @@ export function App() {
   }, [launchRun]);
 
   const run = handle?.run ?? null;
-  const { world: liveWorld, status, buffer } = useStream(api, run);
+  const { world: liveWorld, status, buffer, resync } = useStream(api, run);
   const scrubbedWorld =
     scrubIndex !== null ? (buffer.at(scrubIndex)?.world ?? liveWorld) : liveWorld;
 
@@ -156,6 +156,8 @@ export function App() {
           world={liveWorld}
           selected={selected}
           onSubmit={submitOverride}
+          runId={run}
+          onResync={resync}
         />
         <KPIPanel metrics={liveWorld.kpiPreview ?? metrics.data} />
         <BottleneckPanel report={bottleneck.data} />

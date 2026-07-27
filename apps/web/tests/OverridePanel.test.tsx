@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { OverrideOutcome, OverrideRequest } from "../src/api/types";
 import { OverridePanel } from "../src/components/OverridePanel";
@@ -159,5 +159,97 @@ describe("OverridePanel map selection", () => {
       />,
     );
     expect((screen.getByLabelText("bay") as HTMLSelectElement).value).toBe("bay-g1");
+  });
+});
+
+const APPLIED: OverrideOutcome = { status: "applied", plan: { items: [] }, applied_at: 0 };
+
+function fillReassign(): void {
+  fireEvent.change(screen.getByLabelText("patient"), { target: { value: "p-0001" } });
+  fireEvent.change(screen.getByLabelText("bay"), { target: { value: "bay-g1" } });
+}
+
+describe("OverridePanel transport failure (finding #3)", () => {
+  test("a thrown submit yields an 'unknown' verdict + resync, never a rejection", async () => {
+    let resynced = 0;
+    render(
+      <OverridePanel
+        layout={LAYOUT}
+        world={world()}
+        selected={null}
+        onSubmit={() => Promise.reject(new Error("network down"))}
+        onResync={() => {
+          resynced += 1;
+        }}
+      />,
+    );
+    fillReassign();
+    fireEvent.click(screen.getByRole("button", { name: /submit override/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("outcome unknown");
+    expect(alert.textContent).toContain("network down");
+    // The load-bearing claim: a network error must NOT be reported as a rejection.
+    expect(alert.textContent).not.toContain("Nothing was applied");
+    await waitFor(() => expect(resynced).toBe(1));
+  });
+});
+
+describe("OverridePanel pin capture (finding #11)", () => {
+  test("the applied note reflects the pin AS SUBMITTED, not a later toggle", async () => {
+    let resolve!: (o: OverrideOutcome) => void;
+    const inflight = new Promise<OverrideOutcome>((r) => {
+      resolve = r;
+    });
+    render(
+      <OverridePanel layout={LAYOUT} world={world()} selected={null} onSubmit={() => inflight} />,
+    );
+    fillReassign();
+    // pin defaults checked → submit with pin=true, then uncheck mid-flight.
+    fireEvent.click(screen.getByRole("button", { name: /submit override/i }));
+    const pinBox = screen.getByRole("checkbox") as HTMLInputElement;
+    fireEvent.click(pinBox);
+    expect(pinBox.checked).toBe(false);
+
+    await act(async () => {
+      resolve(APPLIED);
+      await inflight;
+    });
+
+    const note = await screen.findByRole("status");
+    expect(note.textContent).toContain("pinned"); // captured true, not the live false
+  });
+});
+
+describe("OverridePanel run switch (finding #5)", () => {
+  test("changing runId resets the form and clears the verdict", async () => {
+    const { rerender } = render(
+      <OverridePanel
+        layout={LAYOUT}
+        world={world()}
+        runId="run-A"
+        selected={null}
+        onSubmit={() => Promise.resolve(APPLIED)}
+      />,
+    );
+    fillReassign();
+    fireEvent.click(screen.getByRole("button", { name: /submit override/i }));
+    await screen.findByRole("status");
+    expect((screen.getByLabelText("patient") as HTMLSelectElement).value).toBe("p-0001");
+
+    await act(async () => {
+      rerender(
+        <OverridePanel
+          layout={LAYOUT}
+          world={world()}
+          runId="run-B"
+          selected={null}
+          onSubmit={() => Promise.resolve(APPLIED)}
+        />,
+      );
+    });
+
+    expect(screen.queryByRole("status")).toBeNull(); // stale verdict gone
+    expect((screen.getByLabelText("patient") as HTMLSelectElement).value).toBe(""); // form reset
   });
 });

@@ -14,12 +14,26 @@ import type {
   FloorLayout,
   OperatorAction,
   OperatorActionKind,
-  OverrideOutcome,
+  OverrideAccepted,
+  OverrideRejected,
   OverrideRequest,
+  RunId,
 } from "../api/types";
 import type { SelectedEntity } from "../state/runStore";
 import type { WorldView } from "../state/streamReducer";
 import { formatSimTime } from "./format";
+
+/**
+ * The panel's post-submit state. `unknown` is the transport-failure verdict:
+ * the request never got an authoritative answer, so we must NOT claim a
+ * rejection — the backend may well have applied it. `applied` carries the pin
+ * value AS SUBMITTED, not the live checkbox, so toggling the box afterwards
+ * can't relabel a verdict.
+ */
+type SubmitResult =
+  | { status: "applied"; outcome: OverrideAccepted; pinned: boolean }
+  | { status: "rejected"; outcome: OverrideRejected }
+  | { status: "unknown"; message: string };
 
 const ACTION_LABELS: Readonly<Record<OperatorActionKind, string>> = {
   reassign: "Reassign patient → bay",
@@ -35,10 +49,21 @@ export interface OverridePanelProps {
   layout: FloorLayout | null;
   world: WorldView;
   selected: SelectedEntity | null;
-  onSubmit: (req: OverrideRequest) => Promise<OverrideOutcome>;
+  onSubmit: (req: OverrideRequest) => Promise<OverrideAccepted | OverrideRejected>;
+  /** Identifies the active run; a change resets the form + verdict (finding #5). */
+  runId?: RunId | null;
+  /** Force a fresh snapshot after a transport-failure verdict (finding #3). */
+  onResync?: () => void;
 }
 
-export function OverridePanel({ layout, world, selected, onSubmit }: OverridePanelProps) {
+export function OverridePanel({
+  layout,
+  world,
+  selected,
+  onSubmit,
+  runId = null,
+  onResync,
+}: OverridePanelProps) {
   const [kind, setKind] = useState<OperatorActionKind>("reassign");
   const [patient, setPatient] = useState("");
   const [bay, setBay] = useState("");
@@ -48,7 +73,22 @@ export function OverridePanel({ layout, world, selected, onSubmit }: OverridePan
   const [priority, setPriority] = useState(1);
   const [pin, setPin] = useState(true);
   const [pending, setPending] = useState(false);
-  const [outcome, setOutcome] = useState<OverrideOutcome | null>(null);
+  const [result, setResult] = useState<SubmitResult | null>(null);
+
+  // Switching runs must not leave a stale action Submit-enabled or an old
+  // verdict on screen for a different run's world (finding #5).
+  useEffect(() => {
+    setKind("reassign");
+    setPatient("");
+    setBay("");
+    setStaff("");
+    setTask("");
+    setEdge("");
+    setPriority(1);
+    setPin(true);
+    setPending(false);
+    setResult(null);
+  }, [runId]);
 
   // A map selection prefills the matching field.
   useEffect(() => {
@@ -114,21 +154,27 @@ export function OverridePanel({ layout, world, selected, onSubmit }: OverridePan
     if (action === null || pending) {
       return;
     }
+    // Capture pin AS SUBMITTED so a later checkbox toggle can't relabel the
+    // verdict (finding #11).
+    const submittedPin = pin;
     setPending(true);
-    setOutcome(null);
+    setResult(null);
     try {
-      setOutcome(await onSubmit({ action, pin }));
+      const outcome = await onSubmit({ action, pin: submittedPin });
+      setResult(
+        outcome.status === "applied"
+          ? { status: "applied", outcome, pinned: submittedPin }
+          : { status: "rejected", outcome },
+      );
     } catch (err) {
-      setOutcome({
-        status: "rejected",
-        violations: [
-          {
-            kind: "unknown_entity",
-            detail: err instanceof Error ? err.message : String(err),
-            entity: "request",
-          },
-        ],
+      // Transport failure — NOT an authoritative rejection. The backend may
+      // have applied the override; the only honest thing is "unknown", then a
+      // forced re-snapshot to resync the truth (finding #3).
+      setResult({
+        status: "unknown",
+        message: err instanceof Error ? err.message : String(err),
       });
+      onResync?.();
     } finally {
       setPending(false);
     }
@@ -148,7 +194,7 @@ export function OverridePanel({ layout, world, selected, onSubmit }: OverridePan
             value={kind}
             onChange={(e) => {
               setKind(e.target.value as OperatorActionKind);
-              setOutcome(null);
+              setResult(null);
             }}
           >
             {Object.entries(ACTION_LABELS).map(([value, label]) => (
@@ -273,16 +319,17 @@ export function OverridePanel({ layout, world, selected, onSubmit }: OverridePan
         </div>
       </div>
 
-      {outcome?.status === "applied" && (
+      {result?.status === "applied" && (
         <div className="applied-note" role="status">
-          <span className="status">applied</span> at {formatSimTime(outcome.applied_at)} · plan
-          now carries {outcome.plan.items.length} item{outcome.plan.items.length === 1 ? "" : "s"}
-          {pin && " · pinned"}
+          <span className="status">applied</span> at {formatSimTime(result.outcome.applied_at)} ·
+          plan now carries {result.outcome.plan.items.length} item
+          {result.outcome.plan.items.length === 1 ? "" : "s"}
+          {result.pinned && " · pinned"}
         </div>
       )}
-      {outcome?.status === "rejected" && (
+      {result?.status === "rejected" && (
         <div role="alert">
-          {outcome.violations.map((v, i) => (
+          {result.outcome.violations.map((v, i) => (
             <div key={i} className="violation">
               <span className="kind">{v.kind}</span> — {v.detail}{" "}
               <span className="entity">({v.entity})</span>
@@ -291,6 +338,12 @@ export function OverridePanel({ layout, world, selected, onSubmit }: OverridePan
           <div className="small muted" style={{ marginTop: 4 }}>
             Nothing was applied — the world is unchanged.
           </div>
+        </div>
+      )}
+      {result?.status === "unknown" && (
+        <div role="alert" className="unknown-note">
+          <span className="kind">outcome unknown</span> — {result.message}. The override may or
+          may not have been applied; re-syncing from a fresh snapshot to recover the true state.
         </div>
       )}
     </div>
