@@ -10,9 +10,9 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Any
 
+from _api_fixtures import create_run, make_app, run_to_finish, session_of, step
 from fastapi.testclient import TestClient
 
-from _api_fixtures import create_run, make_app, run_to_finish, session_of, step
 from hospital.analysis import compute_kpis
 from hospital.core import KPI_KEYS, Duration, hours
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,7 +30,7 @@ from hospital.api.sessions import SessionRegistry
 from hospital.api.wire import merge_wire_schemas
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
 API_TITLE = "hospital-api"
 API_VERSION = "0.1.0"
@@ -63,7 +63,7 @@ def create_app(*, scenario_dir: str | Path | None = "scenarios") -> FastAPI:
     """
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.registry = SessionRegistry()
         app.state.scenarios = (
             ScenarioStore.from_dir(Path(scenario_dir))
@@ -73,7 +73,7 @@ def create_app(*, scenario_dir: str | Path | None = "scenarios") -> FastAPI:
         try:
             yield
         finally:
-            await cast("SessionRegistry", app.state.registry).shutdown()
+            await app.state.registry.shutdown()
 
     app = HospitalAPI(title=API_TITLE, version=API_VERSION, lifespan=lifespan)
     app.add_middleware(

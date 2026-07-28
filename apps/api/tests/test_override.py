@@ -11,10 +11,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from fastapi.testclient import TestClient
-from hypothesis import given, settings
-from hypothesis import strategies as st
-
 from _api_fixtures import (
     create_run,
     make_app,
@@ -24,6 +20,10 @@ from _api_fixtures import (
     step,
     world_fingerprint,
 )
+from fastapi.testclient import TestClient
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from hospital.api.overrides import (
     BlockEdgeAction,
     BumpPriorityAction,
@@ -135,13 +135,13 @@ def test_bump_priority_reorders_the_queue(tmp_path: Path) -> None:
         session = session_of(app, handle["run"])
         _enqueue(session, "first", EsiAcuity.ESI2)
         _enqueue(session, "second", EsiAcuity.ESI4)
-        assert [w.patient.id.root for w in session.world.waiting_for_bay()][0] == "first"
+        assert next(w.patient.id.root for w in session.world.waiting_for_bay()) == "first"
 
         response = _post_override(
             client, handle["run"], {"kind": "bump_priority", "patient": "second"}
         )
         assert response.status_code == 200, response.text
-        assert [w.patient.id.root for w in session.world.waiting_for_bay()][0] == "second"
+        assert next(w.patient.id.root for w in session.world.waiting_for_bay()) == "second"
 
 
 def test_valid_reroute_dispatches_the_named_staff(tmp_path: Path) -> None:
@@ -179,17 +179,31 @@ def test_expedite_clean_and_discharge_boost_their_tasks(tmp_path: Path) -> None:
         bay_a = _bay_of(session, ZoneType.GENERAL, 0)
         bay_b = _bay_of(session, ZoneType.GENERAL, 1)
         world.add_task(
-            kind="cleaning", patient=None, at=node, required_role=StaffRole.HOUSEKEEPING,
-            activity=Activity.CLEANING, duration=seconds(60), bay=bay_a,
+            kind="cleaning",
+            patient=None,
+            at=node,
+            required_role=StaffRole.HOUSEKEEPING,
+            activity=Activity.CLEANING,
+            duration=seconds(60),
+            bay=bay_a,
         )
         clean_b = world.add_task(
-            kind="cleaning", patient=None, at=node, required_role=StaffRole.HOUSEKEEPING,
-            activity=Activity.CLEANING, duration=seconds(60), bay=bay_b,
+            kind="cleaning",
+            patient=None,
+            at=node,
+            required_role=StaffRole.HOUSEKEEPING,
+            activity=Activity.CLEANING,
+            duration=seconds(60),
+            bay=bay_b,
         )
         patient = _enqueue(session, "doc_p", EsiAcuity.ESI3)
         doc = world.add_task(
-            kind="documentation", patient=patient.id, at=node, required_role=StaffRole.NURSE,
-            activity=Activity.DOCUMENTATION, duration=seconds(60),
+            kind="documentation",
+            patient=patient.id,
+            at=node,
+            required_role=StaffRole.NURSE,
+            activity=Activity.DOCUMENTATION,
+            duration=seconds(60),
         )
 
         response = _post_override(
@@ -309,9 +323,7 @@ def test_unknown_entities_are_rejected(tmp_path: Path) -> None:
         ):
             response = _post_override(client, handle["run"], action)
             assert response.status_code == 422, action
-            assert any(
-                v["kind"] == "unknown_entity" for v in response.json()["violations"]
-            ), action
+            assert any(v["kind"] == "unknown_entity" for v in response.json()["violations"]), action
 
 
 def test_close_bay_with_occupant_does_not_evict(tmp_path: Path) -> None:
@@ -329,9 +341,7 @@ def test_close_bay_with_occupant_does_not_evict(tmp_path: Path) -> None:
         assert response.status_code == 422
         violations = response.json()["violations"]
         # The standing assign_bay item is stranded by the context delta.
-        assert any(
-            v["kind"] == "bay_incompatible" and v["entity"] == bay.root for v in violations
-        )
+        assert any(v["kind"] == "bay_incompatible" and v["entity"] == bay.root for v in violations)
         assert session.world.bay_status(bay) is BayStatus.OCCUPIED
         assert world_fingerprint(session) == before
 
@@ -354,9 +364,7 @@ def test_api_verdict_equals_seam_adapter_verdict(tmp_path: Path) -> None:
 
         # The same function, called by the adapter, produces the same verdict...
         with pytest.raises(InfeasiblePlan) as excinfo:
-            apply_plan(
-                session.world, plan, ctx, session.executor, session.log, origin="operator"
-            )
+            apply_plan(session.world, plan, ctx, session.executor, session.log, origin="operator")
         assert excinfo.value.violations == direct
 
         # ... and the HTTP surface returns it verbatim.
@@ -409,9 +417,7 @@ def test_pin_registry_merge_holds_decisions_against_a_resolve() -> None:
             PlanItem(
                 stable_id="assign:other", kind="assign_bay", patient=PatientId("other"), bay=bay
             ),
-            PlanItem(
-                stable_id="seq:waiting", kind="sequence", order=("other", "keep_me")
-            ),
+            PlanItem(stable_id="seq:waiting", kind="sequence", order=("other", "keep_me")),
         )
     )
     merged = pins.merge(solver_plan, world)

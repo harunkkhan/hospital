@@ -195,7 +195,9 @@ class RunSession:
             arm, oracle=self.oracle, rules=self.rules, roster=self.roster, objective=objective
         )
         self.world.set_decision_hook(self._tick)
-        arrivals = generate_workload(scenario.workload, self.streams, disruptions=scenario.disruptions)
+        arrivals = generate_workload(
+            scenario.workload, self.streams, disruptions=scenario.disruptions
+        )
         self.env.process(self._spawn_arrivals(arrivals, service_times))
         staff_processes = {
             member.id: self.env.process(
@@ -221,6 +223,16 @@ class RunSession:
         )
 
     # ------------------------------------------------------------- projections
+    @property
+    def finished(self) -> bool:
+        """Whether the run has reached its horizon (a fresh read of the clock's end).
+
+        Read through this predicate — never a bare ``state != "finished"`` after
+        an ``advance`` — so the finish an advance may have just triggered is
+        actually observed rather than narrowed away by the earlier assignment.
+        """
+        return self.state == "finished"
+
     @property
     def sim_time(self) -> SimTime:
         if self.state == "finished":
@@ -498,19 +510,17 @@ async def execute_control(session: RunSession, command: ControlCommand) -> Sessi
         async with session.lock:
             if session.state == "playing":
                 raise HTTPException(status_code=409, detail="pause the run before stepping")
-            if session.state != "finished":
+            if not session.finished:
                 session.state = "stepping"
                 session.advance(command.granularity, command.count)
-                if session.state != "finished":
+                if not session.finished:
                     session.state = "paused"
                 step_frame = build_frame(session, kind="delta")
         if step_frame is not None:
             session.broadcast(step_frame)
     else:  # "speed"
         if command.multiplier is None or command.multiplier <= 0:
-            raise HTTPException(
-                status_code=422, detail="speed requires a positive `multiplier`"
-            )
+            raise HTTPException(status_code=422, detail="speed requires a positive `multiplier`")
         async with session.lock:
             session.set_speed(command.multiplier)
     return session.session_state()

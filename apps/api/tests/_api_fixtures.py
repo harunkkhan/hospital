@@ -102,9 +102,7 @@ def api_staffing() -> StaffingSpec:
     )
 
 
-def api_scenario(
-    *, seed: int = 7, rate_per_hour: float = 6.0, horizon_hours: int = 2
-) -> Scenario:
+def api_scenario(*, seed: int = 7, rate_per_hour: float = 6.0, horizon_hours: int = 2) -> Scenario:
     """A tiny live scenario: real arrivals, finishes in well under a second."""
     return Scenario(
         name="api_tiny",
@@ -208,9 +206,7 @@ def create_run(
     return cast("dict[str, Any]", response.json())
 
 
-def control(
-    client: TestClient, run_id: str, action: str, **extra: object
-) -> dict[str, Any]:
+def control(client: TestClient, run_id: str, action: str, **extra: object) -> dict[str, Any]:
     response = client.post(f"/runs/{run_id}/control", json={"action": action, **extra})
     assert response.status_code == 200, response.text
     return cast("dict[str, Any]", response.json())

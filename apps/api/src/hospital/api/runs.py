@@ -355,9 +355,7 @@ async def get_compare(run_id: str, request: Request) -> Response:
         cut = min(session.sim_time.root, shadow.sim_time.root)
         baseline_kpis = _fold_session(baseline, _log_prefix(baseline.log, cut))
         optimized_kpis = _fold_session(optimized, _log_prefix(optimized.log, cut))
-    result = paired_bootstrap(
-        [baseline_kpis], [optimized_kpis], n_boot=_LIVE_COMPARE_N_BOOT
-    )
+    result = paired_bootstrap([baseline_kpis], [optimized_kpis], n_boot=_LIVE_COMPARE_N_BOOT)
     contrasts = tuple(
         KpiContrast(
             key=key,

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from _api_fixtures import make_app
 from fastapi.testclient import TestClient
 
-from _api_fixtures import make_app
 from hospital.api.codegen import SCHEMA_PATH, build_schema_document, render_schema
 
 if TYPE_CHECKING:

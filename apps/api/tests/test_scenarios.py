@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from _api_fixtures import DEFAULT_SCENARIO_ID, api_scenario, create_run, make_app
 from fastapi.testclient import TestClient
 
-from _api_fixtures import DEFAULT_SCENARIO_ID, api_scenario, create_run, make_app
 from hospital.data.scenario import Scenario
 
 if TYPE_CHECKING:
@@ -71,10 +71,7 @@ def test_invalid_overrides_surface_the_data_layer_rejection(tmp_path: Path) -> N
         )
         assert response.status_code == 422
 
-        assert (
-            client.post("/scenarios", json={"base": "nope", "overrides": {}}).status_code
-            == 404
-        )
+        assert client.post("/scenarios", json={"base": "nope", "overrides": {}}).status_code == 404
 
 
 def test_inline_scenario_launches_a_run(tmp_path: Path) -> None:

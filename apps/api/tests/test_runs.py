@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi.testclient import TestClient
-
 from _api_fixtures import (
     DEFAULT_SCENARIO_ID,
     create_run,
@@ -13,6 +11,8 @@ from _api_fixtures import (
     run_to_finish,
     session_of,
 )
+from fastapi.testclient import TestClient
+
 from hospital.core import FloorLayout
 
 if TYPE_CHECKING:

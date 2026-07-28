@@ -11,9 +11,17 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from _api_fixtures import (
+    api_scenario,
+    control,
+    create_run,
+    make_app,
+    run_to_finish,
+    session_of,
+    step,
+)
 from fastapi.testclient import TestClient
 
-from _api_fixtures import api_scenario, control, create_run, make_app, run_to_finish, session_of, step
 from hospital.sim import run_replication
 
 if TYPE_CHECKING:
@@ -85,9 +93,7 @@ def test_step_while_playing_is_a_409(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
         handle = create_run(client, start="playing")
-        response = client.post(
-            f"/runs/{handle['run']}/control", json={"action": "step"}
-        )
+        response = client.post(f"/runs/{handle['run']}/control", json={"action": "step"})
         assert response.status_code == 409
         control(client, handle["run"], "pause")
 

@@ -7,9 +7,6 @@ import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
-
 from _api_fixtures import (
     create_run,
     make_app,
@@ -19,6 +16,9 @@ from _api_fixtures import (
     session_of,
     step,
 )
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
 from hospital.api.overrides import PinRegistry
 from hospital.api.sessions import RunSession
 from hospital.api.stream import StreamFrame, coalesce_frames, sse_frames
@@ -100,9 +100,11 @@ def test_finished_run_streams_a_finished_snapshot(tmp_path: Path) -> None:
 
 def test_unknown_run_websocket_is_closed(tmp_path: Path) -> None:
     with TestClient(make_app(tmp_path)) as client:
-        with pytest.raises(WebSocketDisconnect) as excinfo:
-            with client.websocket_connect("/runs/nope/stream"):
-                pass
+        with (
+            pytest.raises(WebSocketDisconnect) as excinfo,
+            client.websocket_connect("/runs/nope/stream"),
+        ):
+            pass
         assert excinfo.value.code == 4404
 
 
@@ -204,8 +206,6 @@ def test_pending_tasks_carry_real_ids_the_operator_reroutes_by(tmp_path: Path) -
         # by the operator, only echoed back.
         bogus = client.post(
             f"/runs/{run_id}/override",
-            json={
-                "action": {"kind": "reroute", "staff": physician.id.root, "task": "task_999999"}
-            },
+            json={"action": {"kind": "reroute", "staff": physician.id.root, "task": "task_999999"}},
         )
         assert bogus.status_code == 422

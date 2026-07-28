@@ -162,15 +162,13 @@ def _unknown(detail: str, entity: str) -> tuple[Violation, ...]:
 
 def _has_pending_cleaning(world: World, bay: BayId) -> bool:
     return any(
-        spec.kind == "cleaning" and world.task(spec.id).bay == bay
-        for spec in world.pending_tasks()
+        spec.kind == "cleaning" and world.task(spec.id).bay == bay for spec in world.pending_tasks()
     )
 
 
 def _has_pending_documentation(world: World, patient: PatientId) -> bool:
     return any(
-        spec.kind == "documentation" and spec.patient == patient
-        for spec in world.pending_tasks()
+        spec.kind == "documentation" and spec.patient == patient for spec in world.pending_tasks()
     )
 
 
@@ -306,9 +304,7 @@ def _apply_availability(
     # unchanged context (a closure blocks routing, it invalidates no assignment).
     a, b = action.edge
     if not _edge_known(world, a, b) and not _edge_known(world, b, a):
-        return OverrideRejected(
-            violations=_unknown("unknown corridor edge", f"{a.root}->{b.root}")
-        )
+        return OverrideRejected(violations=_unknown("unknown corridor edge", f"{a.root}->{b.root}"))
     violations = validate(standing, ctx)
     if violations:
         return OverrideRejected(violations=violations)
@@ -338,9 +334,7 @@ def apply_override(
     if violations:
         return OverrideRejected(violations=violations)
     try:
-        apply_plan(
-            session.world, compiled, ctx, session.executor, session.log, origin="operator"
-        )
+        apply_plan(session.world, compiled, ctx, session.executor, session.log, origin="operator")
     except InfeasiblePlan as exc:
         return OverrideRejected(violations=exc.violations)
     if request.pin:
@@ -456,9 +450,7 @@ class PinRegistry:
             return plan
         base = list(plan.items) if plan is not None else []
         out = [
-            item
-            for item in base
-            if item.stable_id not in self._items and not self._conflicts(item)
+            item for item in base if item.stable_id not in self._items and not self._conflicts(item)
         ]
         out = self._apply_sequence_pins(out, world)
         out.extend(self._items.values())
@@ -477,9 +469,7 @@ class PinRegistry:
         self._items = {
             sid: item for sid, item in self._items.items() if not (refs(item) & entities)
         }
-        self._sequence = {
-            root: pid for root, pid in self._sequence.items() if root not in entities
-        }
+        self._sequence = {root: pid for root, pid in self._sequence.items() if root not in entities}
 
 
 @router.post(
