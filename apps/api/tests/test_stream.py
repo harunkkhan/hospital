@@ -21,7 +21,12 @@ from starlette.websockets import WebSocketDisconnect
 
 from hospital.api.overrides import PinRegistry
 from hospital.api.sessions import RunSession
-from hospital.api.stream import StreamFrame, coalesce_frames, sse_frames
+from hospital.api.stream import (
+    HEARTBEAT_SECONDS,
+    StreamFrame,
+    coalesce_frames,
+    sse_frames,
+)
 from hospital.core import Activity, EsiAcuity, RunId, StaffRole, seconds
 
 if TYPE_CHECKING:
@@ -142,6 +147,75 @@ def test_sse_fallback_serves_a_snapshot_then_ends_on_disconnect() -> None:
     snapshot = StreamFrame.model_validate_json(chunks[0].removeprefix("data: "))
     assert snapshot.kind == "snapshot"
     assert snapshot.run == session.run_id
+
+
+class _AlwaysConnected:
+    """A peer that never hangs up — so only the session's own close can end the stream."""
+
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+def test_deleting_a_run_ends_its_sse_stream_without_waiting_for_a_heartbeat() -> None:
+    """A torn-down session must release its subscribers (doc 07 §3.2).
+
+    The peer here never disconnects, which is the leak's shape: ``DELETE`` removes
+    the session from the registry, but a stream loop only ever learns about its own
+    peer leaving — so it would go on heartbeating a deleted run's world forever.
+
+    The budget is deliberately under one ``HEARTBEAT_SECONDS``: it is the close
+    *sentinel* that must wake the parked ``queue.get()``, not the next heartbeat
+    timeout noticing the flag a beat later.
+    """
+    session = RunSession(RunId("t-del-sse"), quiet_scenario(), "baseline", 7, pins=PinRegistry())
+
+    async def drive() -> list[str]:
+        request = cast("Any", _AlwaysConnected())
+        stream = sse_frames(session, request)
+        chunks = [await anext(stream)]
+        # Close while the stream is parked in queue.get(), exactly as a DELETE does
+        # to a live subscriber.
+        asyncio.get_running_loop().call_later(0.05, session.close)
+        async with asyncio.timeout(HEARTBEAT_SECONDS * 0.8):
+            async for chunk in stream:
+                chunks.append(chunk)
+        return chunks
+
+    chunks = asyncio.run(drive())
+    assert len(chunks) == 1, "the stream must end at the close, emitting no further frames"
+    assert session.closed
+
+
+def test_deleting_a_run_closes_its_websocket_stream(tmp_path: Path) -> None:
+    app = make_app(tmp_path, {"quiet": quiet_scenario()})
+    with TestClient(app) as client:
+        handle = create_run(client, scenario_id="quiet")
+        run_id = handle["run"]
+        with client.websocket_connect(f"/runs/{run_id}/stream") as ws:
+            assert _recv(ws)["kind"] == "snapshot"
+            session = session_of(app, run_id)
+            assert client.delete(f"/runs/{run_id}").status_code == 204
+            assert session.closed
+            # Heartbeats already queued before the delete may arrive first; what must
+            # not happen is the socket staying open on a run that no longer exists.
+            with pytest.raises(WebSocketDisconnect) as excinfo:
+                for _ in range(10):
+                    _recv(ws)
+            assert excinfo.value.code == 4404
+
+
+def test_subscribing_to_a_closed_session_ends_immediately() -> None:
+    """The close-then-subscribe race: no frame source, so no loop to leak."""
+    session = RunSession(RunId("t-del-race"), quiet_scenario(), "baseline", 7, pins=PinRegistry())
+    session.close()
+
+    async def drive() -> list[str]:
+        request = cast("Any", _AlwaysConnected())
+        async with asyncio.timeout(HEARTBEAT_SECONDS * 0.8):
+            return [chunk async for chunk in sse_frames(session, request)]
+
+    # Only the connect snapshot; the loop ends on its first pull.
+    assert len(asyncio.run(drive())) == 1
 
 
 def test_coalesce_frames_merges_event_tails(tmp_path: Path) -> None:

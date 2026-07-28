@@ -178,7 +178,11 @@ class RunSession:
         self.lock = asyncio.Lock()
         self.decision_count = 0
         self.frame_seq = 0
-        self._subscribers: list[asyncio.Queue[StreamFrame]] = []
+        # Set once by `close()` at teardown. A stream transport is a long-lived
+        # loop that only ever learns about its OWN peer hanging up; without this
+        # it would keep heartbeating a deleted run's world forever (doc 07 §3.2).
+        self.closed = False
+        self._subscribers: list[asyncio.Queue[StreamFrame | None]] = []
         self._driver: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
 
@@ -427,22 +431,47 @@ class RunSession:
         self._driver = None
 
     # ------------------------------------------------------------- streaming
-    def subscribe(self) -> asyncio.Queue[StreamFrame]:
-        queue: asyncio.Queue[StreamFrame] = asyncio.Queue(maxsize=_SUBSCRIBER_QUEUE_MAX)
+    def subscribe(self) -> asyncio.Queue[StreamFrame | None]:
+        """A per-subscriber frame queue. ``None`` is the end-of-stream sentinel."""
+        queue: asyncio.Queue[StreamFrame | None] = asyncio.Queue(maxsize=_SUBSCRIBER_QUEUE_MAX)
+        if self.closed:
+            # Subscribing to an already-torn-down session yields an immediately
+            # ended stream rather than a loop with nothing to wake it.
+            queue.put_nowait(None)
+            return queue
         self._subscribers.append(queue)
         return queue
 
-    def unsubscribe(self, queue: asyncio.Queue[StreamFrame]) -> None:
+    def unsubscribe(self, queue: asyncio.Queue[StreamFrame | None]) -> None:
         if queue in self._subscribers:
             self._subscribers.remove(queue)
 
+    def close(self) -> None:
+        """End every subscriber's stream (teardown path).
+
+        The sentinel is what makes this prompt: a transport parked in
+        ``queue.get()`` wakes at once instead of after another heartbeat, and one
+        parked between heartbeats sees ``closed``. Queued frames of a deleted run
+        are dropped as needed to make room — the run they describe is gone.
+        """
+        self.closed = True
+        for queue in self._subscribers:
+            while queue.full():
+                queue.get_nowait()
+            queue.put_nowait(None)
+        self._subscribers.clear()
+
     def broadcast(self, frame: StreamFrame) -> None:
         """Fan a frame out to every subscriber; overflow coalesces, never grows."""
+        if self.closed:
+            return
         for queue in self._subscribers:
             if queue.full():
                 backlog: list[StreamFrame] = []
                 while not queue.empty():
-                    backlog.append(queue.get_nowait())
+                    queued = queue.get_nowait()
+                    if queued is not None:
+                        backlog.append(queued)
                 queue.put_nowait(coalesce_frames((*backlog, frame)))
             else:
                 queue.put_nowait(frame)
@@ -482,6 +511,7 @@ class SessionRegistry:
             if primary is not None:
                 primary.shadow = None
         for doomed_session in doomed:
+            doomed_session.close()
             await doomed_session.stop_driver()
         return True
 

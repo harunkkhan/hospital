@@ -288,11 +288,21 @@ def _registry(app: FastAPI) -> SessionRegistry:
     return cast("SessionRegistry", app.state.registry)
 
 
-async def _next_frame(session: RunSession, queue: asyncio.Queue[StreamFrame]) -> StreamFrame:
-    """The next delta frame, or a heartbeat snapshot when the stream is quiet."""
+async def _next_frame(
+    session: RunSession, queue: asyncio.Queue[StreamFrame | None]
+) -> StreamFrame | None:
+    """The next delta frame, a heartbeat snapshot when quiet, or ``None`` once closed.
+
+    ``None`` means the session was torn down: both the queue sentinel (a
+    subscriber parked in ``get()``) and the ``closed`` check on the heartbeat path
+    (a subscriber between frames) map onto it, so neither can be left
+    heartbeating a run that no longer exists.
+    """
     try:
         return await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SECONDS)
     except TimeoutError:
+        if session.closed:
+            return None
         async with session.lock:
             return build_frame(session, kind="snapshot")
 
@@ -308,10 +318,15 @@ async def stream_websocket(websocket: WebSocket, run_id: str) -> None:
     queue = session.subscribe()
     try:
         async with session.lock:
-            frame = build_frame(session, kind="snapshot")
-        await websocket.send_text(frame.model_dump_json())
+            snapshot = build_frame(session, kind="snapshot")
+        await websocket.send_text(snapshot.model_dump_json())
         while True:
             frame = await _next_frame(session, queue)
+            if frame is None:
+                # The run was deleted under us: say so in the close code rather
+                # than leaving the socket open on a session that no longer exists.
+                await websocket.close(code=4404, reason=f"run ended: {run_id}")
+                return
             await websocket.send_text(frame.model_dump_json())
     except WebSocketDisconnect:
         pass
@@ -329,7 +344,9 @@ async def sse_frames(session: RunSession, request: Request) -> AsyncIterator[str
     The loop ends on :meth:`Request.is_disconnected` so a browser that closes its
     ``EventSource`` releases its subscriber (and stops its heartbeat) at once — a
     plain ``while True`` would leak both, since this ASGI path is told a client
-    left only through the disconnect signal, never a raised ``send``.
+    left only through the disconnect signal, never a raised ``send``. It ends on a
+    ``None`` frame for the other direction: the *run* going away rather than the
+    peer (``DELETE /runs/{id}``), which no disconnect signal ever reports.
     """
     queue = session.subscribe()
     try:
@@ -337,7 +354,10 @@ async def sse_frames(session: RunSession, request: Request) -> AsyncIterator[str
             snapshot = build_frame(session, kind="snapshot")
         yield _sse(snapshot)
         while not await request.is_disconnected():
-            yield _sse(await _next_frame(session, queue))
+            frame = await _next_frame(session, queue)
+            if frame is None:
+                return
+            yield _sse(frame)
     finally:
         session.unsubscribe(queue)
 
