@@ -3260,7 +3260,7 @@
     },
     "/runs/{run_id}/metrics": {
       "get": {
-        "description": "The live ``core.kpi.KpiVector``: the one fold over the log so far.",
+        "description": "The live ``core.kpi.KpiVector``: the one fold over the log so far.\n\nFolded through the observed cut (:func:`_live_window`), so the vector is a\nreading of the sim time that has actually elapsed rather than of the horizon\nthe run is heading for.",
         "operationId": "get_metrics_runs__run_id__metrics_get",
         "parameters": [
           {

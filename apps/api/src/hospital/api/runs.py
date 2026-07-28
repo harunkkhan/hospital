@@ -5,7 +5,9 @@ Thin wire projections over ``hospital.analysis``/``hospital.data`` output
 
 * ``/metrics`` folds the session's ``EventLog`` up to the current ``sim_time``
   through the one ``analysis.fold.compute_kpis`` — a partial-week ``KpiVector``
-  whose empty strata are NaN by the D8 convention (serialized as ``null``).
+  whose empty strata are NaN by the D8 convention (serialized as ``null``). The
+  fold *window* ends at that same cut, never at the horizon (:func:`_live_window`),
+  so a rate KPI is normalized by elapsed time rather than by intended time.
 * ``/compare`` is a projection of ``analysis.compare.paired_bootstrap`` output,
   never a recompute; a live paired run is a single-seed point delta
   (``replications == 1``, CIs degenerate -> ``null``).
@@ -41,6 +43,7 @@ from hospital.core import (
     FloorLayout,
     FrozenModel,
     KpiVector,
+    OperatingWeek,
     RunId,
     SimTime,
     hours,
@@ -232,28 +235,61 @@ def _handle(session: RunSession) -> RunHandle:
     )
 
 
-def _default_warmup(session: RunSession) -> Duration:
-    """24h for a real week, a quarter of the horizon for short scenarios —
-    mirrors the scorecard/CLI convention so live and headless folds censor alike."""
-    span = session.horizon.end.root - session.horizon.start.root
-    return Duration(min(hours(24).root, span // 4))
+def _live_window(session: RunSession, cut: SimTime) -> tuple[OperatingWeek, Duration]:
+    """The fold window for a run observed only up to ``cut``.
+
+    The window must END at ``cut``, because that is where the log ends. Folding
+    the FULL horizon over a partial log is what makes a live reading wrong: every
+    rate- and duration-normalized KPI divides by the measurement window's length
+    (``bay_utilization``, ``provider_util``, ``nurse_util``, the ``staff_frac_*``
+    split, ``completions_per_week``), so a tenth of the way into a run they read
+    about a tenth of their true value — a console reporting 4% provider
+    utilization on a floor that is in fact saturated. ``wip_end_of_week`` reads
+    against the wrong instant for the same reason.
+
+    Warmup scales with the *observed* span under the same rule the headless
+    scorecard applies to a full horizon (24h, or a quarter of the span for a short
+    scenario). That is what makes the live series usable from early on and still
+    exact at the end: at ``cut == horizon.end`` this returns precisely the
+    headless window and warmup, so the final live vector equals the one the
+    goldens pin for the same ``(scenario, seed, arm)``.
+    """
+    span = cut.root - session.horizon.start.root
+    window = OperatingWeek(start=session.horizon.start, end=cut)
+    return window, Duration(min(hours(24).root, span // 4))
 
 
-def _fold_session(session: RunSession, log: EventLog) -> KpiVector:
-    return compute_kpis(
-        log,
-        session.layout,
-        session.roster,
-        window=session.horizon,
-        warmup=_default_warmup(session),
-    )
+def _observed_cut(session: RunSession) -> SimTime:
+    """How far this session's log is complete — and 409 if that is nowhere yet.
+
+    A run parked at ``t=0`` has a zero-length window, which is not a partial
+    measurement but the absence of one (``compute_kpis`` rejects it outright).
+    Saying so is honest; the alternative — quietly widening the window to the
+    horizon — is the very thing this cut exists to prevent.
+    """
+    cut = session.sim_time
+    if cut.root <= session.horizon.start.root:
+        raise HTTPException(
+            status_code=409,
+            detail="no elapsed sim time to fold yet — advance the run first",
+        )
+    return cut
 
 
-def _log_prefix(log: EventLog, up_to_us: int) -> EventLog:
-    """The envelopes at or before ``up_to_us`` — the paired-fold cut for /compare."""
+def _fold_session(session: RunSession, log: EventLog, cut: SimTime) -> KpiVector:
+    window, warmup = _live_window(session, cut)
+    return compute_kpis(log, session.layout, session.roster, window=window, warmup=warmup)
+
+
+def _log_prefix(log: EventLog, cut: SimTime) -> EventLog:
+    """The envelopes strictly before ``cut`` — the paired-fold cut for /compare.
+
+    Strict, matching the half-open ``[start, cut)`` window the prefix is folded
+    through, so the index and the window agree on the boundary instant.
+    """
     out = EventLog()
     for envelope in log:
-        if envelope.event.occurred_at.root <= up_to_us:
+        if envelope.event.occurred_at.root < cut.root:
             out.append(envelope.event, caused_by=envelope.caused_by)
     return out
 
@@ -315,10 +351,16 @@ async def get_layout(run_id: str, request: Request) -> Response:
 
 @router.get("/runs/{run_id}/metrics", response_model=KpiVector)
 async def get_metrics(run_id: str, request: Request) -> Response:
-    """The live ``core.kpi.KpiVector``: the one fold over the log so far."""
+    """The live ``core.kpi.KpiVector``: the one fold over the log so far.
+
+    Folded through the observed cut (:func:`_live_window`), so the vector is a
+    reading of the sim time that has actually elapsed rather than of the horizon
+    the run is heading for.
+    """
     session = require_session(cast("FastAPI", request.app), run_id)
     async with session.lock:
-        kpis = _fold_session(session, session.log)
+        cut = _observed_cut(session)
+        kpis = _fold_session(session, session.log, cut)
     return _pydantic_json(kpis)
 
 
@@ -341,9 +383,11 @@ async def get_compare(run_id: str, request: Request) -> Response:
         raise HTTPException(status_code=409, detail="paired shadow session no longer exists")
     baseline, optimized = (session, shadow) if session.arm == "baseline" else (shadow, session)
     async with session.lock, shadow.lock:
-        cut = min(session.sim_time.root, shadow.sim_time.root)
-        baseline_kpis = _fold_session(baseline, _log_prefix(baseline.log, cut))
-        optimized_kpis = _fold_session(optimized, _log_prefix(optimized.log, cut))
+        # The lagging arm's cut, for both: the arms are driven independently, so
+        # only their common prefix is a like-for-like window under CRN.
+        cut = SimTime(min(_observed_cut(session).root, _observed_cut(shadow).root))
+        baseline_kpis = _fold_session(baseline, _log_prefix(baseline.log, cut), cut)
+        optimized_kpis = _fold_session(optimized, _log_prefix(optimized.log, cut), cut)
     result = paired_bootstrap([baseline_kpis], [optimized_kpis], n_boot=_LIVE_COMPARE_N_BOOT)
     contrasts = tuple(
         KpiContrast(
