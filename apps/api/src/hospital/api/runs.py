@@ -9,10 +9,10 @@ Thin wire projections over ``hospital.analysis``/``hospital.data`` output
 * ``/compare`` is a projection of ``analysis.compare.paired_bootstrap`` output,
   never a recompute; a live paired run is a single-seed point delta
   (``replications == 1``, CIs degenerate -> ``null``).
-* ``/scenarios`` stores and lists ``hospital.data.scenario.Scenario`` — slider
-  overrides are compiled to a nested overlay and validated by
-  ``data.scenario.apply_overlay``; a bad override is a data-layer validation
-  error surfaced as 422, not an API-invented check.
+* ``/scenarios`` stores and lists ``hospital.data.scenario.Scenario`` — overrides
+  are compiled by ``api.sliders`` (the console's named knobs plus literal dotted
+  paths) and validated by ``data.scenario.apply_overlay``; a bad override is a
+  data-layer validation error surfaced as 422, not an API-invented check.
 
 CRN (doc 07 nuances 7.2): ``compare_to`` builds the shadow arm from the same
 ``(scenario, seed)`` — each ``RunSession`` seeds its own ``RandomStreams(seed)``
@@ -33,6 +33,7 @@ from pydantic import model_validator
 from hospital.analysis import compute_kpis, paired_bootstrap
 from hospital.api.overrides import PinRegistry
 from hospital.api.sessions import RunSession, SessionRegistry, require_session
+from hospital.api.sliders import compile_overrides
 from hospital.core import (
     KPI_KEYS,
     Duration,
@@ -44,7 +45,7 @@ from hospital.core import (
     SimTime,
     hours,
 )
-from hospital.data.scenario import Scenario, apply_overlay, load_scenario
+from hospital.data.scenario import Scenario, load_scenario
 from hospital.sim.policies.factory import Arm
 
 if TYPE_CHECKING:
@@ -64,11 +65,14 @@ class ScenarioRef(FrozenModel):
 
 
 class ScenarioInline(FrozenModel):
-    """A stored base scenario plus dotted-path slider overrides.
+    """A stored base scenario plus slider overrides.
 
-    Keys are dotted paths into the ``Scenario`` document (e.g.
-    ``"workload.base_rate_per_hour"``); values replace the addressed leaf. The
-    compiled overlay is validated by ``data.scenario.apply_overlay``.
+    A key is either one of the console's named knobs (``api.sliders.SLIDER_KEYS``
+    — e.g. ``"workload.arrival_rate_multiplier"``, which is *relative* and so
+    could never be a leaf value) or a literal dotted path into the ``Scenario``
+    document (e.g. ``"workload.base_rate_per_hour"``, whose value replaces the
+    addressed leaf). Both compile through ``api.sliders.compile_overrides`` into
+    an overlay ``data.scenario.apply_overlay`` validates.
     """
 
     base: str
@@ -174,7 +178,7 @@ class ScenarioStore:
         )
 
     def derive(self, base_id: str, overrides: Mapping[str, float]) -> str:
-        """Apply dotted-path overrides to a stored base and store the result.
+        """Apply console sliders / dotted-path overrides to a base and store the result.
 
         Raises ``KeyError`` for an unknown base and ``ValueError`` (or a
         pydantic ``ValidationError``) when the data layer rejects the overlay.
@@ -182,7 +186,7 @@ class ScenarioStore:
         base = self.get(base_id)
         if base is None:
             raise KeyError(base_id)
-        derived = apply_overlay(base, _nested_overlay(overrides))
+        derived = compile_overrides(base, overrides)
         scenario_id = f"{base_id}-v{next(self._counter)}"
         while scenario_id in self._scenarios:
             scenario_id = f"{base_id}-v{next(self._counter)}"
@@ -190,21 +194,6 @@ class ScenarioStore:
             scenario_id, derived, note=f"derived from {base_id} ({len(overrides)} override(s))"
         )
         return scenario_id
-
-
-def _nested_overlay(overrides: Mapping[str, float]) -> dict[str, object]:
-    """Compile ``{"a.b.c": v}`` slider paths into the nested overlay mapping."""
-    out: dict[str, object] = {}
-    for dotted, value in overrides.items():
-        parts = dotted.split(".")
-        cursor = out
-        for part in parts[:-1]:
-            nxt = cursor.setdefault(part, {})
-            if not isinstance(nxt, dict):
-                raise ValueError(f"conflicting override paths at {part!r} in {dotted!r}")
-            cursor = cast("dict[str, object]", nxt)
-        cursor[parts[-1]] = value
-    return out
 
 
 def _registry(app: FastAPI) -> SessionRegistry:
@@ -225,7 +214,7 @@ def _resolve_scenario(store: ScenarioStore, ref: ScenarioRef | ScenarioInline) -
     if base is None:
         raise HTTPException(status_code=404, detail=f"unknown scenario: {ref.base}")
     try:
-        return apply_overlay(base, _nested_overlay(ref.overrides))
+        return compile_overrides(base, ref.overrides)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"invalid scenario overrides: {exc}") from exc
 
