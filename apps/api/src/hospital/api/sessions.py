@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 import simpy
 from fastapi import APIRouter, HTTPException, Request
@@ -91,11 +91,19 @@ _MIN_SLEEP_S = 0.002
 _SUBSCRIBER_QUEUE_MAX = 64
 
 
+# A pacing multiplier divides the wall-clock delay, so it must be finite and
+# strictly positive: `inf` collapses every delay to 0 (the driver spins the whole
+# horizon with no pacing at all) and `NaN` poisons the comparison
+# `delay >= _MIN_SLEEP_S` into False, which does the same thing silently. Both
+# are rejected at the boundary rather than sanitized inside the driver.
+_SpeedMultiplier = Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
+
+
 class ControlCommand(FrozenModel):
     """``POST /runs/{id}/control`` body (doc 07 §3.3)."""
 
     action: Literal["play", "pause", "step", "speed"]
-    multiplier: float | None = None
+    multiplier: _SpeedMultiplier | None = None
     granularity: StepGranularity = "decision"
     count: int = Field(default=1, ge=1)
 
@@ -519,7 +527,9 @@ async def execute_control(session: RunSession, command: ControlCommand) -> Sessi
         if step_frame is not None:
             session.broadcast(step_frame)
     else:  # "speed"
-        if command.multiplier is None or command.multiplier <= 0:
+        # Range/finiteness is the model's job (`_SpeedMultiplier`); what is left
+        # here is the cross-field requirement that `speed` carry one at all.
+        if command.multiplier is None:
             raise HTTPException(status_code=422, detail="speed requires a positive `multiplier`")
         async with session.lock:
             session.set_speed(command.multiplier)

@@ -456,6 +456,7 @@
           "multiplier": {
             "anyOf": [
               {
+                "exclusiveMinimum": 0.0,
                 "type": "number"
               },
               {
@@ -1455,10 +1456,13 @@
       },
       "PendingTask": {
         "additionalProperties": false,
-        "description": "A pending unit of work carrying its REAL ``TaskSpec.id`` (doc 07 \u00a77.2).\n\nThe sim mints opaque task ids (``task_000001``); an operator ``reroute`` names\none verbatim, and a fabricated id is rejected by ``validate()`` \u2014 so the\nconsole must see the true id. Render-only like every frame field: the id\ncrosses the wire as a reference the operator echoes back, never as authority.\n``role`` is the role the task requires, so the console can offer only staff\nwho could actually serve it.",
+        "description": "A pending unit of work carrying its REAL ``TaskSpec.id`` (doc 07 \u00a77.2).\n\nThe sim mints opaque task ids (``task_000001``); an operator ``reroute`` names\none verbatim, and a fabricated id is rejected by ``validate()`` \u2014 so the\nconsole must see the true id. Render-only like every frame field: the id\ncrosses the wire as a reference the operator echoes back, never as authority.\n``role`` is the role the task requires, so the console can offer only staff\nwho could actually serve it.\n\nThe field is ``id`` \u2014 the *task's own* identity, the same spelling the\nconsole's ``PendingTask`` reads. Naming it ``task`` here would read as a\nreference to some other task and, worse, silently leave every reroute\npicker empty: the console would find ``undefined`` and could only ever\necho back a fabricated id.",
         "properties": {
           "at": {
             "$ref": "#/components/schemas/NodeId"
+          },
+          "id": {
+            "$ref": "#/components/schemas/TaskId"
           },
           "kind": {
             "enum": [
@@ -1487,13 +1491,10 @@
           },
           "role": {
             "$ref": "#/components/schemas/StaffRole"
-          },
-          "task": {
-            "$ref": "#/components/schemas/TaskId"
           }
         },
         "required": [
-          "task",
+          "id",
           "kind",
           "at",
           "role"
