@@ -52,7 +52,7 @@ export function kpiLabel(key: string): string {
     .replace(/_/g, " ");
 }
 
-function isAbsent(v: number | null | undefined): v is null | undefined {
+export function isAbsent(v: number | null | undefined): v is null | undefined {
   return v === null || v === undefined || Number.isNaN(v);
 }
 
@@ -119,7 +119,10 @@ export type Verdict = "better" | "worse" | "neutral";
  */
 export function contrastVerdict(c: Pick<KpiContrast, "key" | "delta">): Verdict {
   const dir = goodDirection(c.key);
-  if (dir === "neutral" || c.delta === 0) {
+  // An absent delta (empty stratum -> NaN -> null on the wire) has no direction to
+  // judge. Left unguarded, `null > 0` and `null < 0` are both false, so a
+  // "down is good" key would be coloured "worse" for a contrast that does not exist.
+  if (dir === "neutral" || isAbsent(c.delta) || c.delta === 0) {
     return "neutral";
   }
   const optimizedImproved = dir === "down" ? c.delta > 0 : c.delta < 0;
@@ -130,7 +133,12 @@ function formatByUnit(key: string, v: number): string {
   return formatKpiValue(key, v);
 }
 
-export function formatSigned(key: string, v: number): string {
+export function formatSigned(key: string, v: number | null | undefined): string {
+  // `Math.abs(null)` is 0, so an absent delta would print "±0" — a measured zero
+  // difference, which is a different claim from "not measured".
+  if (isAbsent(v)) {
+    return EM_DASH;
+  }
   const sign = v > 0 ? "+" : v < 0 ? "−" : "±";
   return `${sign}${formatByUnit(key, Math.abs(v))}`;
 }
