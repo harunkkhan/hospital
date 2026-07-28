@@ -7,7 +7,7 @@ browser's contract equals the backend's.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from _api_fixtures import make_app
 from fastapi.testclient import TestClient
@@ -48,6 +48,34 @@ def test_pure_wire_models_are_registered() -> None:
         "KpiVector",
     ):
         assert name in schemas, name
+
+
+def _is_nullable_number(schema: dict[str, Any]) -> bool:
+    variants = schema.get("anyOf", [schema])
+    types = {cast("dict[str, Any]", v).get("type") for v in variants}
+    return {"number", "null"} <= types
+
+
+def test_nan_capable_wire_numbers_are_nullable_in_the_schema() -> None:
+    """A field that serializes NaN as ``null`` must not be typed as a bare number.
+
+    The generated TypeScript is only as honest as this document. Every KPI figure
+    can be absent — an empty ESI stratum is NaN by the D8 convention, and a live
+    single-seed contrast has degenerate CIs at ``n_pairs == 1`` — and pydantic
+    writes each of those as JSON ``null``. Declaring them ``number`` promised the
+    browser a figure the bytes routinely omit, which is how a console renders a
+    confidence bound or a mean it was never given.
+    """
+    schemas: dict[str, Any] = build_schema_document()["components"]["schemas"]
+
+    kpi_values: dict[str, Any] = schemas["KpiVector"]["properties"]["values"]
+    assert _is_nullable_number(kpi_values["additionalProperties"]), kpi_values
+
+    contrast: dict[str, Any] = schemas["KpiContrast"]["properties"]
+    for field in ("baseline", "optimized", "delta", "ci_lo", "ci_hi"):
+        assert _is_nullable_number(contrast[field]), field
+    # `significant` is a real boolean verdict, never absent -- it must NOT be widened.
+    assert schemas["KpiContrast"]["properties"]["significant"]["type"] == "boolean"
 
 
 def test_operator_action_survives_as_a_tagged_union() -> None:

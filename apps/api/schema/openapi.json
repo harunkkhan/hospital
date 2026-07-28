@@ -1131,31 +1131,66 @@
       },
       "KpiContrast": {
         "additionalProperties": false,
-        "description": "One key's baseline-vs-optimized contrast \u2014 a projection of\n``analysis.compare.Contrast`` (``significant`` is mirrored, never re-derived).",
+        "description": "One key's baseline-vs-optimized contrast \u2014 a projection of\n``analysis.compare.Contrast`` (``significant`` is mirrored, never re-derived).\n\nEvery number here is nullable **on the wire** because every one of them can be\nNaN in the analysis output, and pydantic writes NaN as JSON ``null``: an empty\nstratum (no ESI-1 patient arrived yet) has no mean to contrast, and a live\nsingle-seed pair has degenerate CIs at ``n_pairs == 1``. Typing them as plain\nnumbers made the schema \u2014 and the generated TypeScript \u2014 promise a figure that\nis routinely absent, which is how a console ends up rendering a confidence\nbound it was never given.",
         "properties": {
           "baseline": {
-            "title": "Baseline",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline"
           },
           "ci_hi": {
-            "title": "Ci Hi",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Hi"
           },
           "ci_lo": {
-            "title": "Ci Lo",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Lo"
           },
           "delta": {
-            "title": "Delta",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
           },
           "key": {
             "title": "Key",
             "type": "string"
           },
           "optimized": {
-            "title": "Optimized",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimized"
           },
           "significant": {
             "title": "Significant",
@@ -1180,7 +1215,14 @@
         "properties": {
           "values": {
             "additionalProperties": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "title": "Values",
             "type": "object"

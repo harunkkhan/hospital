@@ -88,7 +88,18 @@ class KpiVector(FrozenModel):
         return MappingProxyType(dict(values))
 
     @field_serializer("values")
-    def _serialize_values(self, values: Mapping[str, float]) -> dict[str, float]:
+    def _serialize_values(self, values: Mapping[str, float]) -> dict[str, float | None]:
+        """Serialize the mapping as-is.
+
+        The return annotation is ``float | None`` while the field stays ``float``,
+        and each is true of its own direction: an empty stratum is NaN in the model
+        (the convention above) and JSON has no NaN, so pydantic writes ``null`` for
+        it. Declaring that here is what makes the *serialization* JSON schema — the
+        one FastAPI derives response models from, and that the TypeScript contract
+        is generated off — say ``number | null`` rather than promise a number the
+        bytes do not always carry. Validation is unaffected: a KPI vector is still
+        built from floats.
+        """
         return dict(values)
 
     @model_validator(mode="after")

@@ -113,14 +113,23 @@ class RunHandle(FrozenModel):
 
 class KpiContrast(FrozenModel):
     """One key's baseline-vs-optimized contrast — a projection of
-    ``analysis.compare.Contrast`` (``significant`` is mirrored, never re-derived)."""
+    ``analysis.compare.Contrast`` (``significant`` is mirrored, never re-derived).
+
+    Every number here is nullable **on the wire** because every one of them can be
+    NaN in the analysis output, and pydantic writes NaN as JSON ``null``: an empty
+    stratum (no ESI-1 patient arrived yet) has no mean to contrast, and a live
+    single-seed pair has degenerate CIs at ``n_pairs == 1``. Typing them as plain
+    numbers made the schema — and the generated TypeScript — promise a figure that
+    is routinely absent, which is how a console ends up rendering a confidence
+    bound it was never given.
+    """
 
     key: str
-    baseline: float
-    optimized: float
-    delta: float
-    ci_lo: float
-    ci_hi: float
+    baseline: float | None
+    optimized: float | None
+    delta: float | None
+    ci_lo: float | None
+    ci_hi: float | None
     significant: bool
 
 
