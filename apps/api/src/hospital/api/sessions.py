@@ -178,6 +178,9 @@ class RunSession:
         self.lock = asyncio.Lock()
         self.decision_count = 0
         self.frame_seq = 0
+        # The displayed clock while coasting the idle tail (see `coast`). None
+        # whenever the env's own clock is the authority, which is almost always.
+        self._coast_us: int | None = None
         # Set once by `close()` at teardown. A stream transport is a long-lived
         # loop that only ever learns about its OWN peer hanging up; without this
         # it would keep heartbeating a deleted run's world forever (doc 07 §3.2).
@@ -249,6 +252,8 @@ class RunSession:
     def sim_time(self) -> SimTime:
         if self.state == "finished":
             return self.horizon.end
+        if self._coast_us is not None:
+            return SimTime(self._coast_us)
         return SimTime(int(self.env.now))
 
     @property
@@ -341,8 +346,47 @@ class RunSession:
         self.env.step()
         return True
 
+    # --------------------------------------------------------- the idle tail
+    @property
+    def coasting(self) -> bool:
+        """Whether the clock is walking out an exhausted schedule's remaining time."""
+        return self._coast_us is not None
+
+    def coast_chunk_us(self) -> int:
+        """One frame's worth of sim time at the current ``speed``."""
+        return max(1, int(MIN_FRAME_INTERVAL_S * self.speed * 1_000_000))
+
+    def coast(self, chunk_us: int) -> int:
+        """Walk the displayed clock over an exhausted schedule; returns µs moved (0 at the end).
+
+        A schedule can run dry well before the horizon — arrivals are done and
+        every staff member is blocked on an empty mailbox — and that does NOT mean
+        the run is over: the *horizon* ends it, and the remainder is real idle time
+        the week paid for. Declaring ``finished`` right there teleports the clock
+        from, say, hour 3 to hour 168 inside a single frame, which the console
+        renders as the playhead jumping the whole week at once, and which (now that
+        the fold window follows ``sim_time``) makes every KPI denominator jump with
+        it. So the gap is paced like any other stretch of the run.
+
+        The SimPy env is deliberately NOT advanced. ``env.run(until=...)`` schedules
+        its own stop event at ``until``, and a ``PriorityTier.COMPLETION`` event
+        sitting at exactly ``horizon.end`` shares that priority — it could be
+        executed on the way, which the half-open ``[start, end)`` convention says
+        must never happen. The idle tail has nothing to execute by definition, so
+        only the clock needs to move.
+        """
+        position = self._coast_us if self._coast_us is not None else int(self.env.now)
+        moved = min(chunk_us, self.horizon.end.root - position)
+        self._coast_us = position + moved
+        return moved
+
     def advance(self, granularity: StepGranularity, count: int) -> None:
-        """Advance ``count`` units of ``granularity`` (caller holds the lock)."""
+        """Advance ``count`` units of ``granularity`` (caller holds the lock).
+
+        Stepping past the last scheduled event ends the run at its horizon rather
+        than coasting: a step asks for the next unit of work, and an explicit "no
+        more work exists" is an answer. Pacing the idle tail is playback's job.
+        """
         for _ in range(count):
             if self.state == "finished":
                 return
@@ -383,10 +427,12 @@ class RunSession:
         self._wake.set()
 
     async def _drive(self) -> None:
-        """The playback loop: settle one instant, emit a frame, pace wall-clock.
+        """The playback loop: settle one instant (or coast), emit a frame, pace wall-clock.
 
         The pacing sleep is OUTSIDE SimPy — `speed` stretches or compresses the
         human-visible clock and never touches what the env runs (doc 07 §5.2).
+        Pacing covers the idle tail too (see :meth:`coast`), so the clock reaches
+        the horizon by running there rather than by jumping.
         """
         loop = asyncio.get_running_loop()
         last_emit = float("-inf")
@@ -397,13 +443,17 @@ class RunSession:
                 async with self.lock:
                     if self.state != "playing":
                         break
-                    before = int(self.env.now)
-                    if not self._settle_next_instant():
+                    before = self.sim_time.root
+                    # Nothing left to execute before the horizon: walk the remaining
+                    # idle time instead of teleporting to the end. Once the walk has
+                    # no gap left to cover, the horizon is reached and the run ends.
+                    exhausted = self.coasting or not self._settle_next_instant()
+                    if exhausted and self.coast(self.coast_chunk_us()) == 0:
                         self.state = "finished"
                         frame = build_frame(self, kind="delta")
                         self.broadcast(frame)
                         break
-                    delta_us = int(self.env.now) - before
+                    delta_us = self.sim_time.root - before
                     now_wall = loop.time()
                     if now_wall - last_emit >= MIN_FRAME_INTERVAL_S:
                         frame = build_frame(self, kind="delta")

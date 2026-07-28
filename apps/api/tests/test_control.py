@@ -17,6 +17,7 @@ from _api_fixtures import (
     control,
     create_run,
     make_app,
+    quiet_scenario,
     run_to_finish,
     session_of,
     step,
@@ -135,6 +136,56 @@ def test_speed_requires_a_positive_multiplier(tmp_path: Path) -> None:
 
         # The rejections are total: the session keeps the speed it had.
         assert session_of(app, handle["run"]).speed == DEFAULT_SPEED
+
+
+def test_exhausted_schedule_is_paced_to_the_horizon_not_teleported(tmp_path: Path) -> None:
+    """The idle tail is played, not skipped (doc 07 §10).
+
+    ``quiet_scenario`` has zero arrivals, so SimPy runs dry at ``t=0`` with a full
+    hour of horizon left — the exact shape of the bug. Ending the run there would
+    slam ``sim_time`` from 0 to the horizon inside one frame: the console's playhead
+    jumps the whole scenario at once, and because the live fold window now follows
+    ``sim_time``, every KPI denominator jumps with it.
+
+    The clock must instead walk the gap at ``speed``, which is asserted by
+    observing it *between* the ends while the run is still playing.
+    """
+    app = make_app(tmp_path, {"quiet": quiet_scenario()})
+    with TestClient(app) as client:
+        handle = create_run(client, scenario_id="quiet")
+        run_id = handle["run"]
+        session = session_of(app, run_id)
+        horizon = session.horizon.end.root
+
+        # 360 sim-seconds per wall-second over a 1h horizon: ~10s of wall time to
+        # walk, far longer than this test looks, so an intermediate reading is not
+        # a race -- and a teleport would be finished before the first poll.
+        control(client, run_id, "speed", multiplier=360.0)
+        control(client, run_id, "play")
+
+        positions: list[int] = []
+        deadline = time.monotonic() + 2.0
+        while len(positions) < 3 and time.monotonic() < deadline:
+            state = client.get(f"/runs/{run_id}").json()
+            mid_tail = state["state"] == "playing" and 0 < state["sim_time"] < horizon
+            if mid_tail and (not positions or state["sim_time"] != positions[-1]):
+                positions.append(state["sim_time"])
+            time.sleep(0.02)
+
+        assert len(positions) >= 3, f"clock did not walk the idle tail: {positions}"
+        assert positions == sorted(positions), positions
+        assert session.coasting
+        # Nothing is executed to get there: the env's own clock never moves, so the
+        # walk cannot perturb the realized run.
+        assert int(session.env.now) == 0
+        mid_walk_log = session.log.to_jsonl()
+
+        # And it still ends exactly at the horizon, with the log untouched by the
+        # walk -- pacing the tail must not append so much as one event.
+        run_to_finish(client, run_id)
+        assert client.get(f"/runs/{run_id}").json()["sim_time"] == horizon
+        assert session.log.to_jsonl() == mid_walk_log
+        assert int(session.env.now) == 0
 
 
 def test_finished_run_ignores_further_control(tmp_path: Path) -> None:
