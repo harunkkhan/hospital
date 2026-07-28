@@ -218,16 +218,8 @@ def step(
     return control(client, run_id, "step", granularity=granularity, count=count)
 
 
-def run_to_finish(
-    client: TestClient, run_id: str, *, speed: float = 1e9, timeout_s: float = 60.0
-) -> None:
-    """Play at high speed and poll until the session reports ``finished``.
-
-    ``speed`` scales wall-clock pacing only — the realized run is identical at
-    any value (the invariance the control tests assert).
-    """
-    control(client, run_id, "speed", multiplier=speed)
-    control(client, run_id, "play")
+def wait_until_finished(client: TestClient, run_id: str, *, timeout_s: float = 60.0) -> None:
+    """Poll until ``run_id`` reports ``finished``."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         handle = client.get(f"/runs/{run_id}")
@@ -236,3 +228,22 @@ def run_to_finish(
             return
         time.sleep(0.005)
     raise AssertionError(f"run {run_id} did not finish within {timeout_s}s")
+
+
+def run_to_finish(
+    client: TestClient, run_id: str, *, speed: float = 1e9, timeout_s: float = 60.0
+) -> None:
+    """Play at high speed and poll until the session reports ``finished``.
+
+    ``speed`` scales wall-clock pacing only — the realized run is identical at
+    any value (the invariance the control tests assert).
+
+    Waits for ``run_id`` ONLY. A paired run has an independently-driven shadow
+    arm, and control mirroring starts it but does not synchronize its finish —
+    anything comparing the two arms must await the shadow as well
+    (:func:`wait_until_finished`), or it races the driver that is still
+    appending to the shadow's log.
+    """
+    control(client, run_id, "speed", multiplier=speed)
+    control(client, run_id, "play")
+    wait_until_finished(client, run_id, timeout_s=timeout_s)

@@ -10,7 +10,14 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Any
 
-from _api_fixtures import create_run, make_app, run_to_finish, session_of, step
+from _api_fixtures import (
+    create_run,
+    make_app,
+    run_to_finish,
+    session_of,
+    step,
+    wait_until_finished,
+)
 from fastapi.testclient import TestClient
 
 from hospital.analysis import compute_kpis
@@ -75,6 +82,10 @@ def test_compare_projects_the_paired_bootstrap(tmp_path: Path) -> None:
     with TestClient(app) as client:
         handle = create_run(client, arm="optimized", compare_to="baseline", seed=9)
         run_to_finish(client, handle["run"])
+        # Both arms, not just the primary: /compare folds at the LAGGING arm's cut,
+        # so a shadow still being driven would make the API's fold a prefix of the
+        # full-log fold this test re-derives.
+        wait_until_finished(client, handle["shadow"])
 
         response = client.get(f"/runs/{handle['run']}/compare")
         assert response.status_code == 200
