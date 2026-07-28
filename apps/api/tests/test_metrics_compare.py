@@ -20,7 +20,7 @@ from _api_fixtures import (
 )
 from fastapi.testclient import TestClient
 
-from hospital.analysis import compute_kpis
+from hospital.analysis import compute_kpis, detect_bottleneck
 from hospital.core import KPI_KEYS, Duration, OperatingWeek, SimTime, hours
 
 if TYPE_CHECKING:
@@ -154,6 +154,65 @@ def test_metrics_before_any_elapsed_sim_time_is_a_409(tmp_path: Path) -> None:
         assert set(values) == set(KPI_KEYS)
         # Empty strata are null on the wire, never omitted.
         assert values["los_s_mean_by_esi_1"] is None
+
+
+def test_bottleneck_projects_the_analysis_detector(tmp_path: Path) -> None:
+    """``GET /runs/{id}/bottleneck`` exists and mirrors ``analysis.detect_bottleneck``.
+
+    ``BottleneckPanel`` polls this endpoint on the same interval as the KPI tiles;
+    without it the panel could only ever show "waiting for analysis…", and the
+    binding constraint — the single most load-bearing indicator on the screen — was
+    unreachable from the console.
+    """
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        handle = create_run(client)
+        step(client, handle["run"], granularity="decision", count=25)
+
+        response = client.get(f"/runs/{handle['run']}/bottleneck")
+        assert response.status_code == 200, response.text
+        body: dict[str, Any] = response.json()
+
+        # The shape the console reads (apps/web `BottleneckReport`/`ResourceWait`).
+        assert set(body) == {
+            "binding",
+            "resources",
+            "total_cycle_s",
+            "gini_by_role",
+            "gini_overall",
+        }
+        assert body["resources"], "the ranked resource table must not be empty"
+        assert set(body["resources"][0]) == {
+            "resource",
+            "total_wait_s",
+            "n_requests",
+            "mean_wait_s",
+            "share_of_cycle",
+        }
+
+        # ... and the numbers are the detector's, over the same cut /metrics uses.
+        session = session_of(app, handle["run"])
+        window, warmup = _expected_window(session, session.sim_time)
+        expected = detect_bottleneck(
+            session.log, session.layout, session.roster, window=window, warmup=warmup
+        )
+        assert body["binding"] == expected.binding
+        assert body["gini_overall"] == expected.gini_overall
+        assert [r["resource"] for r in body["resources"]] == [
+            r.resource for r in expected.resources
+        ], "the full ranking must survive, in order -- a near-tie co-binder stays visible"
+        for wire, ref in zip(body["resources"], expected.resources, strict=True):
+            assert _wire_value_equals(wire["share_of_cycle"], ref.share_of_cycle)
+            assert _wire_value_equals(wire["mean_wait_s"], ref.mean_wait_s)
+            assert wire["n_requests"] == ref.n_requests
+
+        # An unmeasured resource reports null, not 0 -- "not yet measured" and "no
+        # wait" are different claims.
+        unmeasured = [r for r in body["resources"] if r["n_requests"] == 0]
+        assert unmeasured, "expected at least one resource with no requests yet"
+        assert all(r["mean_wait_s"] is None for r in unmeasured)
+
+        assert client.get("/runs/nope/bottleneck").status_code == 404
 
 
 def test_compare_projects_the_paired_bootstrap(tmp_path: Path) -> None:

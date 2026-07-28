@@ -57,12 +57,23 @@ describe("MockEngine determinism", () => {
     const two = synthesizeCompare(42, "b", "o");
     expect(one).toEqual(two);
     for (const c of one.contrasts) {
-      expect(c.significant).toBe(!(c.ci_lo <= 0 && 0 <= c.ci_hi));
-      expect(c.baseline - c.delta).toBeCloseTo(c.optimized, 9);
+      // The wire type is nullable (a real API can have an empty stratum); the mock
+      // is a complete fixture, so every figure being present is itself an assertion.
+      const { baseline, optimized, delta, ci_lo, ci_hi } = c;
+      expect(baseline).not.toBeNull();
+      expect(optimized).not.toBeNull();
+      expect(delta).not.toBeNull();
+      expect(ci_lo).not.toBeNull();
+      expect(ci_hi).not.toBeNull();
+      if (baseline === null || optimized === null || delta === null) {
+        throw new Error("unreachable: asserted above");
+      }
+      expect(c.significant).toBe(!((ci_lo ?? 0) <= 0 && 0 <= (ci_hi ?? 0)));
+      expect(baseline - delta).toBeCloseTo(optimized, 9);
     }
     // the fixture must exercise the honest paths: at least one regression
     // and at least one non-significant contrast
-    expect(one.contrasts.some((c) => c.delta < 0)).toBe(true);
+    expect(one.contrasts.some((c) => (c.delta ?? 0) < 0)).toBe(true);
     expect(one.contrasts.some((c) => !c.significant)).toBe(true);
   });
 });

@@ -11,6 +11,8 @@ Thin wire projections over ``hospital.analysis``/``hospital.data`` output
 * ``/compare`` is a projection of ``analysis.compare.paired_bootstrap`` output,
   never a recompute; a live paired run is a single-seed point delta
   (``replications == 1``, CIs degenerate -> ``null``).
+* ``/bottleneck`` is a projection of ``analysis.bottleneck.detect_bottleneck`` over
+  the same observed cut — the API surfaces the indicator, it never detects.
 * ``/scenarios`` stores and lists ``hospital.data.scenario.Scenario`` — overrides
   are compiled by ``api.sliders`` (the console's named knobs plus literal dotted
   paths) and validated by ``data.scenario.apply_overlay``; a bad override is a
@@ -32,7 +34,8 @@ from typing import TYPE_CHECKING, Literal, cast
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import model_validator
 
-from hospital.analysis import compute_kpis, paired_bootstrap
+from hospital.analysis import compute_kpis, detect_bottleneck, paired_bootstrap
+from hospital.analysis.bottleneck import BottleneckReport as AnalysisBottleneckReport
 from hospital.api.overrides import PinRegistry
 from hospital.api.sessions import RunSession, SessionRegistry, require_session
 from hospital.api.sliders import compile_overrides
@@ -131,6 +134,41 @@ class KpiContrast(FrozenModel):
     ci_lo: float | None
     ci_hi: float | None
     significant: bool
+
+
+class ResourceWait(FrozenModel):
+    """One resource class's queueing burden — a projection of
+    ``analysis.bottleneck.ResourceWait``.
+
+    ``mean_wait_s`` is absent for a resource nothing has queued for yet
+    (``n_requests == 0``) and ``share_of_cycle`` is absent when no patient-time has
+    been observed at all; both are NaN in the analysis output and ``null`` here.
+    Rendering either as ``0`` would read as "no wait" instead of "not yet measured"
+    — the two things a live indicator most needs to keep apart.
+    """
+
+    resource: str
+    total_wait_s: float
+    n_requests: int
+    mean_wait_s: float | None
+    share_of_cycle: float | None
+
+
+class BottleneckReport(FrozenModel):
+    """The binding-constraint + work-concentration indicators (doc 07 §7.5).
+
+    A projection of ``analysis.bottleneck.BottleneckReport``: the API surfaces, the
+    panel renders, and no detection logic lives here. ``resources`` stays fully
+    ranked (never trimmed to the winner) so a near-tie co-binding partner remains
+    visible, and ``binding`` is ``""`` when no share is measurable yet rather than
+    an arbitrary first resource.
+    """
+
+    binding: str
+    resources: tuple[ResourceWait, ...]
+    total_cycle_s: float
+    gini_by_role: Mapping[str, float]
+    gini_overall: float
 
 
 class CompareResponse(FrozenModel):
@@ -303,6 +341,26 @@ def _log_prefix(log: EventLog, cut: SimTime) -> EventLog:
     return out
 
 
+def _bottleneck_report(report: AnalysisBottleneckReport) -> BottleneckReport:
+    """Project the analysis report onto the wire, field for field."""
+    return BottleneckReport(
+        binding=report.binding,
+        resources=tuple(
+            ResourceWait(
+                resource=wait.resource,
+                total_wait_s=wait.total_wait_s,
+                n_requests=wait.n_requests,
+                mean_wait_s=wait.mean_wait_s,
+                share_of_cycle=wait.share_of_cycle,
+            )
+            for wait in report.resources
+        ),
+        total_cycle_s=report.total_cycle_s,
+        gini_by_role=dict(report.gini_by_role),
+        gini_overall=report.gini_overall,
+    )
+
+
 def _pydantic_json(model: FrozenModel) -> Response:
     """Serialize through pydantic (NaN -> null) — starlette's json.dumps rejects NaN."""
     return Response(content=model.model_dump_json(), media_type="application/json")
@@ -371,6 +429,24 @@ async def get_metrics(run_id: str, request: Request) -> Response:
         cut = _observed_cut(session)
         kpis = _fold_session(session, session.log, cut)
     return _pydantic_json(kpis)
+
+
+@router.get("/runs/{run_id}/bottleneck", response_model=BottleneckReport)
+async def get_bottleneck(run_id: str, request: Request) -> Response:
+    """The live binding constraint and staff work-concentration (doc 07 §7.5).
+
+    The one ``analysis.detect_bottleneck``, over the same observed cut ``/metrics``
+    folds through, projected onto the wire. ``BottleneckPanel`` polls this on the
+    same light interval as the KPI tiles.
+    """
+    session = require_session(cast("FastAPI", request.app), run_id)
+    async with session.lock:
+        cut = _observed_cut(session)
+        window, warmup = _live_window(session, cut)
+        report = detect_bottleneck(
+            session.log, session.layout, session.roster, window=window, warmup=warmup
+        )
+    return _pydantic_json(_bottleneck_report(report))
 
 
 @router.get("/runs/{run_id}/compare", response_model=CompareResponse)
@@ -450,8 +526,10 @@ async def create_scenario(body: ScenarioInline, request: Request) -> ScenarioCre
 
 
 __all__ = [
+    "BottleneckReport",
     "CompareResponse",
     "KpiContrast",
+    "ResourceWait",
     "RunHandle",
     "RunRequest",
     "ScenarioCreated",

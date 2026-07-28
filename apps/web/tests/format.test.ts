@@ -49,6 +49,16 @@ describe("contrastVerdict (delta = baseline - optimized)", () => {
     expect(contrastVerdict({ key: "door_to_provider_s_mean", delta: 0 })).toBe("neutral");
   });
 
+  test("an absent delta is neutral, not a regression", () => {
+    // An empty stratum is NaN in the fold and null on the wire. Unguarded, both
+    // `null > 0` and `null < 0` are false, so a "down is good" key would be
+    // coloured "worse" for a contrast that was never measured.
+    for (const key of ["los_s_mean_by_esi_1", "completions_per_week"]) {
+      expect(contrastVerdict({ key, delta: null })).toBe("neutral");
+      expect(contrastVerdict({ key, delta: Number.NaN })).toBe("neutral");
+    }
+  });
+
   test("direction map covers the contract families", () => {
     expect(goodDirection("los_s_p90_by_esi_2")).toBe("down");
     expect(goodDirection("staff_minutes_walked")).toBe("down");
@@ -79,6 +89,16 @@ describe("formatSigned / formatSimTime", () => {
   test("signs are explicit, including the true minus sign", () => {
     expect(formatSigned("completions_per_week", 34)).toBe("+34");
     expect(formatSigned("completions_per_week", -34)).toBe("−34");
+  });
+
+  test("an absent delta is an em dash, not a signed zero", () => {
+    // `Math.abs(null)` is 0, so this would otherwise print "±0" — a measured
+    // no-difference, which is a different claim from "not measured".
+    expect(formatSigned("los_s_mean_by_esi_1", null)).toBe(EM_DASH);
+    expect(formatSigned("los_s_mean_by_esi_1", undefined)).toBe(EM_DASH);
+    expect(formatSigned("los_s_mean_by_esi_1", Number.NaN)).toBe(EM_DASH);
+    // A genuine zero still reads as one.
+    expect(formatSigned("completions_per_week", 0)).toBe("±0");
   });
 
   test("sim time renders day + clock", () => {

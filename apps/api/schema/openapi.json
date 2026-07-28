@@ -271,6 +271,47 @@
         "title": "BlockEdgeAction",
         "type": "object"
       },
+      "BottleneckReport": {
+        "additionalProperties": false,
+        "description": "The binding-constraint + work-concentration indicators (doc 07 \u00a77.5).\n\nA projection of ``analysis.bottleneck.BottleneckReport``: the API surfaces, the\npanel renders, and no detection logic lives here. ``resources`` stays fully\nranked (never trimmed to the winner) so a near-tie co-binding partner remains\nvisible, and ``binding`` is ``\"\"`` when no share is measurable yet rather than\nan arbitrary first resource.",
+        "properties": {
+          "binding": {
+            "title": "Binding",
+            "type": "string"
+          },
+          "gini_by_role": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Gini By Role",
+            "type": "object"
+          },
+          "gini_overall": {
+            "title": "Gini Overall",
+            "type": "number"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceWait"
+            },
+            "title": "Resources",
+            "type": "array"
+          },
+          "total_cycle_s": {
+            "title": "Total Cycle S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "binding",
+          "resources",
+          "total_cycle_s",
+          "gini_by_role",
+          "gini_overall"
+        ],
+        "title": "BottleneckReport",
+        "type": "object"
+      },
       "BumpPriorityAction": {
         "additionalProperties": false,
         "description": "Move a waiting patient to the head of the bay queue -> ``sequence`` item.\n\n``priority`` is the operator's declared urgency, carried onto the compiled\n``PlanItem`` as doc 07 \u00a74.1 specifies. It is **declared intent, not a\nmagnitude physics reads**: what actually moves the patient is the item's\n``order`` tuple, which ``seam_adapter`` hands to ``resequence_waiting``.\nNothing in the engine multiplies by this number, and this docstring says so\nrather than letting the field imply a weighting that does not exist.",
@@ -1850,6 +1891,55 @@
         "title": "RerouteAction",
         "type": "object"
       },
+      "ResourceWait": {
+        "additionalProperties": false,
+        "description": "One resource class's queueing burden \u2014 a projection of\n``analysis.bottleneck.ResourceWait``.\n\n``mean_wait_s`` is absent for a resource nothing has queued for yet\n(``n_requests == 0``) and ``share_of_cycle`` is absent when no patient-time has\nbeen observed at all; both are NaN in the analysis output and ``null`` here.\nRendering either as ``0`` would read as \"no wait\" instead of \"not yet measured\"\n\u2014 the two things a live indicator most needs to keep apart.",
+        "properties": {
+          "mean_wait_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Wait S"
+          },
+          "n_requests": {
+            "title": "N Requests",
+            "type": "integer"
+          },
+          "resource": {
+            "title": "Resource",
+            "type": "string"
+          },
+          "share_of_cycle": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Of Cycle"
+          },
+          "total_wait_s": {
+            "title": "Total Wait S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "resource",
+          "total_wait_s",
+          "n_requests",
+          "mean_wait_s",
+          "share_of_cycle"
+        ],
+        "title": "ResourceWait",
+        "type": "object"
+      },
       "RouteEdge": {
         "additionalProperties": false,
         "description": "A weighted edge. ``seconds`` is the routing cost; ``distance`` breaks ties.\n\nFor an ordinary corridor ``seconds`` is derived from ``distance``/speed, but\nthe two may be deliberately decoupled (e.g. an elevator: small distance,\nlarge ``seconds``) \u2014 routing always uses ``seconds``.",
@@ -3168,6 +3258,46 @@
           }
         },
         "summary": "Get Run"
+      }
+    },
+    "/runs/{run_id}/bottleneck": {
+      "get": {
+        "description": "The live binding constraint and staff work-concentration (doc 07 \u00a77.5).\n\nThe one ``analysis.detect_bottleneck``, over the same observed cut ``/metrics``\nfolds through, projected onto the wire. ``BottleneckPanel`` polls this on the\nsame light interval as the KPI tiles.",
+        "operationId": "get_bottleneck_runs__run_id__bottleneck_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BottleneckReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Bottleneck"
       }
     },
     "/runs/{run_id}/compare": {

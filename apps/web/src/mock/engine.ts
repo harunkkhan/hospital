@@ -846,9 +846,12 @@ export class MockEngine {
       ...r,
       share_of_cycle: total > 0 ? r.total_wait_s / total : 0,
     }));
-    const binding = shared.reduce((a, b) => (b.share_of_cycle > a.share_of_cycle ? b : a), {
-      ...(shared[0] as ResourceWait),
-    });
+    // The mock always computes a finite share (see above), so `?? 0` is a
+    // type-level floor for the nullable wire type, never a live code path.
+    const binding = shared.reduce(
+      (a, b) => ((b.share_of_cycle ?? 0) > (a.share_of_cycle ?? 0) ? b : a),
+      { ...(shared[0] as ResourceWait) },
+    );
     const byRole: Record<string, number> = {};
     for (const role of ["physician", "nurse", "tech", "porter", "housekeeping"] as const) {
       const busy = [...this.staff.values()].filter((m) => m.role === role).map((m) => m.busyUs);

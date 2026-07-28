@@ -34,8 +34,10 @@ from hospital.api.overrides import (
     RerouteAction,
 )
 from hospital.api.runs import (
+    BottleneckReport,
     CompareResponse,
     KpiContrast,
+    ResourceWait,
     RunHandle,
     RunRequest,
     ScenarioCreated,
@@ -95,6 +97,7 @@ __all__ = [
     "WIRE_MODELS",
     "BayFrame",
     "BlockEdgeAction",
+    "BottleneckReport",
     "BumpPriorityAction",
     "CloseBayAction",
     "CompareResponse",
@@ -115,6 +118,7 @@ __all__ = [
     "QueueFrame",
     "ReassignAction",
     "RerouteAction",
+    "ResourceWait",
     "RunHandle",
     "RunRequest",
     "Scenario",

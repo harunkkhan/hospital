@@ -356,14 +356,19 @@ export type OverrideOutcome = OverrideAccepted | OverrideRejected;
 // metrics / compare (GET /runs/{id}/metrics, /compare, /bottleneck)
 // ---------------------------------------------------------------------------
 
+/**
+ * Every figure is nullable: an empty stratum is NaN in the fold and `null` on the
+ * wire, and a live single-seed pair has degenerate CIs at n=1. `significant` is a
+ * real verdict and never absent.
+ */
 export interface KpiContrast {
   key: string;
-  baseline: number;
-  optimized: number;
+  baseline: number | null;
+  optimized: number | null;
   /** baseline - optimized. Sign is honest; direction-of-good is per key. */
-  delta: number;
-  ci_lo: number;
-  ci_hi: number;
+  delta: number | null;
+  ci_lo: number | null;
+  ci_hi: number | null;
   significant: boolean;
 }
 
@@ -379,9 +384,12 @@ export interface CompareResponse {
 export interface ResourceWait {
   resource: string;
   total_wait_s: number;
+  /** `mean_wait_s` is null until this resource has been requested at all, and
+   * `share_of_cycle` until some patient-time has been observed. Both are NaN in
+   * `analysis` and `null` here — render them as absent, never as 0. */
   n_requests: number;
-  mean_wait_s: number;
-  share_of_cycle: number;
+  mean_wait_s: number | null;
+  share_of_cycle: number | null;
 }
 
 export interface BottleneckReport {
