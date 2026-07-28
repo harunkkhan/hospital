@@ -127,9 +127,15 @@ class PendingTask(FrozenModel):
     crosses the wire as a reference the operator echoes back, never as authority.
     ``role`` is the role the task requires, so the console can offer only staff
     who could actually serve it.
+
+    The field is ``id`` — the *task's own* identity, the same spelling the
+    console's ``PendingTask`` reads. Naming it ``task`` here would read as a
+    reference to some other task and, worse, silently leave every reroute
+    picker empty: the console would find ``undefined`` and could only ever
+    echo back a fabricated id.
     """
 
-    task: TaskId
+    id: TaskId
     kind: TaskKind
     at: NodeId
     patient: PatientId | None = None
@@ -220,7 +226,7 @@ def _pending_task_frames(world: World) -> tuple[PendingTask, ...]:
     """Project the world's real pending ``TaskSpec``s — ids the operator reroutes by."""
     return tuple(
         PendingTask(
-            task=spec.id,
+            id=spec.id,
             kind=spec.kind,
             at=spec.at,
             patient=spec.patient,

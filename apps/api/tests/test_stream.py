@@ -186,7 +186,10 @@ def test_pending_tasks_carry_real_ids_the_operator_reroutes_by(tmp_path: Path) -
 
         with client.websocket_connect(f"/runs/{run_id}/stream") as ws:
             frame = cast("dict[str, Any]", ws.receive_json())
-        pending = {t["task"]: t for t in frame["pending_tasks"]}
+        # The console reads `PendingTask.id` -- keyed on that field name here so a
+        # rename back to `task` fails as the empty reroute picker it would cause.
+        pending = {t["id"]: t for t in frame["pending_tasks"]}
+        assert "task" not in frame["pending_tasks"][0], "the wire field is `id`, not `task`"
         assert real_id in pending, "the frame must expose the real TaskSpec id"
         assert pending[real_id]["kind"] == "provider_visit"
         assert pending[real_id]["at"] == session.layout.entrances[0].root
