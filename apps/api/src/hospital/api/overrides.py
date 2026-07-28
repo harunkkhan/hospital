@@ -81,10 +81,19 @@ class ReassignAction(FrozenModel):
 
 
 class BumpPriorityAction(FrozenModel):
-    """Move a waiting patient to the head of the bay queue -> ``sequence`` item."""
+    """Move a waiting patient to the head of the bay queue -> ``sequence`` item.
+
+    ``priority`` is the operator's declared urgency, carried onto the compiled
+    ``PlanItem`` as doc 07 §4.1 specifies. It is **declared intent, not a
+    magnitude physics reads**: what actually moves the patient is the item's
+    ``order`` tuple, which ``seam_adapter`` hands to ``resequence_waiting``.
+    Nothing in the engine multiplies by this number, and this docstring says so
+    rather than letting the field imply a weighting that does not exist.
+    """
 
     kind: Literal["bump_priority"] = "bump_priority"
     patient: PatientId
+    priority: int
 
 
 class RerouteAction(FrozenModel):
@@ -96,17 +105,26 @@ class RerouteAction(FrozenModel):
 
 
 class ExpediteCleanAction(FrozenModel):
-    """Prioritize the pending cleaning task for a bay -> ``clean`` item."""
+    """Prioritize the pending cleaning task for a bay -> ``clean`` item.
+
+    ``priority`` is optional declared intent, as on :class:`BumpPriorityAction`:
+    the enactment is ``world.boost_task``, which takes no magnitude.
+    """
 
     kind: Literal["expedite_clean"] = "expedite_clean"
     bay: BayId
+    priority: int | None = None
 
 
 class ExpediteDischargeAction(FrozenModel):
-    """Prioritize a patient's pending documentation -> ``discharge`` item."""
+    """Prioritize a patient's pending documentation -> ``discharge`` item.
+
+    ``priority`` is optional declared intent — see :class:`ExpediteCleanAction`.
+    """
 
     kind: Literal["expedite_discharge"] = "expedite_discharge"
     patient: PatientId
+    priority: int | None = None
 
 
 class CloseBayAction(FrozenModel):
@@ -204,6 +222,7 @@ def compile_plan_action(action: _PlanAction, world: World) -> Plan | tuple[Viola
                     stable_id=f"op:sequence:{action.patient.root}",
                     kind="sequence",
                     patient=action.patient,
+                    priority=action.priority,
                     order=bumped,
                 ),
             )
@@ -228,6 +247,7 @@ def compile_plan_action(action: _PlanAction, world: World) -> Plan | tuple[Viola
                     stable_id=f"op:clean:{action.bay.root}",
                     kind="clean",
                     bay=action.bay,
+                    priority=action.priority,
                 ),
             )
         )
@@ -240,6 +260,7 @@ def compile_plan_action(action: _PlanAction, world: World) -> Plan | tuple[Viola
                 stable_id=f"op:discharge:{action.patient.root}",
                 kind="discharge",
                 patient=action.patient,
+                priority=action.priority,
             ),
         )
     )
@@ -412,6 +433,13 @@ class PinRegistry:
         return False
 
     def _apply_sequence_pins(self, items: list[PlanItem], world: World) -> list[PlanItem]:
+        """Pre-fix the pinned patients at the head of whatever ordering is in force.
+
+        The merged item deliberately carries no ``priority``: one sequence item
+        expresses the ordering of *all* pinned patients at once, so there is no
+        single operator-declared urgency it could honestly report. ``order`` is
+        the authority the engine enacts, and it is complete on its own.
+        """
         pin_order = [pid.root for pid in self._sequence.values()]
         if not pin_order:
             return items

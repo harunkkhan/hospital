@@ -273,7 +273,7 @@
       },
       "BumpPriorityAction": {
         "additionalProperties": false,
-        "description": "Move a waiting patient to the head of the bay queue -> ``sequence`` item.",
+        "description": "Move a waiting patient to the head of the bay queue -> ``sequence`` item.\n\n``priority`` is the operator's declared urgency, carried onto the compiled\n``PlanItem`` as doc 07 \u00a74.1 specifies. It is **declared intent, not a\nmagnitude physics reads**: what actually moves the patient is the item's\n``order`` tuple, which ``seam_adapter`` hands to ``resequence_waiting``.\nNothing in the engine multiplies by this number, and this docstring says so\nrather than letting the field imply a weighting that does not exist.",
         "properties": {
           "kind": {
             "const": "bump_priority",
@@ -283,10 +283,15 @@
           },
           "patient": {
             "$ref": "#/components/schemas/PatientId"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
           }
         },
         "required": [
-          "patient"
+          "patient",
+          "priority"
         ],
         "title": "BumpPriorityAction",
         "type": "object"
@@ -926,7 +931,7 @@
       },
       "ExpediteCleanAction": {
         "additionalProperties": false,
-        "description": "Prioritize the pending cleaning task for a bay -> ``clean`` item.",
+        "description": "Prioritize the pending cleaning task for a bay -> ``clean`` item.\n\n``priority`` is optional declared intent, as on :class:`BumpPriorityAction`:\nthe enactment is ``world.boost_task``, which takes no magnitude.",
         "properties": {
           "bay": {
             "$ref": "#/components/schemas/BayId"
@@ -936,6 +941,17 @@
             "default": "expedite_clean",
             "title": "Kind",
             "type": "string"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
           }
         },
         "required": [
@@ -946,7 +962,7 @@
       },
       "ExpediteDischargeAction": {
         "additionalProperties": false,
-        "description": "Prioritize a patient's pending documentation -> ``discharge`` item.",
+        "description": "Prioritize a patient's pending documentation -> ``discharge`` item.\n\n``priority`` is optional declared intent \u2014 see :class:`ExpediteCleanAction`.",
         "properties": {
           "kind": {
             "const": "expedite_discharge",
@@ -956,6 +972,17 @@
           },
           "patient": {
             "$ref": "#/components/schemas/PatientId"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
           }
         },
         "required": [

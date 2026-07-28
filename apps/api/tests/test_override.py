@@ -138,10 +138,72 @@ def test_bump_priority_reorders_the_queue(tmp_path: Path) -> None:
         assert next(w.patient.id.root for w in session.world.waiting_for_bay()) == "first"
 
         response = _post_override(
-            client, handle["run"], {"kind": "bump_priority", "patient": "second"}
+            client, handle["run"], {"kind": "bump_priority", "patient": "second", "priority": 1}
         )
         assert response.status_code == 200, response.text
         assert next(w.patient.id.root for w in session.world.waiting_for_bay()) == "second"
+        # The declared priority is carried onto the compiled item (doc 07 §4.1) and
+        # reported back, so the console can show what it asked for. `order` is what
+        # the engine actually enacted -- it is the field the reordering came from.
+        item = response.json()["plan"]["items"][0]
+        assert item["kind"] == "sequence"
+        assert item["priority"] == 1
+        assert item["order"][0] == "second"
+
+
+def test_operator_actions_accept_the_consoles_priority_payloads(tmp_path: Path) -> None:
+    """The console's exact bodies (apps/web `OperatorAction`) must not 422.
+
+    `FrozenModel` forbids extra fields, so a `priority` the action model does not
+    declare is a hard rejection of every bump the console can send -- the whole
+    action is unreachable from the real client, which no engine-side test would
+    have noticed.
+    """
+    app = make_app(tmp_path, _QUIET)
+    with TestClient(app) as client:
+        handle = create_run(client, scenario_id="quiet")
+        session = session_of(app, handle["run"])
+        _enqueue(session, "prio_p", EsiAcuity.ESI3)
+
+        # bump_priority always carries `priority` from the console; omitting it is
+        # the one shape the console never sends, so it is a 422.
+        omitted = client.post(
+            f"/runs/{handle['run']}/override",
+            json={"action": {"kind": "bump_priority", "patient": "prio_p"}},
+        )
+        assert omitted.status_code == 422, omitted.text
+
+        accepted = _post_override(
+            client, handle["run"], {"kind": "bump_priority", "patient": "prio_p", "priority": 9}
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["plan"]["items"][0]["priority"] == 9
+
+        # `expedite_clean` takes it optionally, exactly as the console types it:
+        # present or absent, both accepted, and the priority never decides the
+        # verdict -- a distinct bay per case so neither re-boosts the other's task.
+        node = session.layout.entrances[0]
+        for index, body in enumerate(
+            (
+                {"kind": "expedite_clean"},
+                {"kind": "expedite_clean", "priority": 4},
+            )
+        ):
+            bay = _bay_of(session, ZoneType.GENERAL, index)
+            session.world.add_task(
+                kind="cleaning",
+                patient=None,
+                at=node,
+                required_role=StaffRole.HOUSEKEEPING,
+                activity=Activity.CLEANING,
+                duration=seconds(60),
+                bay=bay,
+            )
+            response = _post_override(client, handle["run"], {**body, "bay": bay.root})
+            assert response.status_code == 200, response.text
+            item = response.json()["plan"]["items"][0]
+            assert item["kind"] == "clean"
+            assert item["priority"] == body.get("priority")
 
 
 def test_valid_reroute_dispatches_the_named_staff(tmp_path: Path) -> None:
@@ -316,7 +378,7 @@ def test_unknown_entities_are_rejected(tmp_path: Path) -> None:
         handle = create_run(client, scenario_id="quiet")
         for action in (
             {"kind": "reroute", "staff": "ghost", "task": "task_999999"},
-            {"kind": "bump_priority", "patient": "ghost"},
+            {"kind": "bump_priority", "patient": "ghost", "priority": 1},
             {"kind": "close_bay", "bay": "ghost"},
             {"kind": "block_edge", "edge": ["nowhere_a", "nowhere_b"]},
             {"kind": "expedite_clean", "bay": "ghost"},
@@ -409,7 +471,7 @@ def test_pin_registry_merge_holds_decisions_against_a_resolve() -> None:
     assign_plan = compile_plan_action(ReassignAction(patient=pinned.id, bay=bay), world)
     assert isinstance(assign_plan, Plan)
     pins.record(ReassignAction(patient=pinned.id, bay=bay), assign_plan)
-    pins.record(BumpPriorityAction(patient=pinned.id), Plan(items=()))
+    pins.record(BumpPriorityAction(patient=pinned.id, priority=1), Plan(items=()))
 
     # A re-solve that would overwrite both pinned decisions...
     solver_plan = Plan(
@@ -459,12 +521,17 @@ _STAFF_IDS = st.sampled_from((*(m.id for m in _TEMPLATE.roster), StaffId("ghost"
 _TASK_IDS = st.sampled_from((TaskId("task_000000"), TaskId("task_999999")))
 _NODE_IDS = st.sampled_from((*(n.id for n in _TEMPLATE.layout.graph.nodes[:4]), NodeId("ghost")))
 
+# The console's own range; `priority` is declared intent either way (nothing in
+# physics weights by it), so the sweep only has to prove it never changes whether
+# an action applies or rejects.
+_PRIORITIES = st.integers(min_value=1, max_value=9)
+
 _ACTIONS = st.one_of(
     st.builds(ReassignAction, patient=_PATIENT_IDS, bay=_BAY_IDS),
-    st.builds(BumpPriorityAction, patient=_PATIENT_IDS),
+    st.builds(BumpPriorityAction, patient=_PATIENT_IDS, priority=_PRIORITIES),
     st.builds(RerouteAction, staff=_STAFF_IDS, task=_TASK_IDS),
-    st.builds(ExpediteCleanAction, bay=_BAY_IDS),
-    st.builds(ExpediteDischargeAction, patient=_PATIENT_IDS),
+    st.builds(ExpediteCleanAction, bay=_BAY_IDS, priority=st.none() | _PRIORITIES),
+    st.builds(ExpediteDischargeAction, patient=_PATIENT_IDS, priority=st.none() | _PRIORITIES),
     st.builds(CloseBayAction, bay=_BAY_IDS),
     st.builds(BlockEdgeAction, edge=st.tuples(_NODE_IDS, _NODE_IDS)),
 )
@@ -515,6 +582,6 @@ def test_override_on_unknown_run_is_404(tmp_path: Path) -> None:
     with TestClient(make_app(tmp_path, _QUIET)) as client:
         response = client.post(
             "/runs/nope/override",
-            json={"action": {"kind": "bump_priority", "patient": "p"}},
+            json={"action": {"kind": "bump_priority", "patient": "p", "priority": 1}},
         )
         assert response.status_code == 404
