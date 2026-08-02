@@ -161,7 +161,7 @@ class SurgeForecaster:
     def __init__(
         self,
         seasonal: ArrivalIntensityModel,
-        median: GbtRegressor,
+        point: GbtRegressor,
         upper: GbtRegressor,
         *,
         quantile: float,
@@ -172,7 +172,7 @@ class SurgeForecaster:
         self.feature_names = feature_names
         self.quantile = quantile
         self.max_lead = max_lead
-        self._median = median
+        self._point = point
         self._upper = upper
 
     def _row(
@@ -225,7 +225,7 @@ class SurgeForecaster:
                 quantile=self.quantile,
             )
 
-        mean = tuple(max(0.0, v) for v in self._median.predict(design))
+        mean = tuple(max(0.0, v) for v in self._point.predict(design))
         raw_upper = tuple(max(0.0, v) for v in self._upper.predict(design))
         # A safety band below the point estimate is not a band; the two quantile
         # heads are fit independently and can cross on sparse data.
@@ -296,15 +296,21 @@ def fit_surge_forecaster(
     if not design:
         raise ValueError("no training rows: the logs contain no usable arrival bins")
 
-    def head(q: float, name: str) -> GbtRegressor:
-        return GbtRegressor(quantile=q, random_state=_random_state(streams, name)).fit(
-            design, labels
-        )
+    # The point head is a Poisson MEAN estimator, not a median. Pinball loss at
+    # q=0.5 returns the conditional median, which on right-skewed counts sits
+    # below the mean -- so a "mean" field fit that way would under-forecast every
+    # busy hour, and a staffing plan built on it would be short by construction.
+    point = GbtRegressor(loss="poisson", random_state=_random_state(streams, "surge_mean")).fit(
+        design, labels
+    )
+    upper_head = GbtRegressor(
+        quantile=quantile, random_state=_random_state(streams, "surge_upper")
+    ).fit(design, labels)
 
     return SurgeForecaster(
         seasonal,
-        head(0.5, "surge_median"),
-        head(quantile, "surge_upper"),
+        point,
+        upper_head,
         quantile=quantile,
         max_lead=max_lead,
     )
@@ -320,10 +326,11 @@ def poisson_deviance(observed: Iterable[float], predicted: Iterable[float]) -> f
     total = 0.0
     n = 0
     for y, mu in zip(observed, predicted, strict=True):
-        rate = max(mu, 1e-9)
-        term = -(y - rate)
+        # The floor guards the logarithm only. Applying it to the (mu - y) term as
+        # well would score a perfect forecast of an empty hour as non-zero.
+        term = mu - y
         if y > 0:
-            term += y * math.log(y / rate)
+            term += y * math.log(y / max(mu, 1e-9))
         total += 2.0 * term
         n += 1
     return total / n if n else 0.0

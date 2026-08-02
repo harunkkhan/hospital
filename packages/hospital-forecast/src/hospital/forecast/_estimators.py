@@ -16,7 +16,7 @@ nothing outside it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import joblib
 import numpy as np
@@ -53,13 +53,21 @@ def _to_floats(values: Any) -> tuple[float, ...]:
 
 
 class GbtRegressor:
-    """A gradient-boosted regressor, optionally fit to a quantile instead of the mean."""
+    """A gradient-boosted regressor: a conditional mean, or a conditional quantile.
+
+    ``loss="poisson"`` is the right choice for counts — it models a log-link mean
+    and keeps predictions non-negative. Passing ``quantile`` instead switches to
+    pinball loss, which estimates that quantile and **not** the mean: a median
+    count forecast systematically under-predicts a right-skewed arrival
+    distribution, so the two are not interchangeable.
+    """
 
     def __init__(
         self,
         *,
         random_state: int,
         quantile: float | None = None,
+        loss: Literal["squared_error", "poisson"] = "squared_error",
         max_depth: int = DEFAULT_MAX_DEPTH,
         learning_rate: float = DEFAULT_LEARNING_RATE,
         max_iter: int = DEFAULT_MAX_ITER,
@@ -77,7 +85,10 @@ class GbtRegressor:
         if quantile is not None:
             kwargs["loss"] = "quantile"
             kwargs["quantile"] = quantile
+        else:
+            kwargs["loss"] = loss
         self.quantile = quantile
+        self.loss = "quantile" if quantile is not None else loss
         self._model = cast("Any", HistGradientBoostingRegressor(**kwargs))
 
     def fit(self, rows: Sequence[Sequence[float]], labels: Sequence[float]) -> GbtRegressor:
