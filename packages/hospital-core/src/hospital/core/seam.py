@@ -26,6 +26,7 @@ from hospital.core.events import EventEnvelope, VitalsSampled
 from hospital.core.ids import BayId, NodeId, PatientId, StaffId, TaskId
 from hospital.core.models import FrozenModel
 from hospital.core.time import Duration, SimTime
+from hospital.core.vitals import VitalsReading
 
 TaskKind = Literal[
     "provider_visit",
@@ -226,13 +227,18 @@ class RiskMonitor(Protocol):
     append would be a second writer, and the log would stop being a single
     replayable history.
 
+    The raw ``reading`` travels beside the event rather than inside it.
+    ``VitalsSampled`` carries only the NEWS2 aggregate because the log is a
+    published artifact, but a model needs the underlying numbers — so the engine,
+    which already holds the trajectory it sampled, passes both.
+
     :meth:`observe` returns ``None`` while the model has nothing to say — most
     often because a rolling window is not yet full — which is a normal state, not
     an error. A run with no monitor injected behaves exactly as one whose monitor
     always returns ``None``, which is what keeps the M1/M2 engine byte-identical.
     """
 
-    def observe(self, event: VitalsSampled) -> RiskAssessment | None:
+    def observe(self, event: VitalsSampled, reading: VitalsReading) -> RiskAssessment | None:
         """Take one sampled reading; return an assessment, or ``None`` if undecided."""
         ...
 

@@ -121,6 +121,7 @@ from hospital.core.time import (
 )
 from hospital.core.units import Distance, WalkSpeed, walk_duration
 from hospital.core.validation import ValidationContext, Violation, validate
+from hospital.core.vitals import VitalsReading
 
 __all__ = [
     "KPI_KEYS",
@@ -208,6 +209,7 @@ __all__ = [
     "UnknownEntity",
     "ValidationContext",
     "Violation",
+    "VitalsReading",
     "VitalsSampled",
     "WaitingPatient",
     "WakeDirective",

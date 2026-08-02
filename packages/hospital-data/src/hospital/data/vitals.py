@@ -35,6 +35,7 @@ from hospital.core import (
     Patient,
     PatientId,
     RandomStreams,
+    VitalsReading,
 )
 
 if TYPE_CHECKING:
@@ -43,16 +44,15 @@ if TYPE_CHECKING:
 _MICROS_PER_MINUTE: Final[int] = 60 * 1_000_000
 
 
-class VitalsSample(FrozenModel):
-    """One integer-scaled vitals reading at ``elapsed`` since arrival (M3)."""
+class VitalsSample(VitalsReading):
+    """A :class:`~hospital.core.VitalsReading` stamped with its offset from arrival.
+
+    Extends the core value type rather than restating its six fields, so a sample
+    *is* a reading and can be handed straight to a ``RiskMonitor`` — one shape,
+    no conversion step to get wrong.
+    """
 
     elapsed: Duration
-    hr: int
-    spo2: int
-    sbp: int
-    dbp: int
-    temp_c_x10: int
-    rr: int
 
 
 class VitalsStream(FrozenModel):
@@ -106,6 +106,18 @@ _DETERIORATION_SHIFT: Final[_Baseline] = _Baseline(
 )
 _RAMP: Final[Duration] = Duration(25 * _MICROS_PER_MINUTE)
 
+# Before onset, a patient who is going to crash drifts subtly for this long, and
+# reaches this fraction of the full displacement by the moment of onset.
+#
+# Without a prodrome the label would be *unpredictable by construction*: onset is
+# drawn independently of the trajectory, so pre-onset vitals would carry no signal
+# at all and "detect deterioration early" would be an impossible task dressed up
+# as a hard one. Real decompensation is foreshadowed; this is the modelled version
+# of that, and it is what makes the classifier's job well-posed rather than rigged
+# in either direction.
+_PRODROME: Final[Duration] = Duration(20 * _MICROS_PER_MINUTE)
+_PRODROME_SEVERITY: Final[float] = 0.22
+
 # P(a patient deteriorates at all), by acuity.
 _DETERIORATION_RISK: Final[dict[EsiAcuity, float]] = {
     EsiAcuity.ESI1: 0.34,
@@ -140,14 +152,21 @@ def _clamp(name: str, value: float) -> int:
 def _severity(elapsed: Duration, onset: Duration | None) -> float:
     """How far into deterioration this instant is, on ``[0, 1]``.
 
-    Zero before onset, then a linear ramp over ``_RAMP`` to full severity. A ramp
-    rather than a step is what makes early detection *possible but not trivial*:
-    the signal is present for minutes before it is unmistakable, which is the
-    window the classifier is supposed to exploit.
+    Three phases: flat until ``_PRODROME`` before onset, a shallow climb to
+    ``_PRODROME_SEVERITY`` at onset, then the full ramp over ``_RAMP``. The
+    prodrome is what makes early detection *possible but not trivial* — the signal
+    is faint and buried in measurement noise for a while before it is
+    unmistakable, which is exactly the window the classifier is meant to exploit.
     """
-    if onset is None or elapsed <= onset:
+    if onset is None:
         return 0.0
-    return min(1.0, (elapsed.root - onset.root) / _RAMP.root)
+    if elapsed.root >= onset.root:
+        after = min(1.0, (elapsed.root - onset.root) / _RAMP.root)
+        return _PRODROME_SEVERITY + (1.0 - _PRODROME_SEVERITY) * after
+    lead = onset.root - elapsed.root
+    if lead >= _PRODROME.root:
+        return 0.0
+    return _PRODROME_SEVERITY * (1.0 - lead / _PRODROME.root)
 
 
 def _observe(

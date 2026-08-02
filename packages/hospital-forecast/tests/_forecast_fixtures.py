@@ -57,6 +57,7 @@ from hospital.core.events import (
     TriageCompleted,
     TriageStarted,
 )
+from hospital.data.vitals import VitalsStream, generate_vitals
 
 # Ground truth the fits must recover. Keyed the same way `service_time` keys its
 # table: (activity, esi, complaint).
@@ -300,3 +301,45 @@ def synth_weeks(n: int, *, seed: int = 4, days: int = 7, rate: float = 2.4) -> l
     return [
         synth_week(seed=seed, days=days, base_rate_per_hour=rate, week_index=i) for i in range(n)
     ]
+
+
+# ------------------------------------------------------------- vitals cohorts
+VITALS_CADENCE: Final[Duration] = Duration(5 * 60 * 1_000_000)
+VITALS_SPAN: Final[Duration] = Duration(6 * 60 * 60 * 1_000_000)
+
+
+class VitalsCohort(NamedTuple):
+    """Sampled trajectories plus the acuity each was drawn for."""
+
+    streams: tuple[VitalsStream, ...]
+    acuity: dict[PatientId, EsiAcuity]
+
+    def deteriorating(self) -> int:
+        return sum(1 for s in self.streams if s.deteriorates)
+
+
+def vitals_cohort(n: int, *, seed: int = 21, week_index: int = 0) -> VitalsCohort:
+    """A mixed-acuity cohort of vitals trajectories with ground-truth labels.
+
+    Acuity is spread across ESI 1-4 so the deterioration rate varies by patient
+    (ESI-1 deteriorates ~34% of the time, ESI-4 ~2%) — a single-acuity cohort
+    would let a classifier score well by learning the base rate alone.
+    """
+    streams = RandomStreams(seed + 1_000 * week_index)
+    mix = (EsiAcuity.ESI1, EsiAcuity.ESI2, EsiAcuity.ESI2, EsiAcuity.ESI3, EsiAcuity.ESI4)
+    out: list[VitalsStream] = []
+    acuity: dict[PatientId, EsiAcuity] = {}
+    for i in range(n):
+        esi = mix[i % len(mix)]
+        patient = Patient(
+            id=PatientId(f"vp_{week_index:02d}_{i:05d}"),
+            arrival_time=SimTime(0),
+            arrival_mode=ArrivalMode.WALK_IN,
+            esi=esi,
+            complaint="chest_pain",
+            isolation_required=False,
+            workup=WorkupNeeds(provider_visits=1, nurse_visits=1, imaging=(), labs=0, procedures=0),
+        )
+        out.append(generate_vitals(patient, streams, until=VITALS_SPAN, cadence=VITALS_CADENCE))
+        acuity[patient.id] = esi
+    return VitalsCohort(streams=tuple(out), acuity=acuity)

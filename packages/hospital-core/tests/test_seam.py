@@ -17,6 +17,7 @@ from hospital.core import (
     SimTime,
     StaffId,
     TaskId,
+    VitalsReading,
     VitalsSampled,
     WakeDirective,
 )
@@ -103,10 +104,14 @@ def test_well_formed_decision_responses_accepted() -> None:
 
 
 # --------------------------------------------------------------- RiskMonitor
+_READING = VitalsReading(hr=120, spo2=90, sbp=95, dbp=60, temp_c_x10=385, rr=28)
+
+
 class _AlwaysEscalates:
     """A minimal monitor: structural conformance is the whole contract."""
 
-    def observe(self, event: VitalsSampled) -> RiskAssessment | None:
+    def observe(self, event: VitalsSampled, reading: VitalsReading) -> RiskAssessment | None:
+        del reading
         return RiskAssessment(
             patient=event.patient,
             at=event.occurred_at,
@@ -117,8 +122,8 @@ class _AlwaysEscalates:
 
 
 class _Undecided:
-    def observe(self, event: VitalsSampled) -> RiskAssessment | None:
-        del event
+    def observe(self, event: VitalsSampled, reading: VitalsReading) -> RiskAssessment | None:
+        del event, reading
         return None
 
 
@@ -136,7 +141,7 @@ def test_risk_monitor_is_satisfied_structurally() -> None:
 def test_a_monitor_may_decline_to_decide() -> None:
     """`None` is a normal answer — usually "the rolling window is not full yet"."""
     event = VitalsSampled(occurred_at=SimTime(10), patient=PatientId("p1"), news2=3)
-    assert _Undecided().observe(event) is None
+    assert _Undecided().observe(event, _READING) is None
 
 
 def test_risk_assessment_carries_a_decided_verdict() -> None:
@@ -147,7 +152,7 @@ def test_risk_assessment_carries_a_decided_verdict() -> None:
     override that choice.
     """
     event = VitalsSampled(occurred_at=SimTime(10), patient=PatientId("p1"), news2=7)
-    assessment = _AlwaysEscalates().observe(event)
+    assessment = _AlwaysEscalates().observe(event, _READING)
     assert assessment is not None
     assert assessment.escalate is True
     assert assessment.patient == event.patient
