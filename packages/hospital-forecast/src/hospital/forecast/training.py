@@ -370,23 +370,30 @@ def retrain_loop(
     """Fit a challenger on the enlarged corpus; promote only if it is better.
 
     Returns the promoted bundle, or ``None`` when the champion is kept. The
-    challenger is trained and scored either way — "we checked and the incumbent
-    still wins" is a result worth having, and it is the one this returns ``None``
-    for rather than skipping the work.
+    challenger is trained, scored, **and stored** either way — "we checked and the
+    incumbent still wins" is a result worth having, and keeping the rejected
+    artifact means the comparison can be re-examined later rather than re-run.
     """
-    challenger = train_all(weeks, config, store, name=name, trained_at=trained_at)
+    # Read the incumbent BEFORE training. `train_all` persists the challenger, and
+    # `ModelStore.save` auto-promotes into an empty store -- so asking afterwards
+    # would find the challenger sitting in the champion slot and report "kept"
+    # for a run that had no incumbent at all.
     try:
-        champion_meta = store.champion(name)
+        incumbent: ArtifactMeta | None = store.champion(name)
     except KeyError:
+        incumbent = None
+
+    challenger = train_all(weeks, config, store, name=name, trained_at=trained_at)
+    if incumbent is None:
         store.promote(name, challenger.version)
         return challenger
 
-    if champion_meta.version == challenger.version:
+    if incumbent.version == challenger.version:
         # Same data, same config: content addressing already resolved them to one
         # artifact, so there is nothing to compare and nothing to promote.
         return None
 
-    champion_report = _report_from_meta(champion_meta, challenger.metrics)
+    champion_report = _report_from_meta(incumbent, challenger.metrics)
     if promote_if(champion_report, challenger.metrics):
         store.promote(name, challenger.version)
         return challenger

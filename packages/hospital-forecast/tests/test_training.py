@@ -324,3 +324,34 @@ def test_a_fitted_key_beats_the_activity_fallback() -> None:
     assert bundle.expected_for(activity, esi, complaint) == bundle.expected_service[key]
     # An unseen complaint on the same activity drops to the fallback instead.
     assert bundle.expected_for(activity, esi, "unheard_of") == bundle.fallback_service[activity]
+
+
+def test_the_first_retrain_reports_the_champion_it_installed(tmp_path: Path) -> None:
+    """An empty store has no incumbent, so the first challenger IS a promotion.
+
+    `train_all` persists the challenger and `ModelStore.save` auto-promotes into an
+    empty store. Reading the champion *after* training would therefore find the
+    challenger already in the champion slot and report `None` -- "we kept the
+    incumbent" -- for a run that had no incumbent and installed a new model.
+    """
+    store = ModelStore(tmp_path)
+    promoted = retrain_loop(store, _WEEKS, _CONFIG, promote_if=lambda _a, _b: False)
+    assert promoted is not None, "a first run has nothing to keep; it promotes"
+    assert store.champion("forecast").version == promoted.version
+
+
+def test_a_rejected_challenger_is_still_stored(tmp_path: Path) -> None:
+    """Keeping the rejected artifact lets the comparison be re-examined later."""
+    store = ModelStore(tmp_path)
+    train_all(_WEEKS, _CONFIG, store)
+    champion = store.champion("forecast").version
+
+    retrain_loop(
+        store,
+        _WEEKS,
+        _CONFIG.model_copy(update={"seed": 77}),
+        promote_if=lambda _a, _b: False,
+    )
+    versions = {m.version for m in store.list_versions("forecast")}
+    assert len(versions) == 2, "the challenger must be persisted even when rejected"
+    assert store.champion("forecast").version == champion

@@ -41,6 +41,7 @@ from hospital.core import (
     StaffRole,
     seconds,
 )
+from hospital.forecast import _estimators
 
 if TYPE_CHECKING:
     from hospital.forecast.arrivals import ArrivalIntensityModel, SurgeForecast
@@ -133,8 +134,6 @@ class ModelStore:
         A store whose only version is not champion would make ``load("latest")``
         fail on a fresh install, so the first save promotes itself.
         """
-        from hospital.forecast import _estimators
-
         target = self._dir(name, version)
         target.mkdir(parents=True, exist_ok=True)
         _estimators.dump(payload, target / _PAYLOAD_FILE)
@@ -170,12 +169,13 @@ class ModelStore:
         return meta.model_copy(update={"is_champion": version == self._champion_pointer(name)})
 
     def resolve(self, name: str, version: str = LATEST) -> str:
-        return self._champion_pointer(name) or "" if version == LATEST else version
+        """Resolve ``"latest"`` to the champion; any other value is taken literally."""
+        if version != LATEST:
+            return version
+        return self._champion_pointer(name) or ""
 
     def load(self, name: str, version: str = LATEST) -> tuple[Any, ArtifactMeta]:
         """Load a payload plus its metadata. ``"latest"`` resolves to the champion."""
-        from hospital.forecast import _estimators
-
         resolved = self.resolve(name, version)
         if not resolved:
             raise KeyError(f"no champion registered for {name}")
