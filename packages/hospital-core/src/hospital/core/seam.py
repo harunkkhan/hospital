@@ -15,14 +15,14 @@ cancelled and recreated (which would thrash the sim and UI).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from hospital.core.entities import FloorLayout, Patient
 from hospital.core.enums import BayStatus, EsiAcuity, StaffRole
 from hospital.core.errors import SeamViolation
-from hospital.core.events import EventEnvelope
+from hospital.core.events import EventEnvelope, VitalsSampled
 from hospital.core.ids import BayId, NodeId, PatientId, StaffId, TaskId
 from hospital.core.models import FrozenModel
 from hospital.core.time import Duration, SimTime
@@ -192,6 +192,51 @@ class DecisionResponse(FrozenModel):
         return self
 
 
+class RiskAssessment(FrozenModel):
+    """A monitor's verdict on one patient at one instant (doc 06 §7).
+
+    ``escalate`` is the monitor's *decision*, already threshold-applied, because
+    the threshold is a modelling choice (chosen on validation to hit a target
+    sensitivity) and the engine must not re-derive it from ``probability`` with a
+    constant of its own. ``news2`` rides along because the engine stamps it onto
+    the events it writes, and because it is the transparent fallback a reviewer
+    can check the model against.
+    """
+
+    patient: PatientId
+    at: SimTime
+    probability: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    news2: int = Field(ge=0)
+    escalate: bool
+
+
+@runtime_checkable
+class RiskMonitor(Protocol):
+    """The deterioration seam: ``sim`` calls it, ``forecast`` implements it (doc 06 §3).
+
+    The dependency graph runs downward — ``sim`` may not import ``forecast``, and
+    ``forecast`` may not import ``sim`` — so a live risk model cannot be reached
+    by either side directly. It is injected instead, through this ``core``-owned
+    Protocol: the engine streams each ``VitalsSampled`` it writes into
+    :meth:`observe`, and acts on what comes back.
+
+    **The monitor never writes.** ``sim`` remains the sole ``EventLog`` writer
+    (nuance 1.4): on a positive decision the *engine* appends
+    ``DeteriorationDetected`` then ``EmergencyRaised``. A monitor that could
+    append would be a second writer, and the log would stop being a single
+    replayable history.
+
+    :meth:`observe` returns ``None`` while the model has nothing to say — most
+    often because a rolling window is not yet full — which is a normal state, not
+    an error. A run with no monitor injected behaves exactly as one whose monitor
+    always returns ``None``, which is what keeps the M1/M2 engine byte-identical.
+    """
+
+    def observe(self, event: VitalsSampled) -> RiskAssessment | None:
+        """Take one sampled reading; return an assessment, or ``None`` if undecided."""
+        ...
+
+
 __all__ = [
     "BayState",
     "DecisionInput",
@@ -199,6 +244,8 @@ __all__ = [
     "Plan",
     "PlanDiff",
     "PlanItem",
+    "RiskAssessment",
+    "RiskMonitor",
     "StaffState",
     "TaskSpec",
     "WaitingPatient",
