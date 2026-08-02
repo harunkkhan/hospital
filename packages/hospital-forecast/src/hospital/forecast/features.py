@@ -611,6 +611,39 @@ def to_matrix(
     )
 
 
+def concat_frames(frames: Sequence[FeatureFrame]) -> FeatureFrame:
+    """Stack frames that share a column contract — the multi-week training set.
+
+    Separate runs are separate timelines that each start at the week's origin, so
+    they must NOT be spliced into one ``EventLog`` and extracted together: that
+    would interleave unrelated instants and make every congestion feature a
+    fiction. Extract per week, then stack the rows here.
+
+    Frames must agree on ``feature_names``; a mismatch means two different column
+    orders are about to be stacked into one matrix, which trains a model on
+    scrambled inputs and reports nothing wrong.
+    """
+    usable = [frame for frame in frames if frame.matrix]
+    if not usable:
+        raise ValueError("no non-empty frames to concatenate")
+    names = usable[0].feature_names
+    for frame in usable[1:]:
+        if frame.feature_names != names:
+            raise ValueError("cannot stack frames with different feature_names")
+    labelled = [frame for frame in usable if frame.labels is not None]
+    if labelled and len(labelled) != len(usable):
+        raise ValueError("cannot stack labelled and unlabelled frames")
+    labels: tuple[float, ...] | None = None
+    if labelled:
+        labels = tuple(value for frame in usable for value in (frame.labels or ()))
+    return FeatureFrame(
+        feature_names=names,
+        matrix=tuple(row for frame in usable for row in frame.matrix),
+        row_ids=tuple(row_id for frame in usable for row_id in frame.row_ids),
+        labels=labels,
+    )
+
+
 PATIENT_FEATURE_NAMES: Final[tuple[str, ...]] = (
     "esi",
     "is_ambulance",
@@ -678,6 +711,7 @@ __all__ = [
     "PatientFeatures",
     "VitalsWindowFeatures",
     "WindowFeatures",
+    "concat_frames",
     "online_vitals_features",
     "patient_features",
     "prefix",

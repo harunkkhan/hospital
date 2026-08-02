@@ -108,7 +108,7 @@ class SynthWeek(NamedTuple):
         )
 
 
-def _draw_patient(streams: RandomStreams, index: int, at: SimTime) -> Patient:
+def _draw_patient(streams: RandomStreams, index: int, at: SimTime, week_index: int) -> Patient:
     key = ("synth", "patient", index)
     esi_g = streams.substream(*key, "esi")
     complaint_g = streams.substream(*key, "complaint")
@@ -118,7 +118,9 @@ def _draw_patient(streams: RandomStreams, index: int, at: SimTime) -> Patient:
     complaint = str(complaint_g.choice(_COMPLAINTS))
     imaging = (ZoneType.IMAGING,) if workup_g.random() < 0.35 else ()
     return Patient(
-        id=PatientId(f"pt_{index:05d}"),
+        # Week-scoped: pooling several weeks must not collide two patients into
+        # one, which would silently corrupt every per-patient join.
+        id=PatientId(f"pt_{week_index:02d}_{index:05d}"),
         arrival_time=at,
         arrival_mode=ArrivalMode.AMBULANCE if mode_g.random() < 0.2 else ArrivalMode.WALK_IN,
         esi=esi,
@@ -172,7 +174,7 @@ def synth_week(
         for _ in range(int(g.poisson(rate))):
             offset = int(g.random() * hours(1).root)
             at = SimTime(hours(hour).root + offset)
-            patient = _draw_patient(streams, index, at)
+            patient = _draw_patient(streams, index, at, week_index)
             arrivals.append((at, patient))
             roster[patient.id] = patient
             index += 1
