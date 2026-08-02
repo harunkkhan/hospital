@@ -1,17 +1,46 @@
-"""Vitals trajectory sampling — **M3**, not implemented in M1 (doc 02 §2.4).
+"""Vitals trajectory sampling — the deterioration label source (doc 02 §2.4, M3).
 
-The full model (acuity-baseline draw, NEWS2-informed deterioration schedule,
-per-tick content-addressable measurement noise) is deferred to milestone 3,
-where it feeds ``forecast.deterioration`` training labels. The M3 signature is
-declared now — with its supporting frozen models — so downstream milestones can
-depend on the *shape* of this API before the sampling logic lands; calling it
-today raises :class:`NotImplementedError` rather than silently returning a
-placeholder trajectory.
+Each patient gets a physiological baseline drawn from their acuity, a slow
+random walk around it, and — for the subset that deteriorates — a monotone
+drift toward instability starting at a sampled ``onset``. Measurements are then
+observed through additive noise, so the recorded stream is *noisy observations
+of a latent trajectory* rather than the trajectory itself. That gap is the whole
+point: ``forecast.deterioration`` has to predict the latent event from the noisy
+view, which is only a real learning problem if the noise exists.
+
+Determinism (nuance 1.8): every draw comes from a content-addressed
+``streams.substream("world", "vitals", patient, …)`` key, so a patient's
+trajectory is a pure function of ``(seed, patient id)`` — independent of how
+many other patients were sampled first, and identical across arms under CRN.
+The per-sample noise is keyed by tick index for the same reason.
+
+Ground truth is carried explicitly: :attr:`VitalsStream.deteriorates` and
+:attr:`VitalsStream.onset` are the *labels*, not observable signals. Training
+code may read them; the online monitor may not (it sees only ``VitalsSampled``
+events). Keeping the label on the stream — rather than inferring it from the
+samples — is what makes "did the classifier find it?" a well-posed question.
+
+Units are integer-scaled to keep the model exactly reproducible: temperature is
+tenths of a degree C (``temp_c_x10``), everything else is a whole unit.
 """
 
 from __future__ import annotations
 
-from hospital.core import Duration, FrozenModel, Patient, PatientId, RandomStreams
+from typing import TYPE_CHECKING, Final, NamedTuple
+
+from hospital.core import (
+    Duration,
+    EsiAcuity,
+    FrozenModel,
+    Patient,
+    PatientId,
+    RandomStreams,
+)
+
+if TYPE_CHECKING:
+    import numpy as np
+
+_MICROS_PER_MINUTE: Final[int] = 60 * 1_000_000
 
 
 class VitalsSample(FrozenModel):
@@ -35,15 +64,187 @@ class VitalsStream(FrozenModel):
     onset: Duration | None = None
 
 
+class _Baseline(NamedTuple):
+    """A patient's latent starting physiology, before walk/drift/noise."""
+
+    hr: float
+    spo2: float
+    sbp: float
+    dbp: float
+    temp_c_x10: float
+    rr: float
+
+
+# Population means by acuity. ESI-1 arrives already deranged and ESI-5 near
+# normal, so acuity alone carries real signal -- which is exactly why the
+# classifier must be scored against a NEWS2-only baseline (doc 06 §15) rather
+# than against chance.
+_BASELINE_BY_ESI: Final[dict[EsiAcuity, _Baseline]] = {
+    EsiAcuity.ESI1: _Baseline(hr=118.0, spo2=91.0, sbp=98.0, dbp=60.0, temp_c_x10=381.0, rr=26.0),
+    EsiAcuity.ESI2: _Baseline(hr=106.0, spo2=94.0, sbp=110.0, dbp=68.0, temp_c_x10=378.0, rr=22.0),
+    EsiAcuity.ESI3: _Baseline(hr=92.0, spo2=96.0, sbp=122.0, dbp=74.0, temp_c_x10=372.0, rr=18.0),
+    EsiAcuity.ESI4: _Baseline(hr=82.0, spo2=97.0, sbp=126.0, dbp=78.0, temp_c_x10=369.0, rr=16.0),
+    EsiAcuity.ESI5: _Baseline(hr=76.0, spo2=98.0, sbp=124.0, dbp=78.0, temp_c_x10=368.0, rr=14.0),
+}
+
+# Between-patient spread of the baseline (SD, in each vital's own units).
+_BASELINE_SD: Final[_Baseline] = _Baseline(
+    hr=9.0, spo2=1.6, sbp=12.0, dbp=8.0, temp_c_x10=4.0, rr=2.0
+)
+
+# Per-tick random-walk SD of the LATENT state (physiological drift).
+_WALK_SD: Final[_Baseline] = _Baseline(hr=2.2, spo2=0.35, sbp=2.6, dbp=1.8, temp_c_x10=1.1, rr=0.55)
+
+# Measurement noise (SD) added on top of the latent state at observation time.
+# This is what the monitor actually sees, and why a single reading is weak
+# evidence while a window of them is not.
+_NOISE_SD: Final[_Baseline] = _Baseline(hr=3.0, spo2=0.7, sbp=4.0, dbp=3.0, temp_c_x10=1.5, rr=0.9)
+
+# Full-severity deterioration displacement, reached `_RAMP` after onset.
+_DETERIORATION_SHIFT: Final[_Baseline] = _Baseline(
+    hr=42.0, spo2=-9.0, sbp=-30.0, dbp=-18.0, temp_c_x10=14.0, rr=14.0
+)
+_RAMP: Final[Duration] = Duration(25 * _MICROS_PER_MINUTE)
+
+# P(a patient deteriorates at all), by acuity.
+_DETERIORATION_RISK: Final[dict[EsiAcuity, float]] = {
+    EsiAcuity.ESI1: 0.34,
+    EsiAcuity.ESI2: 0.18,
+    EsiAcuity.ESI3: 0.07,
+    EsiAcuity.ESI4: 0.02,
+    EsiAcuity.ESI5: 0.01,
+}
+
+# Physiological clamps: a sampled vital never leaves the range a real monitor
+# could display, so a long tail cannot produce a negative pulse.
+_LIMITS: Final[dict[str, tuple[int, int]]] = {
+    "hr": (25, 220),
+    "spo2": (50, 100),
+    "sbp": (50, 220),
+    "dbp": (25, 140),
+    "temp_c_x10": (330, 425),
+    "rr": (4, 60),
+}
+
+
+def _clamp(name: str, value: float) -> int:
+    """Round to the unit a monitor displays, then hold inside physiological limits.
+
+    ``round`` is banker's rounding, the same tie rule ``core.time`` uses, so a
+    vitals tick and a duration never disagree about how a .5 resolves.
+    """
+    low, high = _LIMITS[name]
+    return max(low, min(high, round(value)))
+
+
+def _severity(elapsed: Duration, onset: Duration | None) -> float:
+    """How far into deterioration this instant is, on ``[0, 1]``.
+
+    Zero before onset, then a linear ramp over ``_RAMP`` to full severity. A ramp
+    rather than a step is what makes early detection *possible but not trivial*:
+    the signal is present for minutes before it is unmistakable, which is the
+    window the classifier is supposed to exploit.
+    """
+    if onset is None or elapsed <= onset:
+        return 0.0
+    return min(1.0, (elapsed.root - onset.root) / _RAMP.root)
+
+
+def _observe(
+    g: np.random.Generator, latent: _Baseline, elapsed: Duration, onset: Duration | None
+) -> VitalsSample:
+    """Add deterioration displacement and measurement noise to the latent state."""
+    severity = _severity(elapsed, onset)
+    noise = _NOISE_SD
+    shift = _DETERIORATION_SHIFT
+    return VitalsSample(
+        elapsed=elapsed,
+        hr=_clamp("hr", latent.hr + severity * shift.hr + g.normal(0.0, noise.hr)),
+        spo2=_clamp("spo2", latent.spo2 + severity * shift.spo2 + g.normal(0.0, noise.spo2)),
+        sbp=_clamp("sbp", latent.sbp + severity * shift.sbp + g.normal(0.0, noise.sbp)),
+        dbp=_clamp("dbp", latent.dbp + severity * shift.dbp + g.normal(0.0, noise.dbp)),
+        temp_c_x10=_clamp(
+            "temp_c_x10",
+            latent.temp_c_x10 + severity * shift.temp_c_x10 + g.normal(0.0, noise.temp_c_x10),
+        ),
+        rr=_clamp("rr", latent.rr + severity * shift.rr + g.normal(0.0, noise.rr)),
+    )
+
+
+def _draw_baseline(g: np.random.Generator, esi: EsiAcuity) -> _Baseline:
+    mean = _BASELINE_BY_ESI[esi]
+    sd = _BASELINE_SD
+    return _Baseline(*(float(g.normal(m, s)) for m, s in zip(mean, sd, strict=True)))
+
+
+def _walk(g: np.random.Generator, latent: _Baseline) -> _Baseline:
+    """One tick of latent physiological drift (a random walk, not observation noise)."""
+    return _Baseline(*(v + float(g.normal(0.0, s)) for v, s in zip(latent, _WALK_SD, strict=True)))
+
+
 def generate_vitals(
     patient: Patient, streams: RandomStreams, *, until: Duration, cadence: Duration
 ) -> VitalsStream:
-    """Sample a per-patient vitals trajectory up to ``until`` at ``cadence`` (M3).
+    """Sample a per-patient vitals trajectory up to ``until`` at ``cadence``.
 
-    Not implemented in M1/M2 — the signature is fixed so callers can be written
-    against it now. Raises :class:`NotImplementedError` unconditionally.
+    Pure construction from ``(seed, patient.id)``: no wall clock, no global
+    state, and no dependence on sampling order. ``until`` is inclusive of the
+    final on-cadence tick, so a stream always carries at least the arrival
+    reading (``elapsed == 0``).
+
+    Whether the patient deteriorates, and when, is drawn here and reported on the
+    returned stream as ground truth. Onset is confined to ``[0.15, 0.85]`` of the
+    observation span so that a deteriorating patient always has both a pre-onset
+    baseline to contrast against and enough post-onset ticks to be detectable —
+    otherwise a "missed" detection would just be a labelling artefact.
     """
-    raise NotImplementedError("M3")
+    if cadence.root <= 0:
+        raise ValueError("cadence must be positive")
+    if until.root < 0:
+        raise ValueError("until must be non-negative")
+
+    pid = patient.id.root
+    risk = _DETERIORATION_RISK[patient.esi]
+    deteriorates = bool(streams.substream("world", "vitals", pid, "deteriorates").random() < risk)
+
+    onset: Duration | None = None
+    if deteriorates and until.root > 0:
+        fraction = float(streams.substream("world", "vitals", pid, "onset").uniform(0.15, 0.85))
+        onset = Duration(int(until.root * fraction))
+
+    latent = _draw_baseline(streams.substream("world", "vitals", pid, "baseline"), patient.esi)
+    ticks = int(until.root // cadence.root)
+    samples: list[VitalsSample] = []
+    for index in range(ticks + 1):
+        elapsed = Duration(index * cadence.root)
+        if index > 0:
+            latent = _walk(streams.substream("world", "vitals", pid, "walk", index), latent)
+        observed = streams.substream("world", "vitals", pid, "observe", index)
+        samples.append(_observe(observed, latent, elapsed, onset))
+
+    return VitalsStream(
+        patient=patient.id,
+        samples=tuple(samples),
+        deteriorates=deteriorates,
+        onset=onset,
+    )
 
 
-__all__ = ["VitalsSample", "VitalsStream", "generate_vitals"]
+def deterioration_label(stream: VitalsStream, at: Duration, *, horizon: Duration) -> bool:
+    """Ground truth for "does onset fall in ``(at, at + horizon]``?" (doc 06 §13-5).
+
+    The classifier's target is a *future* crossing, not the present state, so the
+    label is defined here — beside the generator that owns the truth — rather
+    than re-derived from samples wherever a training frame is built.
+    """
+    if not stream.deteriorates or stream.onset is None:
+        return False
+    return at.root < stream.onset.root <= at.root + horizon.root
+
+
+__all__ = [
+    "VitalsSample",
+    "VitalsStream",
+    "deterioration_label",
+    "generate_vitals",
+]
