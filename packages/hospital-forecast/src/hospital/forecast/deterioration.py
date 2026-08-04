@@ -259,6 +259,18 @@ def _sensitivity_and_false_alarms(
     return sensitivity, false_alarm_rate
 
 
+def operating_point(
+    probabilities: Sequence[float], labels: Sequence[int], threshold: float
+) -> tuple[float, float]:
+    """``(sensitivity, false_alarm_rate)`` at ``threshold`` on the given data.
+
+    Public because a report must be able to recompute the operating point on a fold
+    the threshold was NOT chosen on. Reusing the numbers from threshold selection
+    would restate the calibration fold's own performance as held-out evidence.
+    """
+    return _sensitivity_and_false_alarms(probabilities, labels, threshold)
+
+
 def choose_threshold(
     probabilities: Sequence[float],
     labels: Sequence[int],
@@ -493,4 +505,5 @@ __all__ = [
     "fit_deterioration_model",
     "news2_for_features",
     "news2_score",
+    "operating_point",
 ]

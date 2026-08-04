@@ -30,9 +30,11 @@ from hospital.forecast.training import (
     ValidationReport,
     WeekData,
     data_hash,
+    fit_models,
     improves_deterioration_auroc,
     retrain_loop,
     rolling_origin_splits,
+    score_models,
     train_all,
     validate_bundle,
 )
@@ -57,7 +59,9 @@ def _week(index: int) -> WeekData:
     )
 
 
-_WEEKS = [_week(i) for i in range(3)]
+# Four weeks: train / calibrate / score needs three disjoint folds, and the
+# rolling-origin protocol needs at least one week to train on.
+_WEEKS = [_week(i) for i in range(4)]
 
 
 # ----------------------------------------------------------------- splitting
@@ -114,8 +118,13 @@ def test_the_same_data_and_config_reproduce_the_same_version(tmp_path: Path) -> 
 def test_train_all_scores_on_the_last_week_only(tmp_path: Path) -> None:
     bundle = train_all(_WEEKS, _CONFIG, ModelStore(tmp_path))
     report = bundle.metrics
-    assert report.holdout == ("run-002",)
+    assert report.holdout == ("run-003",), "the LAST week is scored"
+    assert report.calibration == ("run-002",), "the second-to-last is the calibration fold"
     assert report.train == ("run-000", "run-001")
+    # The three folds are disjoint -- that is the whole point of the split.
+    assert not set(report.train) & set(report.calibration)
+    assert not set(report.train) & set(report.holdout)
+    assert not set(report.calibration) & set(report.holdout)
     assert set(report.per_model) >= {"arrivals", "service_time", "deterioration"}
     assert report.metric("deterioration", "auroc") is not None
     assert report.metric("service_time", "mae_log") is not None
@@ -123,10 +132,10 @@ def test_train_all_scores_on_the_last_week_only(tmp_path: Path) -> None:
 
 
 def test_training_refuses_too_few_weeks(tmp_path: Path) -> None:
-    """Two weeks cannot both train and hold out — say so instead of degrading."""
+    """Three folds need four weeks — say so instead of silently reusing one."""
     with pytest.raises(ValueError, match="at least"):
-        train_all(_WEEKS[:2], _CONFIG, ModelStore(tmp_path))
-    assert MIN_WEEKS == 3
+        train_all(_WEEKS[:3], _CONFIG, ModelStore(tmp_path))
+    assert MIN_WEEKS == 4
 
 
 def test_a_trained_bundle_round_trips_through_the_store(tmp_path: Path) -> None:
@@ -136,7 +145,7 @@ def test_a_trained_bundle_round_trips_through_the_store(tmp_path: Path) -> None:
     loaded, meta = store.load("forecast", bundle.version)
     assert meta.version == bundle.version
 
-    reloaded_report = validate_bundle(bundle.version, store, _WEEKS[-1], _WEEKS[:-1], _CONFIG)
+    reloaded_report = validate_bundle(bundle.version, store, _WEEKS[-1], _WEEKS[:-2], _CONFIG)
     assert reloaded_report.metric("deterioration", "auroc") == bundle.metrics.metric(
         "deterioration", "auroc"
     )
@@ -390,3 +399,42 @@ def test_data_hash_covers_every_input_that_shapes_the_fit() -> None:
 
 def test_data_hash_is_a_function_of_the_corpus_not_the_call_order() -> None:
     assert data_hash(_WEEKS) == data_hash(list(reversed(_WEEKS)))
+
+
+def test_the_scored_week_is_not_the_calibration_week(tmp_path: Path) -> None:
+    """The report's own provenance must show three disjoint folds.
+
+    The calibrator and the threshold sweep both see the calibration week. Scoring on
+    that same week restates a fitting fold as held-out evidence — which is what the
+    reported AUROC/Brier/sensitivity previously did.
+    """
+    report = train_all(_WEEKS, _CONFIG, ModelStore(tmp_path)).metrics
+    assert report.calibration and report.holdout
+    assert report.calibration != report.holdout
+
+
+def test_scoring_refuses_to_reuse_the_calibration_week_as_holdout() -> None:
+    """Caught in `score_models`, not left to the caller to remember."""
+    models = fit_models(_WEEKS[:2], _WEEKS[2], _CONFIG)
+    with pytest.raises(ValueError, match="same week"):
+        score_models(models, _WEEKS[:2], _WEEKS[2], _CONFIG, calibration=_WEEKS[2])
+
+
+def test_the_reported_operating_point_is_recomputed_on_the_holdout(tmp_path: Path) -> None:
+    """Sensitivity/FAR must describe the scored week, not threshold selection.
+
+    They used to be copied straight off the model, where they described the
+    calibration fold. The two genuinely differ, so equality would be the bug.
+    """
+    store = ModelStore(tmp_path)
+    bundle = train_all(_WEEKS, _CONFIG, store)
+    loaded, _ = store.load("forecast", bundle.version)
+
+    reported = bundle.metrics.per_model["deterioration"]
+    assert reported["threshold"] == pytest.approx(loaded.deterioration.threshold)
+    # The holdout's operating point is computed independently of the model's own
+    # stored (calibration-fold) numbers.
+    assert "sensitivity" in reported and "false_alarm_rate" in reported
+    assert 0.0 <= reported["sensitivity"] <= 1.0
+    assert 0.0 <= reported["false_alarm_rate"] <= 1.0
+    assert reported["positives"] > 0, "a holdout with no positives cannot score recall"

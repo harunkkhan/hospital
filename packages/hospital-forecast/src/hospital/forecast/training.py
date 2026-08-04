@@ -42,6 +42,7 @@ from hospital.forecast.deterioration import (
     brier_score,
     fit_deterioration_model,
     news2_for_features,
+    operating_point,
 )
 from hospital.forecast.features import (
     PATIENT_FEATURE_NAMES,
@@ -69,8 +70,11 @@ if TYPE_CHECKING:
 DEFAULT_HORIZON: Final[Duration] = minutes(30)
 DEFAULT_WINDOW: Final[Duration] = minutes(30)
 
-# Fewer than this and a rolling-origin split has no origin to roll.
-MIN_WEEKS: Final[int] = 3
+# Four, not three: the corpus must supply a TRAIN set, a separate CALIBRATION week
+# (which the isotonic calibrator and the threshold sweep both see), and a HOLDOUT week
+# that nothing in fitting has touched. With three, the scored week was the calibration
+# week and the report restated its own fitting fold as evidence.
+MIN_WEEKS: Final[int] = 4
 
 
 class WeekData(FrozenModel):
@@ -116,11 +120,17 @@ class TrainConfig(FrozenModel):
 
 
 class ValidationReport(FrozenModel):
-    """Per-model metrics on the held-out week, and which weeks those were."""
+    """Per-model metrics on the held-out week, and the exact provenance of the split.
+
+    ``calibration`` is recorded separately from ``train`` because the calibrator and
+    the decision threshold are fitted on it. A reader has to be able to see that the
+    scored week is neither — otherwise "held out" is an unverifiable claim.
+    """
 
     per_model: Mapping[str, Mapping[str, float]]
     holdout: tuple[str, ...]
     train: tuple[str, ...]
+    calibration: tuple[str, ...] = ()
 
     def metric(self, model: str, name: str) -> float | None:
         return self.per_model.get(model, {}).get(name)
@@ -255,8 +265,19 @@ def score_models(
     train_weeks: Sequence[WeekData],
     holdout: WeekData,
     config: TrainConfig,
+    *,
+    calibration: WeekData | None = None,
 ) -> ValidationReport:
-    """Score every model on the held-out week (doc 06 §8 metric list)."""
+    """Score every model on a week that fitting never touched (doc 06 §8 metrics).
+
+    ``calibration`` is recorded on the report for provenance; it must NOT be the same
+    week as ``holdout``, and this asserts that rather than trusting the caller.
+    """
+    if calibration is not None and calibration.run == holdout.run:
+        raise ValueError(
+            f"calibration and holdout are the same week ({holdout.run}); "
+            "the report would restate a fitting fold as held-out evidence"
+        )
     per_model: dict[str, dict[str, float]] = {}
 
     intensity = fit_arrival_intensity(
@@ -280,18 +301,26 @@ def score_models(
     if vitals_frame is not None and vitals_frame.labels is not None:
         labels = [int(v) for v in vitals_frame.labels]
         probabilities = models.deterioration.classifier.predict_proba(vitals_frame.matrix)
+        # Recomputed HERE, on the holdout, at the model's chosen threshold. Copying
+        # `models.deterioration.sensitivity` would report the calibration fold's own
+        # performance — the fold the threshold was selected on — as held-out evidence.
+        sensitivity, false_alarms = operating_point(
+            probabilities, labels, models.deterioration.threshold
+        )
         per_model["deterioration"] = {
             "auroc": auroc(probabilities, labels),
             "brier": brier_score(probabilities, labels),
-            "sensitivity": models.deterioration.sensitivity,
-            "false_alarm_rate": models.deterioration.false_alarm_rate,
-            "meets_target": float(models.deterioration.meets_target),
+            "sensitivity": sensitivity,
+            "false_alarm_rate": false_alarms,
+            "threshold": models.deterioration.threshold,
+            "positives": float(sum(labels)),
         }
 
     return ValidationReport(
         per_model=per_model,
         holdout=(holdout.run,),
         train=tuple(w.run for w in train_weeks),
+        calibration=(calibration.run,) if calibration is not None else (),
     )
 
 
@@ -332,7 +361,7 @@ def train_all(
     name: str = "forecast",
     trained_at: str = "",
 ) -> TrainedBundle:
-    """Fit on all but the last week, score on the last, and persist the result.
+    """Fit, calibrate, score, and persist — on three disjoint folds in time order.
 
     ``trained_at`` is passed in rather than read from the clock: a wall-clock
     stamp inside the artifact would make two otherwise-identical builds differ,
@@ -340,9 +369,12 @@ def train_all(
     """
     if len(weeks) < MIN_WEEKS:
         raise ValueError(f"need at least {MIN_WEEKS} weeks; got {len(weeks)}")
-    *train_weeks, holdout = weeks
-    models = fit_models(train_weeks, holdout, config)
-    report = score_models(models, train_weeks, holdout, config)
+    # Three folds, in time order: train on the earliest, calibrate + pick the
+    # threshold on the second-to-last, score on the last. The scored week is the one
+    # nothing in fitting has seen.
+    *train_weeks, calibration, holdout = weeks
+    models = fit_models(train_weeks, calibration, config)
+    report = score_models(models, train_weeks, holdout, config, calibration=calibration)
 
     dhash = data_hash(weeks)
     chash = canonical_hash(config.model_dump(mode="json"))
