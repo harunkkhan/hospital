@@ -33,10 +33,19 @@ from hospital.core import (
     Patient,
     PatientId,
     RandomStreams,
+    SimTime,
+    hours,
     minutes,
 )
 from hospital.data.vitals import VitalsStream, deterioration_label
-from hospital.forecast.arrivals import fit_arrival_intensity, poisson_deviance
+from hospital.forecast.arrivals import (
+    ArrivalIntensityModel,
+    SurgeForecaster,
+    fit_arrival_intensity,
+    fit_surge_forecaster,
+    poisson_deviance,
+    quantile_coverage,
+)
 from hospital.forecast.deterioration import (
     auroc,
     brier_score,
@@ -159,6 +168,11 @@ class FittedModels:
     los_regressor: ServiceTimeRegressor
     deterioration: DeteriorationModel
     encoder: ComplaintEncoder
+    # Persisted with the rest, not refitted at scoring time: `bundle_from_models`
+    # needs the arrival model, so an artifact that omitted it could not produce a
+    # `PredictionBundle` at all -- the ML arm would have nothing to load.
+    arrivals: ArrivalIntensityModel
+    surge: SurgeForecaster | None = None
 
 
 def rolling_origin_splits(runs: Sequence[str]) -> tuple[tuple[tuple[str, ...], str], ...]:
@@ -240,6 +254,23 @@ def fit_models(
         concat_frames(los_frames), encoder, streams=streams, quantiles=(0.9,)
     )
 
+    arrivals = fit_arrival_intensity(
+        [w.log for w in train_weeks], train_weeks[0].week, smoothing=config.smoothing
+    )
+    # The surge head needs enough binned history to build lead-time rows; on a thin
+    # corpus it is left unfitted rather than trained on almost nothing.
+    surge: SurgeForecaster | None = None
+    try:
+        surge = fit_surge_forecaster(
+            [w.log for w in train_weeks],
+            train_weeks[0].week,
+            streams=streams,
+            quantile=config.surge_quantile,
+            smoothing=config.smoothing,
+        )
+    except ValueError:
+        surge = None
+
     train_vitals = [f for f in (_vitals_frame(w, config) for w in train_weeks) if f is not None]
     valid_vitals = _vitals_frame(validation, config)
     if not train_vitals or valid_vitals is None:
@@ -257,6 +288,8 @@ def fit_models(
         los_regressor=regressor,
         deterioration=deterioration,
         encoder=encoder,
+        arrivals=arrivals,
+        surge=surge,
     )
 
 
@@ -280,15 +313,30 @@ def score_models(
         )
     per_model: dict[str, dict[str, float]] = {}
 
-    intensity = fit_arrival_intensity(
-        [w.log for w in train_weeks], holdout.week, smoothing=config.smoothing
-    )
-    observed = [float(row.count) for row in window_features(holdout.log, holdout.week)]
-    predicted = [
-        intensity.expected_arrivals(row.window, holdout.week)
-        for row in window_features(holdout.log, holdout.week)
-    ]
+    # The model being scored, not a fresh fit. Refitting here would have scored an
+    # intensity that no artifact contains, so the reported deviance described nothing
+    # a consumer could load.
+    rows = window_features(holdout.log, holdout.week)
+    observed = [float(row.count) for row in rows]
+    predicted = [models.arrivals.expected_arrivals(row.window, holdout.week) for row in rows]
     per_model["arrivals"] = {"poisson_deviance": poisson_deviance(observed, predicted)}
+    if models.surge is not None:
+        forecast = models.surge.predict(
+            holdout.log, SimTime(holdout.week.start.root + hours(24).root), holdout.week
+        )
+        actual = {row.window.start.root: float(row.count) for row in rows}
+        upper = [
+            (actual[w.start.root], u)
+            for w, u in zip(forecast.lead_bins, forecast.upper_q, strict=True)
+            if w.start.root in actual
+        ]
+        if upper:
+            per_model["surge"] = {
+                "quantile_coverage": quantile_coverage(
+                    [a for a, _ in upper], [u for _, u in upper]
+                ),
+                "quantile": models.surge.quantile,
+            }
 
     los_frame = _los_frame(holdout, models.encoder)
     if los_frame is not None:

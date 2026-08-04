@@ -14,7 +14,8 @@ import pytest
 from _forecast_fixtures import synth_week, vitals_cohort
 
 from hospital.core import Activity, Duration, EsiAcuity, SimTime, hours, minutes, seconds
-from hospital.forecast.arrivals import fit_arrival_intensity
+from hospital.forecast.arrivals import fit_arrival_intensity, poisson_deviance
+from hospital.forecast.features import window_features
 from hospital.forecast.model_store import (
     ArtifactMeta,
     ModelStore,
@@ -438,3 +439,50 @@ def test_the_reported_operating_point_is_recomputed_on_the_holdout(tmp_path: Pat
     assert 0.0 <= reported["sensitivity"] <= 1.0
     assert 0.0 <= reported["false_alarm_rate"] <= 1.0
     assert reported["positives"] > 0, "a holdout with no positives cannot score recall"
+
+
+def test_a_loaded_artifact_can_build_a_prediction_bundle(tmp_path: Path) -> None:
+    """The whole point of the store: load an artifact, get solver inputs.
+
+    `bundle_from_models` needs the arrival model. While `FittedModels` omitted it,
+    `store.load()` could not produce a bundle at all, so the ML arm of the A/B had
+    nothing to be fed — and `config.surge_quantile` affected no artifact.
+    """
+    store = ModelStore(tmp_path)
+    bundle_meta = train_all(_WEEKS, _CONFIG, store)
+    models, _ = store.load("forecast", bundle_meta.version)
+
+    assert models.arrivals is not None
+    assert len(models.arrivals.rates_per_hour) > 0
+
+    predictions = bundle_from_models(
+        bundle_meta.version, service_time=models.service_table, arrivals=models.arrivals
+    )
+    assert isinstance(predictions, PredictionBundle)
+    assert predictions.arrival_rates_per_hour == models.arrivals.rates_per_hour
+    assert predictions.fallback_service, "the bundle must carry usable expected durations"
+
+
+def test_the_scored_arrival_model_is_the_one_persisted(tmp_path: Path) -> None:
+    """Scoring must describe the artifact, not a fit made only to produce a number."""
+    store = ModelStore(tmp_path)
+    meta = train_all(_WEEKS, _CONFIG, store)
+    models, _ = store.load("forecast", meta.version)
+
+    rows = window_features(_WEEKS[-1].log, _WEEKS[-1].week)
+    expected = poisson_deviance(
+        [float(r.count) for r in rows],
+        [models.arrivals.expected_arrivals(r.window, _WEEKS[-1].week) for r in rows],
+    )
+    assert meta.metrics.metric("arrivals", "poisson_deviance") == pytest.approx(expected)
+
+
+def test_the_surge_quantile_reaches_the_artifact(tmp_path: Path) -> None:
+    """A config field that changes no fitted model is a false provenance claim."""
+    store = ModelStore(tmp_path)
+    meta = train_all(_WEEKS, _CONFIG.model_copy(update={"surge_quantile": 0.8}), store)
+    models, _ = store.load("forecast", meta.version)
+    if models.surge is not None:
+        assert models.surge.quantile == 0.8
+    else:  # pragma: no cover - thin corpora legitimately skip the surge head
+        assert meta.metrics.metric("surge", "quantile_coverage") is None
