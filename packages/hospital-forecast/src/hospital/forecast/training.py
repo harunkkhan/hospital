@@ -296,8 +296,32 @@ def score_models(
 
 
 def data_hash(weeks: Sequence[WeekData]) -> str:
-    """Content address for a training corpus: the runs and their log bytes."""
-    return canonical_hash([[w.run, w.log.to_jsonl()] for w in weeks])
+    """Content address for a training corpus — **every** input that shapes the fit.
+
+    The log alone is not enough. The roster supplies ``complaint`` and the workup
+    counts (which key the service-time table and populate the LOS features), the
+    vitals streams and their labels are the entire deterioration training set, and
+    the operating week sets the binning. Hashing only the log meant two corpora that
+    fit visibly different models could share a version string — and
+    ``ModelStore.save`` would then overwrite the earlier payload in place, leaving a
+    champion whose behaviour no longer matches its own provenance.
+
+    Ordered by run so the hash is a function of the corpus, not of the call.
+    """
+    payload = [
+        [
+            week.run,
+            week.log.to_jsonl(),
+            [week.week.start.root, week.week.end.root],
+            # Sorted: a roster is a mapping, and its iteration order must not move
+            # the hash.
+            sorted([pid.root, patient.model_dump_json()] for pid, patient in week.roster.items()),
+            [stream.model_dump_json() for stream in week.vitals],
+            sorted([pid.root, int(esi)] for pid, esi in week.acuity.items()),
+        ]
+        for week in sorted(weeks, key=lambda w: w.run)
+    ]
+    return canonical_hash(payload)
 
 
 def train_all(

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 from _forecast_fixtures import synth_week, vitals_cohort
 
-from hospital.core import Activity, Duration, EsiAcuity, hours, minutes, seconds
+from hospital.core import Activity, Duration, EsiAcuity, SimTime, hours, minutes, seconds
 from hospital.forecast.arrivals import fit_arrival_intensity
 from hospital.forecast.model_store import (
     ArtifactMeta,
@@ -355,3 +355,38 @@ def test_a_rejected_challenger_is_still_stored(tmp_path: Path) -> None:
     versions = {m.version for m in store.list_versions("forecast")}
     assert len(versions) == 2, "the challenger must be persisted even when rejected"
     assert store.champion("forecast").version == champion
+
+
+def test_data_hash_covers_every_input_that_shapes_the_fit() -> None:
+    """The log alone is not the corpus.
+
+    Roster (complaint/workup), vitals streams, acuity and the week boundaries all
+    determine the fitted payload. If the hash ignored them, two corpora that fit
+    visibly different models would share a version — and `ModelStore.save` would
+    overwrite the earlier payload in place, leaving a champion whose behaviour no
+    longer matches its recorded provenance.
+    """
+    base = _WEEKS[0]
+    original = data_hash([base])
+
+    # Same log, one patient's complaint changed.
+    pid, patient = next(iter(base.roster.items()))
+    reworded = dict(base.roster)
+    reworded[pid] = patient.model_copy(update={"complaint": "something_else"})
+    assert data_hash([base.model_copy(update={"roster": reworded})]) != original
+
+    # Same log and roster, different vitals.
+    assert data_hash([base.model_copy(update={"vitals": base.vitals[:-1]})]) != original
+
+    # Same everything, different acuity mapping.
+    shifted = dict(base.acuity)
+    shifted[pid] = EsiAcuity.ESI1
+    assert data_hash([base.model_copy(update={"acuity": shifted})]) != original
+
+    # Same everything, different operating week.
+    other_week = base.week.model_copy(update={"end": SimTime(base.week.end.root + 1)})
+    assert data_hash([base.model_copy(update={"week": other_week})]) != original
+
+
+def test_data_hash_is_a_function_of_the_corpus_not_the_call_order() -> None:
+    assert data_hash(_WEEKS) == data_hash(list(reversed(_WEEKS)))
