@@ -39,6 +39,32 @@ DEFAULT_MIN_SAMPLES_LEAF: Final[int] = 20
 DEFAULT_L2: Final[float] = 1.0
 
 
+class GbtSettings:
+    """The tree hyperparameters both estimators take, as one bundle.
+
+    A plain container so ``training.GbtParams`` has exactly one thing to hand down —
+    while the wiring was missing, that config sat in the version hash without
+    reaching a single fitted tree.
+    """
+
+    __slots__ = ("l2_regularization", "learning_rate", "max_depth", "max_iter", "min_samples_leaf")
+
+    def __init__(
+        self,
+        *,
+        max_depth: int = DEFAULT_MAX_DEPTH,
+        learning_rate: float = DEFAULT_LEARNING_RATE,
+        max_iter: int = DEFAULT_MAX_ITER,
+        min_samples_leaf: int = DEFAULT_MIN_SAMPLES_LEAF,
+        l2_regularization: float = DEFAULT_L2,
+    ) -> None:
+        self.max_depth = max_depth
+        self.learning_rate = learning_rate
+        self.max_iter = max_iter
+        self.min_samples_leaf = min_samples_leaf
+        self.l2_regularization = l2_regularization
+
+
 def _as_matrix(rows: Sequence[Sequence[float]]) -> Any:
     return np.asarray(rows, dtype=float)
 
@@ -68,18 +94,15 @@ class GbtRegressor:
         random_state: int,
         quantile: float | None = None,
         loss: Literal["squared_error", "poisson"] = "squared_error",
-        max_depth: int = DEFAULT_MAX_DEPTH,
-        learning_rate: float = DEFAULT_LEARNING_RATE,
-        max_iter: int = DEFAULT_MAX_ITER,
-        min_samples_leaf: int = DEFAULT_MIN_SAMPLES_LEAF,
-        l2_regularization: float = DEFAULT_L2,
+        settings: GbtSettings | None = None,
     ) -> None:
+        tuned = settings or GbtSettings()
         kwargs: dict[str, Any] = {
-            "max_depth": max_depth,
-            "learning_rate": learning_rate,
-            "max_iter": max_iter,
-            "min_samples_leaf": min_samples_leaf,
-            "l2_regularization": l2_regularization,
+            "max_depth": tuned.max_depth,
+            "learning_rate": tuned.learning_rate,
+            "max_iter": tuned.max_iter,
+            "min_samples_leaf": tuned.min_samples_leaf,
+            "l2_regularization": tuned.l2_regularization,
             "random_state": random_state,
         }
         if quantile is not None:
@@ -114,20 +137,17 @@ class GbtClassifier:
         self,
         *,
         random_state: int,
-        max_depth: int = DEFAULT_MAX_DEPTH,
-        learning_rate: float = DEFAULT_LEARNING_RATE,
-        max_iter: int = DEFAULT_MAX_ITER,
-        min_samples_leaf: int = DEFAULT_MIN_SAMPLES_LEAF,
-        l2_regularization: float = DEFAULT_L2,
+        settings: GbtSettings | None = None,
     ) -> None:
+        tuned = settings or GbtSettings()
         self._model = cast(
             "Any",
             HistGradientBoostingClassifier(
-                max_depth=max_depth,
-                learning_rate=learning_rate,
-                max_iter=max_iter,
-                min_samples_leaf=min_samples_leaf,
-                l2_regularization=l2_regularization,
+                max_depth=tuned.max_depth,
+                learning_rate=tuned.learning_rate,
+                max_iter=tuned.max_iter,
+                min_samples_leaf=tuned.min_samples_leaf,
+                l2_regularization=tuned.l2_regularization,
                 random_state=random_state,
             ),
         )
@@ -184,6 +204,7 @@ __all__ = [
     "DEFAULT_MIN_SAMPLES_LEAF",
     "GbtClassifier",
     "GbtRegressor",
+    "GbtSettings",
     "dump",
     "load",
 ]

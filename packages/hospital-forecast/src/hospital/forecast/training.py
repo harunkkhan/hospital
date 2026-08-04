@@ -38,6 +38,7 @@ from hospital.core import (
     minutes,
 )
 from hospital.data.vitals import VitalsStream, deterioration_label
+from hospital.forecast._estimators import GbtSettings
 from hospital.forecast.arrivals import (
     ArrivalIntensityModel,
     SurgeForecaster,
@@ -105,13 +106,29 @@ class WeekData(FrozenModel):
 
 
 class GbtParams(FrozenModel):
-    """Tree hyperparameters. Part of the config hash, so a change is a new version."""
+    """Tree hyperparameters. Part of the config hash, so a change is a new version.
+
+    These now actually reach the estimators. While the wiring was missing, a config
+    with ``max_depth=1`` and one with ``max_depth=20`` fitted *identical* trees while
+    being stored under different version hashes — a version that claimed a
+    hyperparameter it never applied.
+    """
 
     max_depth: int = 4
     learning_rate: float = 0.08
     n_estimators: int = 200
     min_samples_leaf: int = 20
     l2_reg: float = 1.0
+
+    def settings(self) -> GbtSettings:
+        """Translate to the estimator boundary's bundle."""
+        return GbtSettings(
+            max_depth=self.max_depth,
+            learning_rate=self.learning_rate,
+            max_iter=self.n_estimators,
+            min_samples_leaf=self.min_samples_leaf,
+            l2_regularization=self.l2_reg,
+        )
 
 
 class TrainConfig(FrozenModel):
@@ -251,7 +268,11 @@ def fit_models(
     if not los_frames:
         raise ValueError("no completed stays in the training weeks")
     regressor = fit_service_time_regressor(
-        concat_frames(los_frames), encoder, streams=streams, quantiles=(0.9,)
+        concat_frames(los_frames),
+        encoder,
+        streams=streams,
+        quantiles=(0.9,),
+        settings=config.gbt.settings(),
     )
 
     arrivals = fit_arrival_intensity(
@@ -282,6 +303,7 @@ def fit_models(
         horizon=config.horizon,
         target_sensitivity=config.target_sensitivity,
         max_false_alarm_rate=config.max_false_alarm_rate,
+        settings=config.gbt.settings(),
     )
     return FittedModels(
         service_table=table,

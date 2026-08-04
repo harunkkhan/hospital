@@ -42,7 +42,7 @@ from hospital.core import (
     VitalsReading,
 )
 from hospital.core.events import VitalsSampled
-from hospital.forecast._estimators import GbtClassifier
+from hospital.forecast._estimators import GbtClassifier, GbtSettings
 from hospital.forecast.features import (
     FeatureFrame,
     VitalsWindowFeatures,
@@ -358,6 +358,7 @@ def fit_deterioration_model(
     horizon: Duration,
     target_sensitivity: float = 0.90,
     max_false_alarm_rate: float = 0.25,
+    settings: GbtSettings | None = None,
 ) -> DeteriorationModel:
     """Fit, calibrate, and threshold — each on a fold that has not seen the others.
 
@@ -389,7 +390,9 @@ def fit_deterioration_model(
         )
 
     state = int(streams.substream("forecast", "deterioration").integers(0, 2**31 - 1))
-    classifier = GbtClassifier(random_state=state).fit(train.matrix, train_labels)
+    classifier = GbtClassifier(random_state=state, settings=settings).fit(
+        train.matrix, train_labels
+    )
     classifier.calibrate(validation.matrix, validation_labels)
 
     probabilities = classifier.predict_proba(validation.matrix)

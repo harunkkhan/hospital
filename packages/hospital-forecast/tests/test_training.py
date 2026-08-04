@@ -15,7 +15,7 @@ from _forecast_fixtures import synth_week, vitals_cohort
 
 from hospital.core import Activity, Duration, EsiAcuity, SimTime, hours, minutes, seconds
 from hospital.forecast.arrivals import fit_arrival_intensity, poisson_deviance
-from hospital.forecast.features import window_features
+from hospital.forecast.features import patient_features, window_features
 from hospital.forecast.model_store import (
     ArtifactMeta,
     ModelStore,
@@ -27,6 +27,7 @@ from hospital.forecast.model_store import (
 from hospital.forecast.service_time import fit_service_time_table
 from hospital.forecast.training import (
     MIN_WEEKS,
+    GbtParams,
     TrainConfig,
     ValidationReport,
     WeekData,
@@ -63,6 +64,7 @@ def _week(index: int) -> WeekData:
 # Four weeks: train / calibrate / score needs three disjoint folds, and the
 # rolling-origin protocol needs at least one week to train on.
 _WEEKS = [_week(i) for i in range(4)]
+_TEST_ROWS = patient_features(_WEEKS[-1].log, _WEEKS[-1].roster, _WEEKS[-1].week)[:25]
 
 
 # ----------------------------------------------------------------- splitting
@@ -486,3 +488,26 @@ def test_the_surge_quantile_reaches_the_artifact(tmp_path: Path) -> None:
         assert models.surge.quantile == 0.8
     else:  # pragma: no cover - thin corpora legitimately skip the surge head
         assert meta.metrics.metric("surge", "quantile_coverage") is None
+
+
+def test_the_gbt_hyperparameters_actually_reach_the_estimators(tmp_path: Path) -> None:
+    """A config field in the version hash that changes no tree is a false claim.
+
+    `max_depth=1` and `max_depth=8` must fit measurably different models. While the
+    wiring was missing they fitted identical trees under different version hashes, so
+    the artifact advertised a hyperparameter it had never applied.
+    """
+    shallow = _CONFIG.model_copy(update={"gbt": GbtParams(max_depth=1, n_estimators=30)})
+    deep = _CONFIG.model_copy(update={"gbt": GbtParams(max_depth=8, n_estimators=200)})
+
+    store = ModelStore(tmp_path)
+    a = train_all(_WEEKS, shallow, store)
+    b = train_all(_WEEKS, deep, store)
+    assert a.version != b.version, "different hyperparameters are different versions"
+
+    models_a, _ = store.load("forecast", a.version)
+    models_b, _ = store.load("forecast", b.version)
+    rows = _TEST_ROWS
+    preds_a = [models_a.los_regressor.predict_median_los(r).root for r in rows]
+    preds_b = [models_b.los_regressor.predict_median_los(r).root for r in rows]
+    assert preds_a != preds_b, "a depth-1 stump must not predict what a depth-8 tree does"

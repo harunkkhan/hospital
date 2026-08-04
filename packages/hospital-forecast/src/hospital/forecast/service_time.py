@@ -51,7 +51,7 @@ from hospital.core.events import (
     TriageCompleted,
     TriageStarted,
 )
-from hospital.forecast._estimators import GbtRegressor
+from hospital.forecast._estimators import GbtRegressor, GbtSettings
 from hospital.forecast.features import (
     PATIENT_FEATURE_NAMES,
     ComplaintEncoder,
@@ -428,6 +428,7 @@ def fit_service_time_regressor(
     streams: RandomStreams,
     target: TargetKind = "los",
     quantiles: Sequence[float] = (0.9,),
+    settings: GbtSettings | None = None,
 ) -> ServiceTimeRegressor:
     """Fit the point head plus any quantile heads on an already-labelled frame."""
     if frame.labels is None:
@@ -438,14 +439,16 @@ def fit_service_time_regressor(
     def state(name: str) -> int:
         return int(streams.substream("forecast", name).integers(0, 2**31 - 1))
 
-    point = GbtRegressor(random_state=state(f"{target}_point")).fit(frame.matrix, frame.labels)
+    point = GbtRegressor(random_state=state(f"{target}_point"), settings=settings).fit(
+        frame.matrix, frame.labels
+    )
     # Duan's smearing estimator, on the fold the point head was fit on: the empirical
     # mean of exp(residual). Distribution-free, unlike exp(sigma^2/2).
     fitted = point.predict(frame.matrix)
     residuals = [y - p for y, p in zip(frame.labels, fitted, strict=True)]
     smearing = math.fsum(math.exp(r) for r in residuals) / len(residuals) if residuals else 1.0
     heads = {
-        q: GbtRegressor(quantile=q, random_state=state(f"{target}_q{q}")).fit(
+        q: GbtRegressor(quantile=q, random_state=state(f"{target}_q{q}"), settings=settings).fit(
             frame.matrix, frame.labels
         )
         for q in quantiles
