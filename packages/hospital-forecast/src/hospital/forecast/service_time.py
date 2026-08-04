@@ -76,6 +76,10 @@ _PAIRS: Final[tuple[tuple[Activity, type, type], ...]] = (
 
 TargetKind = Literal["los", "activity_duration"]
 
+# One run's event log paired with the roster that log's patient ids refer to. Ids are
+# unique only within a run, so the two must travel together.
+Run = tuple[EventLog, Mapping[PatientId, Patient]]
+
 
 class ServiceTimeKey(FrozenModel):
     """The fit's key — the SAME axes ``sim.physics.service_times`` samples on."""
@@ -154,22 +158,25 @@ def _patient_context(log: EventLog) -> tuple[dict[PatientId, EsiAcuity], dict[Pa
     return esi, arrived
 
 
-def activity_durations(
-    logs: Sequence[EventLog], roster: Mapping[PatientId, Patient]
-) -> dict[ServiceTimeKey, list[float]]:
+def activity_durations(runs: Sequence[Run]) -> dict[ServiceTimeKey, list[float]]:
     """Observed durations in seconds, keyed by ``(activity, esi, complaint)``.
 
-    Takes a **sequence** of logs rather than one concatenation: separate runs are
-    separate timelines that all start at the week's origin, so splicing them into
-    a single log would interleave unrelated instants. Each log is walked on its
-    own and only the resulting durations are pooled.
+    Takes ``(log, roster)`` **pairs**, and each log is read against its own roster.
+    Two reasons, both load-bearing:
 
-    Starts are matched to completions **in order per patient**, so a patient with
-    two provider visits contributes two independent durations rather than one
-    span covering both.
+    * Separate runs are separate timelines that each start at the week's origin, so
+      splicing the logs together would interleave unrelated instants.
+    * Patient ids are only unique *within* a run — ``data.workload`` mints
+      ``p_000_00`` afresh every week. Pooling the rosters into one mapping would let
+      a later week's registration silently overwrite an earlier one, and week 1's
+      durations would be filed under week 2's complaint and acuity.
+
+    Only the resulting durations are pooled. Starts are matched to completions **in
+    order per patient**, so a patient with two provider visits contributes two
+    independent durations rather than one span covering both.
     """
     out: dict[ServiceTimeKey, list[float]] = {}
-    for log in logs:
+    for log, roster in runs:
         _accumulate_durations(log, roster, out)
     return out
 
@@ -204,15 +211,18 @@ def _accumulate_durations(
 
 
 def fit_service_time_table(
-    logs: Sequence[EventLog],
-    roster: Mapping[PatientId, Patient],
+    runs: Sequence[Run],
     *,
     min_samples: int = DEFAULT_MIN_SAMPLES,
 ) -> ServiceTimeTable:
-    """Method-of-moments lognormal fits per key, with per-Activity fallbacks."""
+    """Method-of-moments lognormal fits per key, with per-Activity fallbacks.
+
+    ``runs`` are ``(log, roster)`` pairs — see :func:`activity_durations` for why the
+    roster travels with its own log rather than being pooled.
+    """
     if min_samples < 1:
         raise ValueError("min_samples must be >= 1")
-    observed = activity_durations(logs, roster)
+    observed = activity_durations(runs)
 
     by_activity: dict[Activity, list[float]] = {}
     for key, samples in observed.items():

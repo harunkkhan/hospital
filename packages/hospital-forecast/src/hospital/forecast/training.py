@@ -216,11 +216,11 @@ def fit_models(
         patient.complaint for week in train_weeks for patient in week.roster.values()
     )
 
-    roster: dict[PatientId, Patient] = {}
-    for week in train_weeks:
-        roster.update(week.roster)
+    # Each week's log paired with its OWN roster: patient ids are unique only within
+    # a run, so pooling the rosters would file one week's durations under another
+    # week's complaint and acuity.
     table = fit_service_time_table(
-        [w.log for w in train_weeks], roster, min_samples=config.min_service_samples
+        [(w.log, w.roster) for w in train_weeks], min_samples=config.min_service_samples
     )
 
     los_frames = [f for f in (_los_frame(w, encoder) for w in train_weeks) if f is not None]

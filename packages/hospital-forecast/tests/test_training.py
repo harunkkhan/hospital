@@ -269,7 +269,7 @@ def test_the_ml_and_static_bundles_are_the_same_shape() -> None:
     with the difference between two code paths.
     """
     week = _WEEKS[0]
-    table = fit_service_time_table([week.log], week.roster, min_samples=20)
+    table = fit_service_time_table([(week.log, week.roster)], min_samples=20)
     intensity = fit_arrival_intensity([week.log], week.week)
     ml = bundle_from_models("v1", service_time=table, arrivals=intensity)
     static = static_bundle(
@@ -284,7 +284,7 @@ def test_the_ml_and_static_bundles_are_the_same_shape() -> None:
 def test_the_bundle_is_composed_only_of_core_types() -> None:
     """Nothing downstream should have to import `forecast` to read a prediction."""
     week = _WEEKS[0]
-    table = fit_service_time_table([week.log], week.roster, min_samples=20)
+    table = fit_service_time_table([(week.log, week.roster)], min_samples=20)
     bundle = bundle_from_models(
         "v1", service_time=table, arrivals=fit_arrival_intensity([week.log], week.week)
     )
@@ -315,7 +315,7 @@ def test_the_bundle_falls_back_per_activity_and_never_returns_zero() -> None:
 
 def test_a_fitted_key_beats_the_activity_fallback() -> None:
     week = _WEEKS[0]
-    table = fit_service_time_table([week.log], week.roster, min_samples=5)
+    table = fit_service_time_table([(week.log, week.roster)], min_samples=5)
     bundle = bundle_from_models(
         "v1", service_time=table, arrivals=fit_arrival_intensity([week.log], week.week)
     )

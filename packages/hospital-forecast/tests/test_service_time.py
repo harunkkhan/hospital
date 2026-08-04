@@ -22,8 +22,10 @@ from hospital.core import (
     PatientId,
     RandomStreams,
     SimTime,
+    WorkupNeeds,
     hours,
 )
+from hospital.core.events import PatientArrived, ProviderVisitCompleted, TriageCompleted
 from hospital.forecast.features import (
     PATIENT_FEATURE_NAMES,
     ComplaintEncoder,
@@ -53,13 +55,16 @@ from hospital.forecast.service_time import (
 _WEEKS = synth_weeks(4)
 _WEEK = _WEEKS[0].week
 _LOGS: list[EventLog] = [w.log for w in _WEEKS]
+# Each log paired with its OWN roster -- ids are unique only within a run, so pooling
+# the rosters would misattribute one week's durations to another week's complaint.
+_RUNS = [(w.log, w.roster) for w in _WEEKS]
 _ROSTER: dict[PatientId, Patient] = {}
 for _w in _WEEKS:
     _ROSTER.update(_w.roster)
 
 
 def _table() -> ServiceTimeTable:
-    return fit_service_time_table(_LOGS, _ROSTER, min_samples=30)
+    return fit_service_time_table(_RUNS, min_samples=30)
 
 
 def _frame_for(week: SynthWeek, encoder: ComplaintEncoder) -> FeatureFrame:
@@ -111,7 +116,7 @@ def test_a_thin_key_borrows_the_activity_fallback_never_a_zero() -> None:
     A zero would tell the solver the work is free, which is worse than a coarse
     estimate borrowed from the activity as a whole.
     """
-    strict = fit_service_time_table(_LOGS, _ROSTER, min_samples=10_000)
+    strict = fit_service_time_table(_RUNS, min_samples=10_000)
     assert strict.params == {}, "nothing should clear an impossible threshold"
     key = ServiceTimeKey(
         activity=Activity.PROVIDER_VISIT, esi=EsiAcuity.ESI2, complaint="chest_pain"
@@ -130,7 +135,7 @@ def test_an_unobserved_activity_raises_rather_than_returning_zero() -> None:
 
 def test_repeated_visits_are_separate_observations() -> None:
     """Two provider visits are two durations, not one span covering both."""
-    durations = activity_durations(_LOGS, _ROSTER)
+    durations = activity_durations(_RUNS)
     provider = [
         n
         for key, samples in durations.items()
@@ -158,8 +163,8 @@ def test_an_unpaired_start_is_dropped_not_censored() -> None:
             occurred_at=SimTime(hours(200).root), patient=victim, staff=StaffId("staff_x")
         )
     )
-    before = activity_durations([_WEEKS[0].log], _WEEKS[0].roster)
-    after = activity_durations([truncated], _WEEKS[0].roster)
+    before = activity_durations([(_WEEKS[0].log, _WEEKS[0].roster)])
+    after = activity_durations([(truncated, _WEEKS[0].roster)])
     assert before == after, "an unmatched start must contribute nothing"
 
 
@@ -297,3 +302,51 @@ def test_lognormal_params_round_trip_through_the_sampler() -> None:
     ]
     assert statistics.mean(draws) == pytest.approx(params.mean_s, rel=0.05)
     assert statistics.pstdev(draws) / statistics.mean(draws) == pytest.approx(params.cv, rel=0.12)
+
+
+def test_repeated_patient_ids_across_runs_are_not_conflated() -> None:
+    """Patient ids are unique only WITHIN a run — `data.workload` reuses them weekly.
+
+    Pooling rosters into one mapping lets a later week's registration overwrite an
+    earlier one, so week 1's durations get filed under week 2's complaint and acuity.
+    Here the same id is a 600s chest-pain visit in run A and a 1200s abdominal visit
+    in run B; each must land under its own key.
+    """
+    from hospital.core import StaffId
+    from hospital.core.events import ProviderVisitStarted
+
+    shared = PatientId("p_000_00")
+    staff = StaffId("doc")
+
+    def run(complaint: str, seconds_long: int) -> tuple[EventLog, dict[PatientId, Patient]]:
+        patient = Patient(
+            id=shared,
+            arrival_time=SimTime(0),
+            arrival_mode=_WEEKS[0].roster[next(iter(_WEEKS[0].roster))].arrival_mode,
+            esi=EsiAcuity.ESI3,
+            complaint=complaint,
+            isolation_required=False,
+            workup=WorkupNeeds(provider_visits=1, nurse_visits=0, imaging=(), labs=0, procedures=0),
+        )
+        log = EventLog()
+        log.append(
+            PatientArrived(occurred_at=SimTime(0), patient=shared, mode=patient.arrival_mode)
+        )
+        log.append(TriageCompleted(occurred_at=SimTime(0), patient=shared, esi=EsiAcuity.ESI3))
+        log.append(ProviderVisitStarted(occurred_at=SimTime(0), patient=shared, staff=staff))
+        log.append(
+            ProviderVisitCompleted(
+                occurred_at=SimTime(seconds_long * 1_000_000), patient=shared, staff=staff
+            )
+        )
+        return log, {shared: patient}
+
+    durations = activity_durations([run("chest_pain", 600), run("abdominal", 1200)])
+    chest = ServiceTimeKey(
+        activity=Activity.PROVIDER_VISIT, esi=EsiAcuity.ESI3, complaint="chest_pain"
+    )
+    abdo = ServiceTimeKey(
+        activity=Activity.PROVIDER_VISIT, esi=EsiAcuity.ESI3, complaint="abdominal"
+    )
+    assert durations[chest] == [600.0], "run A's duration must keep run A's complaint"
+    assert durations[abdo] == [1200.0], "run B's duration must keep run B's complaint"
