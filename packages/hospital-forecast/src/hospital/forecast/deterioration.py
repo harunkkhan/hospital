@@ -2,10 +2,10 @@
 
 Three layers, deliberately separable:
 
-1. :func:`news2_score` — the published National Early Warning Score 2 rubric, as a
-   pure table-driven function. **Not** a model: it is deterministic, auditable
-   against the reference chart, and serves both as a feature and as the fallback a
-   clinician can reason about when the ML head is unavailable.
+1. The NEWS2 rubric — which lives in ``core.vitals``, not here. It is a published
+   clinical score, not a model, and ``sim`` needs it to stamp ``VitalsSampled``
+   without importing this package. :func:`news2_for_features` is the thin adapter
+   that feeds it to the extractors.
 2. :class:`DeteriorationModel` — a calibrated gradient-boosted classifier over a
    rolling vitals window, predicting whether the patient will **cross into**
    deterioration within a horizon. It predicts the near future, not the present:
@@ -21,16 +21,15 @@ most well patients is one staff learn to silence, which costs every future
 deterioration too. When both cannot hold, the model reports which bound was
 binding instead of quietly missing the recall it was asked for.
 
-v1 uses SpO2 **Scale 1** only (doc 06 §13-4); there is no hypercapnic Scale 2 and
-no consciousness/ACVPU sub-score, because ``data.vitals`` emits neither. Both
-absences are scored as 0 and stated here rather than silently assumed normal.
+v1 uses SpO2 **Scale 1** only (doc 06 §13-4) — see ``core.vitals`` for the rubric
+and its documented gaps.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Literal
 
 from hospital.core import (
     Duration,
@@ -40,6 +39,7 @@ from hospital.core import (
     RiskAssessment,
     SimTime,
     VitalsReading,
+    news2_score,
 )
 from hospital.core.events import VitalsSampled
 from hospital.forecast._estimators import GbtClassifier, GbtSettings
@@ -53,124 +53,6 @@ from hospital.forecast.features import (
 if TYPE_CHECKING:
     from hospital.core import RandomStreams
     from hospital.data.vitals import VitalsSample
-
-Band = Literal["low", "medium", "high"]
-
-# The NEWS2 chart, as (inclusive-low, inclusive-high, score) bands per parameter.
-# Written as data so it can be read against the published table line by line.
-_RESP: Final[tuple[tuple[float, float, int], ...]] = (
-    (-math.inf, 8, 3),
-    (9, 11, 1),
-    (12, 20, 0),
-    (21, 24, 2),
-    (25, math.inf, 3),
-)
-_SPO2_SCALE1: Final[tuple[tuple[float, float, int], ...]] = (
-    (-math.inf, 91, 3),
-    (92, 93, 2),
-    (94, 95, 1),
-    (96, math.inf, 0),
-)
-_SBP: Final[tuple[tuple[float, float, int], ...]] = (
-    (-math.inf, 90, 3),
-    (91, 100, 2),
-    (101, 110, 1),
-    (111, 219, 0),
-    (220, math.inf, 3),
-)
-_PULSE: Final[tuple[tuple[float, float, int], ...]] = (
-    (-math.inf, 40, 3),
-    (41, 50, 1),
-    (51, 90, 0),
-    (91, 110, 1),
-    (111, 130, 2),
-    (131, math.inf, 3),
-)
-_TEMP_C: Final[tuple[tuple[float, float, int], ...]] = (
-    (-math.inf, 35.0, 3),
-    (35.1, 36.0, 1),
-    (36.1, 38.0, 0),
-    (38.1, 39.0, 1),
-    (39.1, math.inf, 2),
-)
-
-# A single parameter scoring 3 triggers the URGENT response on its own, even at a low
-# total — one deranged vital is not offset by five normal ones. It is NOT the
-# emergency response, which the chart reserves for an aggregate of 7 or more.
-_SINGLE_PARAM_RED: Final[int] = 3
-_HIGH_TOTAL: Final[int] = 7
-_MEDIUM_TOTAL: Final[int] = 5
-
-# The order `news2_sub` is reported in; also the order the features use.
-NEWS2_PARAMETERS: Final[tuple[str, ...]] = (
-    "resp",
-    "spo2",
-    "oxygen",
-    "sbp",
-    "pulse",
-    "temp",
-    "consciousness",
-)
-
-
-class News2Result(FrozenModel):
-    """A scored NEWS2 observation: per-parameter sub-scores, total, and band.
-
-    ``single_red`` is reported beside ``band`` because the chart's
-    single-parameter-3 trigger is its own escalation *reason*. A caller that needs to
-    know why a reading is urgent cannot recover that from the total alone.
-    """
-
-    sub: Mapping[str, int]
-    total: int
-    band: Band
-    single_red: bool = False
-
-    def ordered_sub(self) -> tuple[int, ...]:
-        return tuple(self.sub[name] for name in NEWS2_PARAMETERS)
-
-
-def _band_score(bands: Sequence[tuple[float, float, int]], value: float) -> int:
-    for low, high, score in bands:
-        if low <= value <= high:
-            return score
-    # Unreachable while the tables span the real line; a loud failure beats a
-    # silent 0 that would read as "this vital is normal".
-    raise ValueError(f"value {value} fell outside every NEWS2 band")
-
-
-def news2_score(reading: VitalsReading, *, on_oxygen: bool = False) -> News2Result:
-    """Score one observation against the published NEWS2 rubric (SpO2 Scale 1).
-
-    Pure and table-driven, so it can be checked against the reference chart rather
-    than against itself. ``consciousness`` is always 0: ``data.vitals`` emits no
-    ACVPU level, and assuming "alert" is the honest reading of an absent
-    observation — but it is a real gap, not a modelling choice.
-    """
-    sub = {
-        "resp": _band_score(_RESP, reading.rr),
-        "spo2": _band_score(_SPO2_SCALE1, reading.spo2),
-        "oxygen": 2 if on_oxygen else 0,
-        "sbp": _band_score(_SBP, reading.sbp),
-        "pulse": _band_score(_PULSE, reading.hr),
-        "temp": _band_score(_TEMP_C, reading.temp_c),
-        "consciousness": 0,
-    }
-    total = sum(sub.values())
-    single_red = max(sub.values()) >= _SINGLE_PARAM_RED
-    # The RCP clinical-response chart separates three responses: total >= 7 is the
-    # EMERGENCY response; total 5-6 OR any single parameter scoring 3 is the URGENT
-    # one; below that is routine. Collapsing a lone 3 into "high" over-escalates --
-    # one deranged vital at total 3 does not call for the same response as an
-    # aggregate of 7, and treating them alike is how a band stops carrying
-    # information.
-    if total >= _HIGH_TOTAL:
-        band: Band = "high"
-    elif total >= _MEDIUM_TOTAL or single_red:
-        band = "medium"
-    else:
-        band = "low"
-    return News2Result(sub=sub, total=total, band=band, single_red=single_red)
 
 
 def news2_for_features(sample: VitalsSample) -> tuple[int, tuple[int, ...]]:
@@ -496,10 +378,7 @@ class RollingDeteriorationMonitor:
 
 
 __all__ = [
-    "NEWS2_PARAMETERS",
-    "Band",
     "DeteriorationModel",
-    "News2Result",
     "RollingDeteriorationMonitor",
     "ThresholdChoice",
     "auroc",
@@ -507,6 +386,5 @@ __all__ = [
     "choose_threshold",
     "fit_deterioration_model",
     "news2_for_features",
-    "news2_score",
     "operating_point",
 ]

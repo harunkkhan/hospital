@@ -121,14 +121,22 @@ from hospital.core.time import (
 )
 from hospital.core.units import Distance, WalkSpeed, walk_duration
 from hospital.core.validation import ValidationContext, Violation, validate
-from hospital.core.vitals import VitalsReading
+from hospital.core.vitals import (
+    NEWS2_PARAMETERS,
+    Band,
+    News2Result,
+    VitalsReading,
+    news2_score,
+)
 
 __all__ = [
     "KPI_KEYS",
     "MICROS_PER_SEC",
+    "NEWS2_PARAMETERS",
     "STAFF_FRAC_KEYS",
     "Activity",
     "ArrivalMode",
+    "Band",
     "Bay",
     "BayAssigned",
     "BayCleaningCompleted",
@@ -166,6 +174,7 @@ __all__ = [
     "KpiVector",
     "LayoutError",
     "Money",
+    "News2Result",
     "NodeId",
     "NurseVisitCompleted",
     "NurseVisitStarted",
@@ -222,6 +231,7 @@ __all__ = [
     "compile_rules",
     "hours",
     "minutes",
+    "news2_score",
     "round_micros",
     "rules_hash",
     "sample_categorical",
