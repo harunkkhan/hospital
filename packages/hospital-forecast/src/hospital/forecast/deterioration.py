@@ -94,8 +94,9 @@ _TEMP_C: Final[tuple[tuple[float, float, int], ...]] = (
     (39.1, math.inf, 2),
 )
 
-# A single parameter scoring 3 triggers escalation on its own, even at a low
-# total — one catastrophically deranged vital is not offset by five normal ones.
+# A single parameter scoring 3 triggers the URGENT response on its own, even at a low
+# total — one deranged vital is not offset by five normal ones. It is NOT the
+# emergency response, which the chart reserves for an aggregate of 7 or more.
 _SINGLE_PARAM_RED: Final[int] = 3
 _HIGH_TOTAL: Final[int] = 7
 _MEDIUM_TOTAL: Final[int] = 5
@@ -113,11 +114,17 @@ NEWS2_PARAMETERS: Final[tuple[str, ...]] = (
 
 
 class News2Result(FrozenModel):
-    """A scored NEWS2 observation: per-parameter sub-scores, total, and band."""
+    """A scored NEWS2 observation: per-parameter sub-scores, total, and band.
+
+    ``single_red`` is reported beside ``band`` because the chart's
+    single-parameter-3 trigger is its own escalation *reason*. A caller that needs to
+    know why a reading is urgent cannot recover that from the total alone.
+    """
 
     sub: Mapping[str, int]
     total: int
     band: Band
+    single_red: bool = False
 
     def ordered_sub(self) -> tuple[int, ...]:
         return tuple(self.sub[name] for name in NEWS2_PARAMETERS)
@@ -150,13 +157,20 @@ def news2_score(reading: VitalsReading, *, on_oxygen: bool = False) -> News2Resu
         "consciousness": 0,
     }
     total = sum(sub.values())
-    if total >= _HIGH_TOTAL or max(sub.values()) >= _SINGLE_PARAM_RED:
+    single_red = max(sub.values()) >= _SINGLE_PARAM_RED
+    # The RCP clinical-response chart separates three responses: total >= 7 is the
+    # EMERGENCY response; total 5-6 OR any single parameter scoring 3 is the URGENT
+    # one; below that is routine. Collapsing a lone 3 into "high" over-escalates --
+    # one deranged vital at total 3 does not call for the same response as an
+    # aggregate of 7, and treating them alike is how a band stops carrying
+    # information.
+    if total >= _HIGH_TOTAL:
         band: Band = "high"
-    elif total >= _MEDIUM_TOTAL:
+    elif total >= _MEDIUM_TOTAL or single_red:
         band = "medium"
     else:
         band = "low"
-    return News2Result(sub=sub, total=total, band=band)
+    return News2Result(sub=sub, total=total, band=band, single_red=single_red)
 
 
 def news2_for_features(sample: VitalsSample) -> tuple[int, tuple[int, ...]]:
@@ -351,6 +365,16 @@ def fit_deterioration_model(
     validation_labels = [int(v) for v in validation.labels]
     if len(set(train_labels)) < 2:
         raise ValueError("the training frame has only one class; nothing to learn")
+    # The calibration fold needs both classes too, and for a rare event a week with
+    # zero deteriorations is entirely plausible. Unchecked, isotonic regression maps
+    # every probability to 0, threshold selection lands just above 1.0, and the
+    # persisted model never escalates again -- a silently inert alarm, which is worse
+    # than a refused fit because nothing downstream can tell.
+    if len(set(validation_labels)) < 2:
+        raise ValueError(
+            "the validation frame has only one class; calibration and threshold "
+            "selection would produce a model that never escalates"
+        )
 
     state = int(streams.substream("forecast", "deterioration").integers(0, 2**31 - 1))
     classifier = GbtClassifier(random_state=state).fit(train.matrix, train_labels)

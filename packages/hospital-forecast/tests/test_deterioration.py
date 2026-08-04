@@ -107,7 +107,12 @@ def test_any_single_parameter_at_three_escalates_regardless_of_total() -> None:
     scored = news2_score(_reading(spo2=88))
     assert scored.sub["spo2"] == 3
     assert scored.total == 3, "the total alone would read as low risk"
-    assert scored.band == "high"
+    assert scored.single_red is True
+    # The chart's URGENT response, not the emergency one: a lone 3 at total 3 does not
+    # call for the same reaction as an aggregate of 7, and collapsing them would make
+    # the band stop distinguishing anything.
+    assert scored.band == "medium"
+    assert news2_score(_reading()).single_red is False
 
 
 def test_bands_follow_the_total_when_no_parameter_is_red() -> None:
@@ -117,6 +122,7 @@ def test_bands_follow_the_total_when_no_parameter_is_red() -> None:
     assert medium.total == 5 and medium.band == "medium"
     high = news2_score(_reading(hr=115, rr=22, spo2=92, temp_c_x10=385))  # 2+2+2+1
     assert high.total == 7 and high.band == "high"
+    assert not high.single_red, "total 7 with no parameter at 3 is the emergency band"
 
 
 def test_news2_is_pure_and_deterministic() -> None:
@@ -461,3 +467,20 @@ def test_deterioration_model_type_is_a_plain_object() -> None:
     assert isinstance(_MODEL, DeteriorationModel)
     assert _MODEL.feature_names == VITALS_FEATURE_NAMES
     assert _MODEL.horizon == _HORIZON
+
+
+def test_a_one_class_calibration_fold_is_refused() -> None:
+    """A week with no deteriorations must not silently produce an inert alarm.
+
+    Isotonic calibration on all-negative labels maps every probability to 0 and the
+    threshold sweep lands above 1.0, so the persisted model never escalates — and
+    nothing downstream can tell that from a well-calibrated quiet model. Refusing the
+    fit is the only honest outcome.
+    """
+    all_negative = _VALID_FRAME.model_copy(
+        update={"labels": tuple(0.0 for _ in _VALID_FRAME.labels or ())}
+    )
+    with pytest.raises(ValueError, match="never escalates"):
+        fit_deterioration_model(
+            _TRAIN_FRAME, all_negative, streams=RandomStreams(1), horizon=_HORIZON
+        )
