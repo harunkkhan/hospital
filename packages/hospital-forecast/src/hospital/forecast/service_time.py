@@ -270,6 +270,7 @@ class ServiceTimeRegressor:
         feature_names: tuple[str, ...],
         target: TargetKind,
         encoder: ComplaintEncoder,
+        smearing: float = 1.0,
     ) -> None:
         self.feature_names = feature_names
         self.target: TargetKind = target
@@ -277,6 +278,9 @@ class ServiceTimeRegressor:
         self._point = point
         self._heads = dict(quantile_heads)
         self._encoder = encoder
+        # Duan smearing factor: mean(exp(residual)) on the training fold. 1.0 means
+        # "uncorrected", which is only right for a noiseless fit.
+        self._smearing = smearing
 
     def _row(self, features: PatientFeatures) -> list[list[float]]:
         frame = to_matrix(
@@ -287,16 +291,43 @@ class ServiceTimeRegressor:
         )
         return [list(frame.matrix[0])]
 
-    def predict_los(self, features: PatientFeatures) -> Duration:
-        """Expected LOS. Exponentiating a log-space prediction returns the MEDIAN.
+    def predict_median_los(self, features: PatientFeatures) -> Duration:
+        """The conditional **median** stay.
 
-        That is the honest reading of a point estimate fit on ``log(duration)``,
-        and it is stated here rather than silently corrected: a smearing factor to
-        convert it to a mean would need the residual variance, which belongs in
-        the artifact, not in an ad-hoc constant.
+        Exponentiating a squared-error fit on ``log(duration)`` recovers
+        ``exp(E[log LOS])``, which is the median of a lognormal — not its mean. Named
+        for what it is, because the difference is large and one-directional.
         """
         (predicted,) = self._point.predict(self._row(features))
         return seconds(math.exp(predicted))
+
+    def predict_expected_los(self, features: PatientFeatures) -> Duration:
+        """The conditional **mean** stay — what an occupancy cost actually needs.
+
+        ``exp(E[log LOS])`` understates ``E[LOS]`` by ``exp(sigma^2/2)``: at a
+        residual log-SD of 1 a one-hour median is a 1.65-hour mean, so feeding the
+        median into a bay-occupancy term systematically under-books every long stay.
+
+        Corrected by **Duan's smearing estimator** — the empirical mean of
+        ``exp(residual)`` on the training fold — rather than the parametric
+        ``exp(sigma^2/2)``. Smearing needs no lognormality assumption, and the
+        residuals here are not guaranteed to be Gaussian.
+        """
+        return seconds(math.exp(self._log_point(features)) * self._smearing)
+
+    @property
+    def smearing(self) -> float:
+        """Duan's factor, ``mean(exp(residual))`` on the training fold.
+
+        Exposed because it is the size of the median-to-mean correction, and a
+        consumer weighing whether the distinction matters for its data should be able
+        to read it rather than infer it.
+        """
+        return self._smearing
+
+    def _log_point(self, features: PatientFeatures) -> float:
+        (predicted,) = self._point.predict(self._row(features))
+        return predicted
 
     def point_log_error(self, frame: FeatureFrame) -> float:
         """MAE on the log scale the point head was fit on — the honest scoring axis.
@@ -358,6 +389,11 @@ def fit_service_time_regressor(
         return int(streams.substream("forecast", name).integers(0, 2**31 - 1))
 
     point = GbtRegressor(random_state=state(f"{target}_point")).fit(frame.matrix, frame.labels)
+    # Duan's smearing estimator, on the fold the point head was fit on: the empirical
+    # mean of exp(residual). Distribution-free, unlike exp(sigma^2/2).
+    fitted = point.predict(frame.matrix)
+    residuals = [y - p for y, p in zip(frame.labels, fitted, strict=True)]
+    smearing = math.fsum(math.exp(r) for r in residuals) / len(residuals) if residuals else 1.0
     heads = {
         q: GbtRegressor(quantile=q, random_state=state(f"{target}_q{q}")).fit(
             frame.matrix, frame.labels
@@ -370,6 +406,7 @@ def fit_service_time_regressor(
         feature_names=frame.feature_names,
         target=target,
         encoder=encoder,
+        smearing=smearing,
     )
 
 

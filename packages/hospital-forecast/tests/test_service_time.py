@@ -220,14 +220,15 @@ def test_predicted_los_rises_with_workup_and_acuity() -> None:
     heavy = rows[0].model_copy(
         update={"provider_visits": 2, "nurse_visits": 2, "labs": 2, "imaging_count": 1}
     )
-    assert _MODEL.predict_los(heavy).root > _MODEL.predict_los(light).root
+    assert _MODEL.predict_expected_los(heavy).root > _MODEL.predict_expected_los(light).root
 
 
 def test_quantile_head_sits_above_the_point_estimate() -> None:
     """A p90 stay must be longer than a typical one, or the head is mislabelled."""
     rows = patient_features(_TRAIN_WEEKS[0].log, _TRAIN_WEEKS[0].roster, _WEEK)
     above = sum(
-        _MODEL.predict_quantile(row, 0.9).root >= _MODEL.predict_los(row).root for row in rows[:60]
+        _MODEL.predict_quantile(row, 0.9).root >= _MODEL.predict_median_los(row).root
+        for row in rows[:60]
     )
     assert above >= 57, f"only {above}/60 p90 predictions exceeded the point estimate"
 
@@ -350,3 +351,33 @@ def test_repeated_patient_ids_across_runs_are_not_conflated() -> None:
     )
     assert durations[chest] == [600.0], "run A's duration must keep run A's complaint"
     assert durations[abdo] == [1200.0], "run B's duration must keep run B's complaint"
+
+
+def test_the_expected_stay_exceeds_the_median_stay() -> None:
+    """`exp(E[log LOS])` is a median; an occupancy cost needs a mean.
+
+    The gap is one-directional and large — at a residual log-SD of 1 a one-hour
+    median is a 1.65-hour mean — so feeding the median into a bay-occupancy term
+    under-books every long stay. Duan smearing corrects it without assuming
+    lognormality.
+    """
+    rows = patient_features(_TRAIN_WEEKS[0].log, _TRAIN_WEEKS[0].roster, _WEEK)[:40]
+    assert rows
+    for row in rows:
+        median = _MODEL.predict_median_los(row).root
+        expected = _MODEL.predict_expected_los(row).root
+        assert expected >= median, "the smeared mean can never fall below the median"
+    # And on a fit with real residual spread it is strictly larger somewhere.
+    assert any(
+        _MODEL.predict_expected_los(row).root > _MODEL.predict_median_los(row).root for row in rows
+    ), "a noiseless fit would make the correction a no-op; this one is not noiseless"
+
+
+def test_the_smearing_factor_is_at_least_one() -> None:
+    """mean(exp(residual)) >= exp(mean(residual)) by Jensen, and the mean residual ~0.
+
+    On this fixture the factor is only ~1.004 — LOS is nearly determined by the
+    features, so residual spread is small. The correction is still the right one; its
+    magnitude just scales with how noisy the fit is, and on real data it is larger.
+    """
+    assert _MODEL.smearing >= 1.0 - 1e-9
