@@ -88,7 +88,13 @@ class ArrivalIntensityModel(FrozenModel):
 
 
 class SurgeForecast(FrozenModel):
-    """A short-horizon count forecast per lead bin, with a staffing-safety band."""
+    """A short-horizon count forecast per lead bin, with a staffing-safety band.
+
+    ``horizon`` is what was *asked for*; ``covers`` is what the returned bins
+    actually span. They differ whenever ``now`` is mid-bin, because a bin is the
+    model's unit and cannot be cut. Reporting both keeps the difference visible
+    instead of letting a caller assume the request was honoured exactly.
+    """
 
     made_at: SimTime
     horizon: Duration
@@ -96,6 +102,7 @@ class SurgeForecast(FrozenModel):
     mean: tuple[float, ...]
     upper_q: tuple[float, ...]
     quantile: float
+    covers: TimeWindow | None = None
 
 
 def _arrival_instants(log: EventLog) -> tuple[int, ...]:
@@ -195,24 +202,47 @@ class SurgeForecaster:
     def predict(
         self, log: EventLog, now: SimTime, week: OperatingWeek, *, horizon: Duration | None = None
     ) -> SurgeForecast:
-        """Forecast each lead bin after ``now`` from history at or before ``now``."""
+        """Forecast the bins that start within ``[now, now + horizon)``.
+
+        Two things were wrong here and they interacted. The lag origin was the bin
+        *containing* ``now``, but training defines lead 1 as "the bin after the last
+        **complete** one" — so a forecast made mid-bin was scored against a lead the
+        model had never been trained on. And the returned bins started one boundary
+        past ``now``'s bin regardless, which skipped the next bin entirely when
+        ``now`` fell exactly on a boundary and reported bins outside the declared
+        horizon when it did not.
+
+        Now: the origin is the last bin fully in the past, the targets are the bins
+        whose starts fall inside the horizon, and the lead is their real distance
+        apart — the same quantity ``_surge_design`` trains on. Bins are the model's
+        unit, so the covered interval is bin-aligned and may end past
+        ``now + horizon``; :attr:`SurgeForecast.covers` states what it actually is
+        rather than leaving the caller to assume.
+        """
         span = horizon if horizon is not None else hours(4)
         rows = window_features(log, week, bin_width=self.seasonal.resolution)
         by_start = {row.window.start.root: row for row in rows}
         width = self.seasonal.resolution.root
+
+        # The last bin that has fully elapsed at `now`. Training's lead 1 is the bin
+        # immediately after a complete bin, so anchoring anywhere else would ask the
+        # model for a lead it never saw.
         origin_start = week.start.root + ((now.root - week.start.root) // width) * width
+        if origin_start + width > now.root:
+            origin_start -= width
         origin = by_start.get(origin_start)
         if origin is None:
-            raise ValueError("`now` falls outside the operating week")
+            raise ValueError("`now` falls outside the operating week (no complete prior bin)")
 
-        n_leads = max(1, span.root // width)
         windows: list[TimeWindow] = []
         design: list[list[float]] = []
-        for lead in range(1, n_leads + 1):
-            start = origin_start + lead * width
-            target = by_start.get(start)
-            if target is None:
-                break
+        for start in sorted(by_start):
+            if start < now.root or start >= now.root + span.root:
+                continue
+            lead = (start - origin_start) // width
+            if lead < 1:
+                continue
+            target = by_start[start]
             windows.append(target.window)
             design.append(self._row(origin, target, min(lead, self.max_lead), week))
         if not design:
@@ -223,6 +253,7 @@ class SurgeForecaster:
                 mean=(),
                 upper_q=(),
                 quantile=self.quantile,
+                covers=None,
             )
 
         mean = tuple(max(0.0, v) for v in self._point.predict(design))
@@ -237,6 +268,7 @@ class SurgeForecaster:
             mean=mean,
             upper_q=upper,
             quantile=self.quantile,
+            covers=TimeWindow(start=windows[0].start, end=windows[-1].end),
         )
 
 

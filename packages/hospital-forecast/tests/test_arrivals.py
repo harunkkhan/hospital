@@ -238,7 +238,10 @@ def test_surge_forecast_is_shaped_and_ordered() -> None:
     assert forecast.made_at == SimTime(hours(50).root)
     starts = [w.start.root for w in forecast.lead_bins]
     assert starts == sorted(starts), "lead bins run forward in time"
-    assert starts[0] == hours(51).root, "the first lead bin is strictly after the origin"
+    # `now` is exactly on a bin boundary, so the bin starting AT `now` is entirely in
+    # the future and must be forecast. Skipping it (as an origin-relative lead did)
+    # silently dropped the nearest hour — the one a staffing decision needs most.
+    assert starts[0] == hours(50).root
     assert all(v >= 0.0 for v in (*forecast.mean, *forecast.upper_q)), "counts are non-negative"
 
 
@@ -333,3 +336,54 @@ def test_poisson_deviance_refuses_negative_counts_and_rates() -> None:
 
     # A zero rate against a zero count is legitimate and scores perfectly.
     assert poisson_deviance([0.0], [0.0]) == pytest.approx(0.0)
+
+
+def test_the_returned_bins_start_inside_the_declared_horizon() -> None:
+    """`horizon` must describe the bins returned, not a window near them.
+
+    Every returned bin has to *start* within `[now, now + horizon)`. Bins are the
+    model's unit and cannot be cut, so the covered interval is bin-aligned and may end
+    past the horizon — which is exactly why `covers` is reported separately.
+    """
+    for origin_hours, offset_minutes in ((50, 0), (50, 30), (73, 17)):
+        now = SimTime(hours(origin_hours).root + minutes(offset_minutes).root)
+        forecast = _FORECASTER.predict(_HOLDOUT.log, now, _WEEK, horizon=hours(4))
+        assert forecast.lead_bins, (origin_hours, offset_minutes)
+        for window in forecast.lead_bins:
+            assert now.root <= window.start.root < now.root + hours(4).root, (
+                f"bin starting {window.start.root} is outside [{now.root}, +4h)"
+            )
+        assert forecast.covers is not None
+        assert forecast.covers.start == forecast.lead_bins[0].start
+        assert forecast.covers.end == forecast.lead_bins[-1].end
+
+
+def test_a_mid_bin_forecast_reports_what_it_actually_covers() -> None:
+    """At 30 minutes past the hour the horizon and the covered span genuinely differ."""
+    now = SimTime(hours(50).root + minutes(30).root)
+    forecast = _FORECASTER.predict(_HOLDOUT.log, now, _WEEK, horizon=hours(1))
+    assert forecast.horizon == hours(1)
+    assert forecast.covers is not None
+    # The partial 50:30-51:00 remainder is not a whole bin, so the nearest forecastable
+    # bin is 51:00-52:00 -- which ends past now+1h, and `covers` says so.
+    assert forecast.covers.start.root == hours(51).root
+    assert forecast.covers.end.root == hours(52).root
+    assert forecast.covers.end.root > now.root + hours(1).root
+
+
+def test_the_lag_origin_is_the_last_complete_bin() -> None:
+    """Training's lead 1 is "the bin after a complete bin" — prediction must match.
+
+    Anchoring on the bin *containing* `now` asked the model for lead 1 when the real
+    distance was 2, so a mid-bin forecast was scored against a lead it was never
+    trained on.
+    """
+    on_boundary = _FORECASTER.predict(
+        _HOLDOUT.log, SimTime(hours(60).root), _WEEK, horizon=hours(2)
+    )
+    mid_bin = _FORECASTER.predict(
+        _HOLDOUT.log, SimTime(hours(60).root + minutes(30).root), _WEEK, horizon=hours(2)
+    )
+    # On the boundary the 60:00 bin is forecastable; 30 minutes in it is not.
+    assert on_boundary.lead_bins[0].start.root == hours(60).root
+    assert mid_bin.lead_bins[0].start.root == hours(61).root
