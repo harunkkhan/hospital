@@ -519,20 +519,20 @@ def retrain_loop(
         # artifact, so there is nothing to compare and nothing to promote.
         return None
 
-    champion_report = _report_from_meta(incumbent, challenger.metrics)
+    # RE-SCORE the incumbent on the challenger's holdout. Its stored metrics describe
+    # whatever week it was validated against, which may be an easier or harder one;
+    # comparing those to the challenger's fresh score is not a comparison at all. A
+    # champion at 0.90 on an easy week would beat a genuinely better challenger at
+    # 0.85 on a hard one, and the store would keep the worse model.
+    *_, holdout = weeks
+    train_weeks = list(weeks[:-2])
+    champion_report = validate_bundle(
+        incumbent.version, store, holdout, train_weeks, config, name=name
+    )
     if promote_if(champion_report, challenger.metrics):
         store.promote(name, challenger.version)
         return challenger
     return None
-
-
-def _report_from_meta(meta: ArtifactMeta, shape: ValidationReport) -> ValidationReport:
-    """Rebuild a report from a stored artifact's flattened metrics."""
-    per_model: dict[str, dict[str, float]] = {}
-    for flat_key, value in meta.metrics.items():
-        model, _, metric = flat_key.partition(".")
-        per_model.setdefault(model, {})[metric] = value
-    return ValidationReport(per_model=per_model, holdout=shape.holdout, train=shape.train)
 
 
 def improves_deterioration_auroc(

@@ -511,3 +511,30 @@ def test_the_gbt_hyperparameters_actually_reach_the_estimators(tmp_path: Path) -
     preds_a = [models_a.los_regressor.predict_median_los(r).root for r in rows]
     preds_b = [models_b.los_regressor.predict_median_los(r).root for r in rows]
     assert preds_a != preds_b, "a depth-1 stump must not predict what a depth-8 tree does"
+
+
+def test_champion_and_challenger_are_scored_on_the_same_week(tmp_path: Path) -> None:
+    """Both sides must be measured on the challenger's holdout, not their own.
+
+    The incumbent's stored metrics describe whatever week it was validated against.
+    Comparing those to the challenger's fresh score means a champion that happened to
+    be validated on an easy week beats a genuinely better challenger — and the store
+    keeps the worse model. `retrain_loop` therefore re-scores the incumbent.
+    """
+    store = ModelStore(tmp_path)
+    train_all(_WEEKS, _CONFIG, store)
+
+    seen: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+
+    def record(champion: ValidationReport, challenger: ValidationReport) -> bool:
+        seen.append((champion.holdout, challenger.holdout))
+        return False
+
+    retrain_loop(store, _WEEKS, _CONFIG.model_copy(update={"seed": 4242}), promote_if=record)
+    assert seen, "promote_if must actually be consulted"
+    champion_holdout, challenger_holdout = seen[0]
+    assert champion_holdout == challenger_holdout, (
+        f"compared different weeks: champion on {champion_holdout}, "
+        f"challenger on {challenger_holdout}"
+    )
+    assert champion_holdout == ("run-003",)
