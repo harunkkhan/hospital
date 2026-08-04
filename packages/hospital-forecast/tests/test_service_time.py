@@ -381,3 +381,70 @@ def test_the_smearing_factor_is_at_least_one() -> None:
     magnitude just scales with how noisy the fit is, and on real data it is larger.
     """
     assert _MODEL.smearing >= 1.0 - 1e-9
+
+
+def test_lab_draws_are_not_pooled_into_the_nurse_visit_fit() -> None:
+    """A bedside draw shares the nurse-visit event pair but not its distribution.
+
+    `sim` emits `NurseVisit*` for `Activity.LAB` (no `Lab*` pair exists) while the
+    sampler draws the two from different means. Pooling them produced a NURSE_VISIT
+    estimate matching neither and no LAB estimate at all — breaking this module's
+    guarantee that a fitted key names what the sampler keys on.
+    """
+    from hospital.core import StaffId
+    from hospital.core.events import (
+        NurseVisitCompleted,
+        NurseVisitStarted,
+        TestOrdered,
+        TestResulted,
+    )
+
+    pid = PatientId("lab_p")
+    nurse = StaffId("rn")
+    patient = Patient(
+        id=pid,
+        arrival_time=SimTime(0),
+        arrival_mode=_WEEKS[0].roster[next(iter(_WEEKS[0].roster))].arrival_mode,
+        esi=EsiAcuity.ESI3,
+        complaint="chest_pain",
+        isolation_required=False,
+        workup=WorkupNeeds(provider_visits=0, nurse_visits=1, imaging=(), labs=1, procedures=0),
+    )
+    log = EventLog()
+    log.append(PatientArrived(occurred_at=SimTime(0), patient=pid, mode=patient.arrival_mode))
+    log.append(TriageCompleted(occurred_at=SimTime(0), patient=pid, esi=EsiAcuity.ESI3))
+
+    def visit(start_s: int, end_s: int) -> None:
+        log.append(
+            NurseVisitStarted(occurred_at=SimTime(start_s * 1_000_000), patient=pid, staff=nurse)
+        )
+        log.append(
+            NurseVisitCompleted(occurred_at=SimTime(end_s * 1_000_000), patient=pid, staff=nurse)
+        )
+
+    # A genuine 480s nurse visit...
+    visit(0, 480)
+    # ...then an ordered lab, whose draw is the NEXT nurse-visit pair, 300s.
+    log.append(
+        TestOrdered(occurred_at=SimTime(600 * 1_000_000), patient=pid, activity=Activity.LAB)
+    )
+    visit(600, 900)
+    log.append(
+        TestResulted(occurred_at=SimTime(1500 * 1_000_000), patient=pid, activity=Activity.LAB)
+    )
+
+    durations = activity_durations([(log, {pid: patient})])
+    nurse_key = ServiceTimeKey(
+        activity=Activity.NURSE_VISIT, esi=EsiAcuity.ESI3, complaint="chest_pain"
+    )
+    lab_key = ServiceTimeKey(activity=Activity.LAB, esi=EsiAcuity.ESI3, complaint="chest_pain")
+    assert durations[nurse_key] == [480.0], "the real nurse visit keeps its own key"
+    assert durations[lab_key] == [300.0], "the draw is attributed to LAB, not pooled"
+
+
+# NOTE: the end-to-end cross-check — that this fit recovers
+# `sim.physics.service_times.default_service_table()`'s own NURSE_VISIT and LAB means
+# from a real `run_replication` log — deliberately does NOT live here. A forecast test
+# may import only `core` and `data` (doc 06 §15), and reaching for `sim` would breach
+# the dependency direction the package exists to respect. It belongs in the top-level
+# integration tests alongside the closed-loop harness.

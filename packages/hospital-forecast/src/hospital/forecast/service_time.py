@@ -47,6 +47,7 @@ from hospital.core.events import (
     PatientArrived,
     ProviderVisitCompleted,
     ProviderVisitStarted,
+    TestOrdered,
     TriageCompleted,
     TriageStarted,
 )
@@ -186,28 +187,77 @@ def _accumulate_durations(
     roster: Mapping[PatientId, Patient],
     out: dict[ServiceTimeKey, list[float]],
 ) -> None:
+    """Walk one log, attributing each closed service episode to its true activity.
+
+    ``sim`` deliberately emits the **nurse-visit** event pair for a bedside lab draw
+    too — the schema has no ``Lab*`` pair, and a draw genuinely is nurse direct care
+    (``physics/executor.py``). But the sampler draws the two from *different*
+    distributions (480s vs 300s base means), so filing both under ``NURSE_VISIT``
+    pooled them into a fitted mean that matched neither, and no ``LAB`` estimate
+    existed at all. That silently broke this module's central guarantee: that a
+    fitted key names the same thing the sampler keys on.
+
+    They are separable from the log. The flow orders a lab, draws it, then results it
+    (``flow/patient.py``), so the first nurse-visit episode opened after a
+    ``TestOrdered(LAB)`` and before its ``TestResulted`` IS the draw. One pending
+    marker per ordered lab, consumed in order.
+    """
     esi_of, _ = _patient_context(log)
     open_starts: dict[tuple[Activity, PatientId], list[int]] = {}
+    # Per patient: how many ordered-but-not-yet-drawn labs are outstanding. A
+    # nurse-visit start while one is outstanding is that draw.
+    pending_draws: dict[PatientId, int] = {}
+    # Per patient, per open nurse-visit episode: whether it was tagged as a lab draw,
+    # so the *completed* event attributes the duration the same way its start did.
+    draw_flags: dict[PatientId, list[bool]] = {}
+
+    def record(activity: Activity, patient_id: PatientId, began: int, ended: int) -> None:
+        patient = roster.get(patient_id)
+        if patient is None:
+            return
+        key = ServiceTimeKey(
+            activity=activity,
+            esi=esi_of.get(patient_id, patient.esi),
+            complaint=patient.complaint,
+        )
+        out.setdefault(key, []).append((ended - began) / 1_000_000)
 
     for env in log.ordered():
         event = env.event
+        if isinstance(event, TestOrdered) and event.activity is Activity.LAB:
+            pending_draws[event.patient] = pending_draws.get(event.patient, 0) + 1
+            continue
+        if isinstance(event, NurseVisitStarted):
+            is_draw = pending_draws.get(event.patient, 0) > 0
+            if is_draw:
+                pending_draws[event.patient] -= 1
+            open_starts.setdefault((Activity.NURSE_VISIT, event.patient), []).append(
+                event.occurred_at.root
+            )
+            draw_flags.setdefault(event.patient, []).append(is_draw)
+            continue
+        if isinstance(event, NurseVisitCompleted):
+            pending = open_starts.get((Activity.NURSE_VISIT, event.patient))
+            flags = draw_flags.get(event.patient)
+            if not pending or not flags:
+                continue
+            record(
+                Activity.LAB if flags.pop(0) else Activity.NURSE_VISIT,
+                event.patient,
+                pending.pop(0),
+                event.occurred_at.root,
+            )
+            continue
         for activity, start_type, end_type in _PAIRS:
+            if activity is Activity.NURSE_VISIT:
+                continue  # handled above, with lab-draw attribution
             if isinstance(event, start_type):
                 open_starts.setdefault((activity, event.patient), []).append(event.occurred_at.root)
             elif isinstance(event, end_type):
                 pending = open_starts.get((activity, event.patient))
                 if not pending:
                     continue
-                began = pending.pop(0)
-                patient = roster.get(event.patient)
-                if patient is None:
-                    continue
-                key = ServiceTimeKey(
-                    activity=activity,
-                    esi=esi_of.get(event.patient, patient.esi),
-                    complaint=patient.complaint,
-                )
-                out.setdefault(key, []).append((event.occurred_at.root - began) / 1_000_000)
+                record(activity, event.patient, pending.pop(0), event.occurred_at.root)
 
 
 def fit_service_time_table(
