@@ -322,10 +322,19 @@ def poisson_deviance(observed: Iterable[float], predicted: Iterable[float]) -> f
     Squared error would treat a miss of 2 on a busy hour the same as on a dead
     one; deviance scales with the count, which is how arrival error actually
     hurts.
+
+    Non-negativity is enforced rather than assumed: deviance is only a distance
+    when both arguments are valid Poisson quantities, and a negative rate makes it
+    go negative, which would rank an impossible forecast above a perfect one.
     """
     total = 0.0
     n = 0
     for y, mu in zip(observed, predicted, strict=True):
+        # A negative rate is not a Poisson mean, and letting one through makes the
+        # deviance negative -- an impossible forecast would then score BETTER than a
+        # perfect one, which silently inverts every model comparison built on it.
+        if mu < 0.0 or y < 0.0:
+            raise ValueError(f"Poisson deviance needs non-negative counts and rates: {y=}, {mu=}")
         # The floor guards the logarithm only. Applying it to the (mu - y) term as
         # well would score a perfect forecast of an empty hour as non-zero.
         term = mu - y

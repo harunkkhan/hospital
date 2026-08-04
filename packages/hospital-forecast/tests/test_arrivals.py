@@ -314,3 +314,22 @@ def test_week_boundaries_are_respected() -> None:
         assert "week" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("an out-of-week origin must be rejected")
+
+
+def test_poisson_deviance_refuses_negative_counts_and_rates() -> None:
+    """A negative rate would make the deviance negative — better than perfect.
+
+    Deviance is only a distance between valid Poisson quantities. Left unguarded,
+    `poisson_deviance([0], [-1])` returns -2, so an impossible forecast outranks an
+    exact one and every comparison built on the metric silently inverts.
+    """
+    for observed, predicted in (([0.0], [-1.0]), ([-1.0], [1.0]), ([2.0, 1.0], [1.0, -0.5])):
+        try:
+            poisson_deviance(observed, predicted)
+        except ValueError as exc:
+            assert "non-negative" in str(exc)
+        else:  # pragma: no cover - the raise is the contract
+            raise AssertionError(f"expected a rejection for {observed=} {predicted=}")
+
+    # A zero rate against a zero count is legitimate and scores perfectly.
+    assert poisson_deviance([0.0], [0.0]) == pytest.approx(0.0)
