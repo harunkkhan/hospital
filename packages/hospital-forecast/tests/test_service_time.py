@@ -38,6 +38,7 @@ from hospital.forecast.service_time import (
     ServiceTimeKey,
     ServiceTimeTable,
     activity_durations,
+    censoring_report,
     fit_service_time_regressor,
     fit_service_time_table,
     los_training_frame,
@@ -448,3 +449,121 @@ def test_lab_draws_are_not_pooled_into_the_nurse_visit_fit() -> None:
 # may import only `core` and `data` (doc 06 §15), and reaching for `sim` would breach
 # the dependency direction the package exists to respect. It belongs in the top-level
 # integration tests alongside the closed-loop harness.
+
+
+def test_an_interrupted_service_is_not_counted_as_a_completed_one() -> None:
+    """A staff absence cuts a visit short AND requeues it — that is one visit, not two.
+
+    The engine emits a `*Completed` at the interruption instant and puts the
+    unfinished task back on the queue, so the same 1200s visit contributes a 120s
+    observation *and* the later full one. That biases the fitted mean down and
+    inflates `n`, making a thin key look well-supported.
+
+    Currently dormant — the shipped scenarios inject no disruptions — which is exactly
+    why it needs a test: it would activate silently the first time a scenario uses
+    `staff_absence`.
+    """
+    from hospital.core import StaffId
+    from hospital.core.events import (
+        DisruptionInjected,
+        ProviderVisitStarted,
+    )
+
+    pid = PatientId("cut_short")
+    doc = StaffId("doc_1")
+    patient = Patient(
+        id=pid,
+        arrival_time=SimTime(0),
+        arrival_mode=_WEEKS[0].roster[next(iter(_WEEKS[0].roster))].arrival_mode,
+        esi=EsiAcuity.ESI3,
+        complaint="chest_pain",
+        isolation_required=False,
+        workup=WorkupNeeds(provider_visits=1, nurse_visits=0, imaging=(), labs=0, procedures=0),
+    )
+    log = EventLog()
+    log.append(PatientArrived(occurred_at=SimTime(0), patient=pid, mode=patient.arrival_mode))
+    log.append(TriageCompleted(occurred_at=SimTime(0), patient=pid, esi=EsiAcuity.ESI3))
+
+    # A visit starts, is interrupted 120s in by a staff absence, then is redone in full.
+    log.append(ProviderVisitStarted(occurred_at=SimTime(0), patient=pid, staff=doc))
+    log.append(
+        DisruptionInjected(
+            occurred_at=SimTime(120 * 1_000_000), disruption="staff_absence", detail=doc.root
+        )
+    )
+    log.append(ProviderVisitCompleted(occurred_at=SimTime(120 * 1_000_000), patient=pid, staff=doc))
+    log.append(ProviderVisitStarted(occurred_at=SimTime(600 * 1_000_000), patient=pid, staff=doc))
+    log.append(
+        ProviderVisitCompleted(occurred_at=SimTime(1800 * 1_000_000), patient=pid, staff=doc)
+    )
+
+    durations = activity_durations([(log, {pid: patient})])
+    key = ServiceTimeKey(
+        activity=Activity.PROVIDER_VISIT, esi=EsiAcuity.ESI3, complaint="chest_pain"
+    )
+    assert durations[key] == [1200.0], (
+        "only the completed 1200s visit counts; the 120s truncation is not an observation"
+    )
+
+
+def test_an_unrelated_disruption_does_not_discard_a_real_completion() -> None:
+    """The exclusion must be narrow: same instant AND same staff, not either alone."""
+    from hospital.core import StaffId
+    from hospital.core.events import DisruptionInjected, ProviderVisitStarted
+
+    pid = PatientId("bystander")
+    mine, theirs = StaffId("doc_a"), StaffId("doc_b")
+    patient = Patient(
+        id=pid,
+        arrival_time=SimTime(0),
+        arrival_mode=_WEEKS[0].roster[next(iter(_WEEKS[0].roster))].arrival_mode,
+        esi=EsiAcuity.ESI3,
+        complaint="chest_pain",
+        isolation_required=False,
+        workup=WorkupNeeds(provider_visits=1, nurse_visits=0, imaging=(), labs=0, procedures=0),
+    )
+    log = EventLog()
+    log.append(PatientArrived(occurred_at=SimTime(0), patient=pid, mode=patient.arrival_mode))
+    log.append(TriageCompleted(occurred_at=SimTime(0), patient=pid, esi=EsiAcuity.ESI3))
+    log.append(ProviderVisitStarted(occurred_at=SimTime(0), patient=pid, staff=mine))
+    # Someone ELSE goes absent at the very instant this visit legitimately finishes.
+    log.append(
+        DisruptionInjected(
+            occurred_at=SimTime(900 * 1_000_000), disruption="staff_absence", detail=theirs.root
+        )
+    )
+    log.append(
+        ProviderVisitCompleted(occurred_at=SimTime(900 * 1_000_000), patient=pid, staff=mine)
+    )
+
+    durations = activity_durations([(log, {pid: patient})])
+    key = ServiceTimeKey(
+        activity=Activity.PROVIDER_VISIT, esi=EsiAcuity.ESI3, complaint="chest_pain"
+    )
+    assert durations[key] == [900.0], "another clinician's absence must not void this visit"
+
+
+def test_censoring_is_reported_so_the_downward_bias_can_be_bounded() -> None:
+    """The bias is real and unfixed; what v1 owes a caller is its size.
+
+    Dropping open stays is length-biased — a long stay is likelier to be cut off by
+    the horizon — so both estimators run short. `censoring_report` makes the exposure
+    measurable instead of leaving it as an unquantified caveat.
+    """
+    report = censoring_report(_RUNS)
+    assert report.completed > 0
+    assert report.censored >= 0
+    assert 0.0 <= report.dropped_share < 1.0
+    # On this fixture the horizon is long relative to a stay, so censoring is light.
+    assert report.dropped_share < 0.2, (
+        f"{report.dropped_share:.1%} censored — too high to treat the fitted means as "
+        "unbiased; a survival fit would be needed"
+    )
+    # And it is a real count, not a stub.
+    assert report.completed + report.censored == sum(len(w.roster) for w in _WEEKS)
+
+
+def test_an_empty_corpus_reports_no_censoring_rather_than_dividing_by_zero() -> None:
+    empty = censoring_report([])
+    assert empty.completed == 0 and empty.censored == 0
+    assert empty.dropped_share == 0.0

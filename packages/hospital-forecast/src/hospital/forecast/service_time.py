@@ -19,7 +19,22 @@ discharge estimates. In M1 those are static scenario means; the
 
 Durations are read from paired ``*Started``/``*Completed`` events. An unpaired
 start (the run ended mid-visit) is dropped rather than closed at the horizon —
-censoring it to the cut would bias every mean downward.
+closing it at the cut would report a duration that never happened.
+
+**Known bias, not fixed here: informative right-censoring.** Dropping the
+incomplete observation does not remove the censoring, it only hides it. Whether an
+episode completes before the horizon depends on *how long it is*, so the surviving
+sample is length-biased: of two otherwise identical late arrivals, the ten-minute
+stay is retained and the four-hour stay is discarded. Both
+:func:`activity_durations` and :func:`patient_los` are therefore biased **downward**,
+and the bias grows with the fraction of the horizon that lies near the end.
+
+Correcting it properly needs survival analysis — a Kaplan-Meier or
+accelerated-failure-time fit that uses the censored observations as the inequalities
+they are — which is out of scope for v1 and would change this module's output type.
+What v1 does instead is make the exposure visible: :func:`censoring_report` states
+how many episodes were dropped and what share of the sample that is, so a caller can
+judge whether the bias is negligible for their horizon rather than assume it.
 """
 
 from __future__ import annotations
@@ -36,10 +51,12 @@ from hospital.core import (
     FrozenModel,
     Patient,
     PatientId,
+    StaffId,
     seconds,
 )
 from hospital.core.events import (
     DischargeCompleted,
+    DisruptionInjected,
     DocumentationCompleted,
     DocumentationStarted,
     NurseVisitCompleted,
@@ -203,6 +220,26 @@ def _accumulate_durations(
     marker per ordered lab, consumed in order.
     """
     esi_of, _ = _patient_context(log)
+    # (instant, staff) of every staff-absence injection. The engine emits a
+    # `*Completed` at the interruption instant AND requeues the unfinished task, so a
+    # 20-minute visit cut short after two contributes BOTH a 2-minute observation and
+    # the later full one -- biasing the fit down and inflating `n`. The disruption
+    # event names the instant and the staff member, so the truncated episode can be
+    # identified exactly rather than guessed at.
+    truncations: set[tuple[int, str]] = {
+        (env.event.occurred_at.root, env.event.detail)
+        for env in log.ordered()
+        if isinstance(env.event, DisruptionInjected) and env.event.disruption == "staff_absence"
+    }
+    truncated_instants = {instant for instant, _ in truncations}
+
+    def is_truncated(instant: int, staff: StaffId | None) -> bool:
+        if staff is not None:
+            return (instant, staff.root) in truncations
+        # Triage completions carry `esi`, not `staff`, so they can only be matched on
+        # the instant. Looser, and stated rather than hidden.
+        return instant in truncated_instants
+
     open_starts: dict[tuple[Activity, PatientId], list[int]] = {}
     # Per patient: how many ordered-but-not-yet-drawn labs are outstanding. A
     # nurse-visit start while one is outstanding is that draw.
@@ -211,7 +248,15 @@ def _accumulate_durations(
     # so the *completed* event attributes the duration the same way its start did.
     draw_flags: dict[PatientId, list[bool]] = {}
 
-    def record(activity: Activity, patient_id: PatientId, began: int, ended: int) -> None:
+    def record(
+        activity: Activity,
+        patient_id: PatientId,
+        began: int,
+        ended: int,
+        staff: StaffId | None = None,
+    ) -> None:
+        if is_truncated(ended, staff):
+            return  # an interrupted episode, not a completed service
         patient = roster.get(patient_id)
         if patient is None:
             return
@@ -246,6 +291,7 @@ def _accumulate_durations(
                 event.patient,
                 pending.pop(0),
                 event.occurred_at.root,
+                getattr(event, "staff", None),
             )
             continue
         for activity, start_type, end_type in _PAIRS:
@@ -257,7 +303,13 @@ def _accumulate_durations(
                 pending = open_starts.get((activity, event.patient))
                 if not pending:
                     continue
-                record(activity, event.patient, pending.pop(0), event.occurred_at.root)
+                record(
+                    activity,
+                    event.patient,
+                    pending.pop(0),
+                    event.occurred_at.root,
+                    getattr(event, "staff", None),
+                )
 
 
 def fit_service_time_table(
@@ -291,6 +343,45 @@ def fit_service_time_table(
         fallbacks[activity] = LognormalParams(mean_s=mean, cv=cv, n=len(samples))
 
     return ServiceTimeTable(params=params, fallbacks=fallbacks)
+
+
+class CensoringReport(FrozenModel):
+    """How much of the sample right-censoring removed (see the module docstring).
+
+    ``dropped_share`` is the number to look at: a few tenths of a percent means the
+    downward bias is negligible, while a tenth of the sample means the fitted means
+    are meaningfully short and a survival fit is needed before trusting them.
+    """
+
+    completed: int
+    censored: int
+
+    @property
+    def dropped_share(self) -> float:
+        total = self.completed + self.censored
+        return self.censored / total if total else 0.0
+
+
+def censoring_report(runs: Sequence[Run]) -> CensoringReport:
+    """Count completed vs still-open stays, so the censoring bias can be bounded.
+
+    Reported rather than corrected: dropping the open stays is length-biased (a long
+    stay is likelier to be cut off), and quantifying the exposure is what lets a
+    caller decide whether that matters at their horizon.
+    """
+    completed = 0
+    censored = 0
+    for log, _roster in runs:
+        arrived: set[PatientId] = set()
+        exited: set[PatientId] = set()
+        for env in log.ordered():
+            if isinstance(env.event, PatientArrived):
+                arrived.add(env.event.patient)
+            elif isinstance(env.event, DischargeCompleted):
+                exited.add(env.event.patient)
+        completed += len(exited)
+        censored += len(arrived - exited)
+    return CensoringReport(completed=completed, censored=censored)
 
 
 def patient_los(log: EventLog) -> dict[PatientId, float]:
@@ -489,11 +580,13 @@ def static_service_table(
 
 __all__ = [
     "DEFAULT_MIN_SAMPLES",
+    "CensoringReport",
     "LognormalParams",
     "ServiceTimeKey",
     "ServiceTimeRegressor",
     "ServiceTimeTable",
     "activity_durations",
+    "censoring_report",
     "fit_service_time_regressor",
     "fit_service_time_table",
     "los_training_frame",
