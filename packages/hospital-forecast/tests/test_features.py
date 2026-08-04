@@ -361,3 +361,61 @@ def test_row_ids_are_identity_and_never_columns() -> None:
     )
     assert "patient" not in frame.feature_names
     assert not any(name.endswith("_id") for name in frame.feature_names)
+
+
+def test_the_default_cutoff_is_each_rows_own_arrival() -> None:
+    """`as_of=None` means "as of each patient's arrival" — not "the whole log".
+
+    The property test above always passes an explicit `as_of`, under which every row
+    shares one cutoff and the prefix filter alone is correct. `as_of=None` — the path
+    LOS training uses — has a *per-row* cutoff, and that is where a later triage
+    result leaked in: a row stamped `as_of=00:00` reported the ESI revealed at 00:10.
+    """
+    pid = PatientId("late_triage")
+    patient = Patient(
+        id=pid,
+        arrival_time=SimTime(0),
+        arrival_mode=ArrivalMode.WALK_IN,
+        esi=EsiAcuity.ESI5,
+        complaint="chest_pain",
+        isolation_required=False,
+        workup=WorkupNeeds(provider_visits=1, nurse_visits=0, imaging=(), labs=0, procedures=0),
+    )
+    log = EventLog()
+    log.append(PatientArrived(occurred_at=SimTime(0), patient=pid, mode=ArrivalMode.WALK_IN))
+    log.append(
+        TriageCompleted(occurred_at=SimTime(minutes(10).root), patient=pid, esi=EsiAcuity.ESI1)
+    )
+    week = OperatingWeek(start=SimTime(0), end=SimTime(hours(24).root))
+    roster = {pid: patient}
+
+    # At arrival nothing has revealed ESI-1, so the roster estimate stands.
+    (default_row,) = patient_features(log, roster, week)
+    assert default_row.as_of == SimTime(0)
+    assert default_row.esi is EsiAcuity.ESI5, "a future triage must not reach an arrival-time row"
+
+    # Once triage has completed by the cutoff, the triaged value is correct to use.
+    (later_row,) = patient_features(log, roster, week, as_of=SimTime(minutes(10).root))
+    assert later_row.esi is EsiAcuity.ESI1
+
+
+@settings(max_examples=12, deadline=None)
+@given(cut_hours=st.integers(min_value=1, max_value=167))
+def test_the_default_path_agrees_with_a_per_arrival_explicit_cutoff(cut_hours: int) -> None:
+    """`as_of=None` must equal asking for each patient's own arrival instant.
+
+    The equivalence the explicit-cutoff property test could not see: it fixes one
+    cutoff for all rows, so it cannot detect a row reading past its *own*.
+    """
+    del cut_hours
+    default_rows = {
+        row.patient: row for row in patient_features(_WEEK.log, _WEEK.roster, _WEEK.week)
+    }
+    assert default_rows
+    for patient, row in list(default_rows.items())[:25]:
+        (explicit,) = [
+            r
+            for r in patient_features(_WEEK.log, _WEEK.roster, _WEEK.week, as_of=row.as_of)
+            if r.patient == patient
+        ]
+        assert row == explicit, f"{patient} differs between the default and explicit cutoff"

@@ -364,8 +364,13 @@ def patient_features(
     """
     envelopes = prefix(log, as_of)
     congestion = _congestion_at_arrivals(envelopes)
-    triaged: dict[PatientId, EsiAcuity] = {
-        env.event.patient: env.event.esi
+    # WHEN each triage result became known, not just what it was. With an explicit
+    # `as_of` every row shares one cutoff and the prefix filter above is enough; with
+    # `as_of=None` each row's cutoff is its OWN arrival, so a triage completed later
+    # must stay invisible to it. Keeping the instant is what lets both paths apply the
+    # same rule.
+    triaged: dict[PatientId, tuple[int, EsiAcuity]] = {
+        env.event.patient: (env.event.occurred_at.root, env.event.esi)
         for env in envelopes
         if isinstance(env.event, TriageCompleted)
     }
@@ -382,13 +387,16 @@ def patient_features(
         how = _hour_of_week(arrival, week)
         hour_of_day, dow = how % _HOURS_PER_DAY, how // _HOURS_PER_DAY
         crowd = congestion[event.patient]
+        cutoff = as_of.root if as_of is not None else arrival.root
+        revealed = triaged.get(event.patient)
+        known_esi = revealed[1] if revealed is not None and revealed[0] <= cutoff else patient.esi
         rows.append(
             PatientFeatures(
                 patient=event.patient,
                 as_of=as_of if as_of is not None else arrival,
-                # Acuity is known once triage completes; before that the arrival
-                # descriptor's own acuity is the best available estimate.
-                esi=triaged.get(event.patient, patient.esi),
+                # Acuity as known AT the cutoff: the triaged value once triage has
+                # completed by then, otherwise the arrival descriptor's estimate.
+                esi=known_esi,
                 arrival_mode=event.mode,
                 complaint=patient.complaint,
                 hour_sin=_sin_of(hour_of_day, _HOURS_PER_DAY),
