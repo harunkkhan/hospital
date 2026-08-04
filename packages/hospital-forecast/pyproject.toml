@@ -7,6 +7,7 @@ dependencies = [
     "hospital-core",
     "hospital-data",
     "scikit-learn",
+    "joblib",
     "lightgbm",
     "numpy",
 ]

@@ -29,3 +29,10 @@ apps/web/.vite/
 .vscode/
 
 # NOTE: uv.lock and bun.lockb ARE committed (CI runs --locked / --frozen-lockfile).
+
+# --- internal working plans (never published) ---
+# These are the build's own planning/handoff notes. They live in the working tree
+# on purpose but must never reach a commit or a PR diff -- a `git add -A` swept
+# them in once, which is exactly what this entry exists to prevent.
+/PLAN.md
+/docs/plan/

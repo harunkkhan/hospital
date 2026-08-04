@@ -206,6 +206,7 @@ source = { editable = "packages/hospital-forecast" }
 dependencies = [
     { name = "hospital-core" },
     { name = "hospital-data" },
+    { name = "joblib" },
     { name = "lightgbm" },
     { name = "numpy" },
     { name = "scikit-learn" },
@@ -215,6 +216,7 @@ dependencies = [
 requires-dist = [
     { name = "hospital-core", editable = "packages/hospital-core" },
     { name = "hospital-data", editable = "packages/hospital-data" },
+    { name = "joblib" },
     { name = "lightgbm" },
     { name = "numpy" },
     { name = "scikit-learn" },

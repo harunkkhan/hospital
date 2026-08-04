@@ -51,6 +51,18 @@ dev = [
     "httpx2>=2.9.1",
 ]
 
+# --- pytest ---------------------------------------------------------------
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Surface everything by default so a real deprecation in our own code is loud.
+    "default",
+    # ...except this one, from joblib's pickle reader against numpy >= 2.5. It is
+    # third-party internals we do not control, and it fires once per array on every
+    # artifact load -- thousands of lines that would bury any warning that matters.
+    # Scoped to the exact message so joblib's fix silently retires it.
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning:joblib.numpy_pickle",
+]
+
 # --- ruff -----------------------------------------------------------------
 [tool.ruff]
 line-length = 100
