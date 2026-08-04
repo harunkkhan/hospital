@@ -432,6 +432,16 @@ def window_features(
     width = bin_width if bin_width is not None else hours(1)
     if width.root <= 0:
         raise ValueError("bin_width must be positive")
+    # The lag features are NAMED in hours (`lag_1h`, `lag_24h`), and `per_hour` below
+    # is an integer count of bins per hour. A width that does not divide an hour makes
+    # those names lie -- with 45-minute bins `lag_24h` reaches back 18 hours -- and the
+    # values stay plausible, so nothing downstream would notice. Reject the width
+    # rather than rename the contract or silently round it.
+    if _MICROS_PER_HOUR % width.root:
+        raise ValueError(
+            f"bin_width must divide one hour exactly (got {width.root}us); the lag "
+            "features are named in hours and would otherwise not mean what they say"
+        )
     span = week.end.root - week.start.root
     n_bins = span // width.root
     counts = [0] * n_bins

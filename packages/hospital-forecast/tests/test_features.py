@@ -419,3 +419,26 @@ def test_the_default_path_agrees_with_a_per_arrival_explicit_cutoff(cut_hours: i
             if r.patient == patient
         ]
         assert row == explicit, f"{patient} differs between the default and explicit cutoff"
+
+
+def test_a_bin_width_that_does_not_divide_an_hour_is_refused() -> None:
+    """`lag_1h`/`lag_24h` are named in hours; a 45-minute bin makes them lie.
+
+    `per_hour` is an integer count of bins per hour, so a non-dividing width rounds:
+    with 45-minute bins `lag_24h` reaches back 18 hours. The values stay entirely
+    plausible, which is exactly why this has to be refused at the boundary rather
+    than left to a reader to notice.
+    """
+    for bad_minutes in (45, 50, 7):
+        try:
+            window_features(_WEEK.log, _WEEK.week, bin_width=minutes(bad_minutes))
+        except ValueError as exc:
+            assert "divide one hour" in str(exc)
+        else:  # pragma: no cover - the raise is the contract
+            raise AssertionError(f"{bad_minutes}-minute bins must be rejected")
+
+    # Widths that do divide an hour are fine, and the lag really is one hour back.
+    rows = window_features(_WEEK.log, _WEEK.week, bin_width=minutes(30))
+    counts = [row.count for row in rows]
+    assert rows[4].lag_1h == counts[2], "two 30-minute bins back is one hour"
+    assert rows[0].lag_1h == 0
