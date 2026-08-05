@@ -46,7 +46,8 @@ a degenerate config (``w_time`` or ``unplaced_wait_penalty`` of ``0``).
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, ClassVar
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from hospital.core import (
     MICROS_PER_SEC,
@@ -185,6 +186,79 @@ def travel_weight(
     return coeffs.travel_weight * (arrival + caregiver + imaging)
 
 
+# How steeply scarcity bites as a zone fills. Integer-valued because every weight in
+# this model is (CP-SAT takes no floats): with a base of 12, a zone with no free bays
+# scores 12, one free scores 6, five free scores 2, and eleven or more scores 1 --
+# a roomy zone imposes almost no occupancy cost, which is the intended behaviour.
+_SCARCITY_BASE: Final[int] = 12
+
+
+def zone_scarcity(remaining: int) -> int:
+    """How costly one more occupied bay is in a zone with ``remaining`` free.
+
+    Decreasing in ``remaining`` and never below 1, so the occupancy term is always a
+    cost and never a reward for filling a zone.
+    """
+    return max(1, _SCARCITY_BASE // (1 + max(0, remaining)))
+
+
+def occupancy_cost(
+    bay: Bay,
+    coeffs: AssignmentCoeffs,
+    expected_stay: Duration | None,
+    scarcity_by_zone: Mapping[ZoneId, int],
+) -> int:
+    """What holding ``bay`` for a predicted stay costs, scaled by the zone's scarcity.
+
+    This is the term a length-of-stay prediction actually buys. Travel is a *static*
+    property of a bay, so a per-patient constant added to ``w[p,b]`` would cancel out
+    across bays and change nothing — the prediction has to interact with the bay to
+    matter at all, and scarcity is that interaction: a four-hour stay in the last free
+    resus bay costs far more than the same stay in a half-empty general zone.
+
+    Returns 0 without a prediction, or when ``w_occupancy`` is 0 — so an arm that
+    supplies neither behaves exactly as before.
+
+    Openly a heuristic, in the same family as the travel terms doc 03 §4.3 flags as
+    🟡-tunable. It only *biases* which valid bay is chosen and can never make a plan
+    infeasible.
+
+    **Scale is load-bearing, not cosmetic.** Stay is counted in *minutes* and scarcity
+    is normalized by :data:`_SCARCITY_BASE` so the term lands in the same range as the
+    travel spread it competes with. Measured on the reference floor, travel spans
+    ~240-1200 across bays; this term spans ~30 (a half-hour in a roomy zone) to ~2000
+    (six hours in the last free bay). Priced in raw seconds instead, six hours came out
+    near 500 000 — a term that large stops being a bias and simply dictates the zone,
+    and worse, it makes the *prediction itself* irrelevant: once occupancy swamps
+    travel, ``argmin`` depends only on which zone is scarcest, so every realistic
+    predicted stay picks the same bay and a static-vs-ML comparison measures nothing.
+    The prediction has to be able to lose to a travel saving for its value to matter.
+    """
+    if expected_stay is None or coeffs.occupancy_weight == 0:
+        return 0
+    scarcity = scarcity_by_zone.get(bay.zone, 1)
+    return coeffs.occupancy_weight * (_seconds(expected_stay) // 60) * scarcity // _SCARCITY_BASE
+
+
+def assignment_weight(
+    patient: Patient,
+    bay: Bay,
+    oracle: RoutingOracle,
+    layout: FloorLayout,
+    coeffs: AssignmentCoeffs,
+    *,
+    expected_stay: Duration | None = None,
+    scarcity_by_zone: Mapping[ZoneId, int] | None = None,
+) -> int:
+    """``w[p,b]`` — expected downstream travel plus the predicted occupancy cost.
+
+    Kept separate from :func:`travel_weight` so that function keeps meaning exactly
+    what its name says; this is the sum the model minimizes.
+    """
+    travel = travel_weight(patient, bay, oracle, layout, coeffs)
+    return travel + occupancy_cost(bay, coeffs, expected_stay, scarcity_by_zone or {})
+
+
 def occupied_by_zone_type(di: DecisionInput) -> dict[ZoneType, int]:
     """Count of currently-OCCUPIED bays per zone type (matches the validator's count)."""
     static_bays = {b.id: b for b in di.layout.bays}
@@ -230,6 +304,7 @@ class CpSatPlacement:
         rules: CompiledRules,
         time_cap: Duration | None = None,
         warm_start: Plan | None = None,
+        expected_stay: Mapping[PatientId, Duration] | None = None,
     ) -> SolveResult:
         from ortools.sat.python import cp_model
 
@@ -248,9 +323,19 @@ class CpSatPlacement:
             for b in bays
             if (p.id, b.id) in compat
         }
+        scarcity_by_zone = {
+            zone: zone_scarcity(remaining) for zone, remaining in zone_remaining(di).items()
+        }
+        stays: Mapping[PatientId, Duration] = expected_stay or {}
         weight = {
-            (pid, bid): travel_weight(
-                patient_by_id[pid], bay_by_id[bid], oracle, layout, coeffs[patient_by_id[pid].esi]
+            (pid, bid): assignment_weight(
+                patient_by_id[pid],
+                bay_by_id[bid],
+                oracle,
+                layout,
+                coeffs[patient_by_id[pid].esi],
+                expected_stay=stays.get(pid),
+                scarcity_by_zone=scarcity_by_zone,
             )
             for (pid, bid) in x
         }
@@ -402,10 +487,13 @@ __all__ = [
     "DEFAULT_TIME_CAP",
     "NEEDS_BAY_STAGES",
     "CpSatPlacement",
+    "assignment_weight",
     "candidates",
     "compat_pair",
+    "occupancy_cost",
     "occupied_by_zone_type",
     "self_validate",
     "travel_weight",
     "zone_remaining",
+    "zone_scarcity",
 ]

@@ -18,6 +18,7 @@ is the one place the doc's signature is extended, for correctness.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Protocol
 
@@ -27,6 +28,7 @@ from hospital.core import (
     Duration,
     FrozenModel,
     NodeId,
+    PatientId,
     Plan,
     RoutePath,
 )
@@ -63,7 +65,18 @@ class RoutingOracle(Protocol):
 
 
 class Solver(Protocol):
-    """The placement-backend contract (the registry-backed family, doc 03 §3.1)."""
+    """The placement-backend contract (the registry-backed family, doc 03 §3.1).
+
+    ``expected_stay`` is the prediction port: a per-patient predicted length of stay
+    that lets a backend price how long an assignment will hold a bay. Optional and
+    defaulting to ``None`` so a backend fed nothing behaves exactly as it did before
+    predictions existed — which is what keeps the M1 goldens meaningful.
+
+    It is passed explicitly rather than folded into ``DecisionInput`` because a
+    prediction is not floor state: the seam's contract is that a policy sees what is
+    *observable now* (nuance 1.10), and smuggling a model output in there would blur
+    the one boundary that makes the no-hidden-fields guarantee checkable.
+    """
 
     name: ClassVar[str]
     version: ClassVar[str]
@@ -77,6 +90,7 @@ class Solver(Protocol):
         rules: CompiledRules,
         time_cap: Duration | None = None,
         warm_start: Plan | None = None,
+        expected_stay: Mapping[PatientId, Duration] | None = None,
     ) -> SolveResult: ...
 
 

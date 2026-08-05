@@ -34,6 +34,7 @@ side channel (deviation from the doc's field list, noted in the build report).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import simpy
@@ -49,6 +50,7 @@ from hospital.core import (
     FrozenModel,
     InfeasiblePlan,
     OperatingWeek,
+    PatientId,
     RandomStreams,
     RiskMonitor,
     Rule,
@@ -261,6 +263,7 @@ def run_replication(
     objective: ObjectiveConfig = DEFAULT_OBJECTIVE,
     watch: VitalsWatch | None = None,
     monitor: RiskMonitor | None = None,
+    expected_stay: Mapping[PatientId, Duration] | None = None,
 ) -> Replication:
     """Run one full horizon of ``scenario`` under ``arm`` — deterministic in ``seed``.
 
@@ -290,7 +293,17 @@ def run_replication(
     # 6-8: oracle + the caller's objective + compiled rules + the chosen arm
     oracle = GraphRoutingOracle(layout.graph)
     rules = compile_rules(scenario.rules if scenario.rules else default_rules())
-    policies = make_policies(arm, oracle=oracle, rules=rules, roster=roster, objective=objective)
+    # `expected_stay` is the prediction port (doc 06 §3). `None` -> the arm decides
+    # exactly as it did before predictions existed, which is what keeps the M1 goldens
+    # a check rather than a re-baseline. Only the optimized arm consumes it.
+    policies = make_policies(
+        arm,
+        oracle=oracle,
+        rules=rules,
+        roster=roster,
+        objective=objective,
+        expected_stay=expected_stay,
+    )
     world.set_decision_hook(_make_tick(world, oracle, policies, rules, executor, log))
 
     # 9-11: the one workload generator (surges included), agents, disruptions
