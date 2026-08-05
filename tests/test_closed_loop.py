@@ -362,12 +362,22 @@ def test_the_scored_week_was_held_out_of_the_fit() -> None:
     assert not holdout & set(report.calibration)
 
 
-def test_every_arriving_patient_gets_a_prediction() -> None:
-    """A partial mapping would silently price the missing patients at zero occupancy."""
+def test_every_arriving_patient_gets_a_fitted_prediction() -> None:
+    """A partial mapping silently prices the missing patients at zero occupancy.
+
+    Asserted against the *fitted* mapping, which is the one that can actually come up
+    short: it is keyed by whatever rows :func:`patient_features` produced from the pilot
+    log, so a patient the extractor never saw would simply be absent — and absent means
+    free, not expensive. (Saying this about the flat arm would prove nothing: that dict
+    is built from the cohort, so covering the cohort is true by construction.)
+    """
     for arm in _all_arms():
-        flat = _flat_stays(arm.seed)
-        assert set(flat) == set(_cohort(arm.seed))
-        assert all(duration.root > 0 for duration in flat.values())
+        cohort = _cohort(arm.seed)
+        pilot = run_replication(_scenario(), "optimized", arm.seed, objective=_WEIGHTED)
+        fitted = _fitted_stays(arm.seed, EventLog.from_jsonl(pilot.event_log_jsonl), pilot.horizon)
+        missing = set(cohort) - set(fitted)
+        assert not missing, f"seed {arm.seed}: {len(missing)} arrivals got no prediction"
+        assert all(duration.root > 0 for duration in fitted.values())
 
 
 # --- the predictions reach a decision --------------------------------------------
