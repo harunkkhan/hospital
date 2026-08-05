@@ -17,8 +17,11 @@ The shape, once per evaluation seed:
    into KPIs through the same ``analysis`` path the M1 comparison uses;
 5. contrast them with :func:`paired_bootstrap`.
 
-Two things about the setup are load-bearing, and both were found by measuring
-rather than assumed.
+Three things about the setup are load-bearing. Two were found by measuring rather than
+assumed; the third is a known compromise, and :func:`_fitted_stays` documents exactly
+what it costs — the fitted arm's features come from a pilot run, which under CRN can
+hand it a fact that is counterfactual in the run it influences. That makes this an upper
+bound on the fitted arm, not a faithful deployment.
 
 **The floor has to be bay-constrained.** The occupancy term a length-of-stay
 prediction feeds prices *holding a bay in a scarce zone*. Neither shipped scenario
@@ -81,6 +84,7 @@ import json
 import math
 import shutil
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -104,9 +108,10 @@ from hospital.core import (
     minutes,
     seconds,
 )
+from hospital.core.events import VitalsSampled
 from hospital.data.layout import generate_floor
 from hospital.data.scenario import Scenario, apply_overlay, load_scenario, realize_staff
-from hospital.data.vitals import generate_vitals
+from hospital.data.vitals import VitalsStream, generate_vitals
 from hospital.data.workload import generate_workload
 from hospital.forecast import (
     ModelStore,
@@ -210,24 +215,45 @@ def _cohort(seed: int) -> dict[PatientId, Patient]:
 
 
 def _week(name: str, seed: int) -> WeekData:
-    """One week of training data: a real run, plus the facts the log does not carry."""
+    """One week of training data: a real run, plus the facts the log does not carry.
+
+    The vitals are re-derived rather than read back — the log carries only the NEWS2
+    total the engine stamped, not the reading behind it, and ``generate_vitals`` is
+    content-addressed by patient so a fresh ``RandomStreams(seed)`` reproduces the exact
+    trajectory the engine revealed.
+
+    **And then censored to what the engine actually revealed.** The generator will hand
+    back a full ``span`` of samples for anyone, but ``vitals_process`` stops at discharge
+    and at the horizon, so a patient who left after forty minutes was never observed for
+    six hours. Training on the untruncated stream would fit and *score* the
+    deterioration model on windows the live monitor could not have seen — held-out
+    metrics measuring an easier problem than the one the floor poses.
+    """
     replication = run_replication(_scenario(), "optimized", seed, watch=_WATCH)
+    log = EventLog.from_jsonl(replication.event_log_jsonl)
     roster = _cohort(seed)
-    # Re-derived, not captured from the run: `generate_vitals` is content-addressed by
-    # patient, so a fresh `RandomStreams(seed)` reproduces exactly the trajectories the
-    # engine revealed. Reading them back out of the log would only recover the NEWS2
-    # totals it stamps, not the readings the model is fitted on.
-    streams = RandomStreams(seed)
-    vitals = tuple(
-        generate_vitals(patient, streams, until=_WATCH.span, cadence=_WATCH.cadence)
-        for patient in roster.values()
+
+    revealed = Counter(
+        event.patient for env in log.ordered() if isinstance(event := env.event, VitalsSampled)
     )
+    streams = RandomStreams(seed)
+    vitals: list[VitalsStream] = []
+    for patient in roster.values():
+        seen = revealed.get(patient.id, 0)
+        if not seen:
+            # Never monitored (below the watch's acuity gate) or never sampled. The
+            # model has no business seeing a trajectory nobody looked at.
+            continue
+        full = generate_vitals(patient, streams, until=_WATCH.span, cadence=_WATCH.cadence)
+        vitals.append(full.model_copy(update={"samples": full.samples[:seen]}))
+
+    assert vitals, f"{name}: the watch revealed no vitals at all"
     return WeekData(
         run=name,
-        log=EventLog.from_jsonl(replication.event_log_jsonl),
+        log=log,
         roster=roster,
         week=replication.horizon,
-        vitals=vitals,
+        vitals=tuple(vitals),
         acuity={pid: patient.esi for pid, patient in roster.items()},
     )
 
@@ -302,16 +328,24 @@ def _flat_stays(seed: int) -> dict[PatientId, Duration]:
 def _fitted_stays(seed: int, pilot: EventLog, week: OperatingWeek) -> dict[PatientId, Duration]:
     """Per-patient expected stay from the fitted regressor.
 
-    ``pilot`` is a run of the *baseline* arm at the same seed, and it is the honest
-    part of this harness that is worth stating plainly. A patient's features include
-    congestion at their arrival, which is a property of a run — but the run under test
-    does not exist until its own predictions have been supplied. Every row's cutoff is
-    still its own arrival, so nothing from the future informs it; what it borrows is
-    another arm's congestion rather than its own.
+    ``pilot`` is a run of the *no-prediction* arm at the same seed, and this is the one
+    place where the harness knowingly cheats. State it plainly: a patient's features
+    include congestion at their arrival, congestion is a property of a run, and the run
+    under test does not exist until its own predictions have been supplied.
 
-    Predicting inside the engine (a seam like ``RiskMonitor``, consulted at placement)
-    would remove the approximation entirely. That is the right shape and it is not
-    built yet; until it is, both arms read the same pilot, so neither is advantaged.
+    Cutting each row at its own arrival is **not** enough to make that sound. Under CRN
+    the pilot and the arm under test share every draw, but not every *timeline*: because
+    their earlier placements differ, the pilot can show a service episode already
+    complete at an instant when the fitted arm's copy of that same draw is still in
+    flight. So a row can carry a fact that is not merely borrowed from a neighbour — it
+    is counterfactual, unobservable in the run it goes on to influence. Filtering by
+    timestamp cannot fix that; only asking the arm itself can.
+
+    The right shape is an in-engine seam consulted at placement, like ``RiskMonitor`` is
+    for vitals. It is not built, so what this harness measures is an upper bound on the
+    fitted arm rather than a faithful deployment — and the wash result means that bound
+    is not even reached. Both arms read the same pilot, so the comparison is at least
+    symmetric, and the flat arm reads no features at all.
     """
     regressor = _trained().regressor
     rows = patient_features(pilot, _cohort(seed), week)
@@ -413,6 +447,34 @@ def test_the_scored_week_was_held_out_of_the_fit() -> None:
     assert holdout
     assert not holdout & set(report.train)
     assert not holdout & set(report.calibration)
+
+
+def test_training_vitals_never_exceed_what_the_run_revealed() -> None:
+    """The fit may not see readings the live monitor could not have taken.
+
+    ``vitals_process`` stops at discharge and at the horizon, but the generator will
+    hand back a full span for anyone. An untruncated corpus would fit *and score* the
+    deterioration model on windows that do not exist on the floor, so the held-out
+    metrics would describe an easier problem than the real one.
+    """
+    for week in _trained().weeks:
+        revealed = Counter(
+            event.patient
+            for env in week.log.ordered()
+            if isinstance(event := env.event, VitalsSampled)
+        )
+        assert revealed, f"{week.run}: the watch revealed nothing"
+        for stream in week.vitals:
+            assert len(stream.samples) == revealed.get(stream.patient, 0), (
+                f"{week.run}/{stream.patient.root}: "
+                f"{len(stream.samples)} samples against {revealed.get(stream.patient, 0)} revealed"
+            )
+        # And the censoring has to actually bite, or this test guards nothing: on a
+        # one-day week plenty of patients are discharged well inside the six-hour span.
+        full = 1 + _WATCH.span.root // _WATCH.cadence.root
+        assert any(len(stream.samples) < full for stream in week.vitals), (
+            f"{week.run}: no stream was truncated, so censoring changed nothing"
+        )
 
 
 def test_every_arriving_patient_gets_a_fitted_prediction() -> None:
