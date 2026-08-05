@@ -57,6 +57,18 @@ does not measurably beat its own mean *through this objective term* on this floo
 The tests are therefore written as liveness plus non-inferiority rather than as a
 win, and :func:`test_a_contrast_is_actually_being_measured` exists so that "no
 regression" cannot quietly degrade into "nothing was compared".
+
+**How much this can detect, measured rather than assumed.** Multiplying every fitted
+prediction by ten — a gross mis-calibration — leaves all of it passing: the arms still
+differ, the predictions still reach decisions, and the non-inferiority guard still
+holds. So the KPI contrast here cannot detect even a tenfold error in its input. Two
+things follow, and both bound what the wash above is allowed to mean. The
+non-inferiority assertion is a tripwire for gross breakage, not evidence that the
+prediction is well calibrated. And the absence of a KPI effect is weak evidence
+either way: on this floor, changing *where* patients are placed barely propagates to
+the KPIs ``analysis`` folds at all. Measuring this properly needs either far more
+reps or a KPI nearer the decision — per-zone occupancy churn, say, or blocked-arrival
+counts — and that is the honest next step rather than something this file can claim.
 """
 
 from __future__ import annotations
@@ -397,9 +409,11 @@ def test_the_fitted_arm_is_no_worse_than_its_own_mean() -> None:
     -- no KPI is significantly *worse* -- rather than a win this harness cannot
     honestly claim.
 
-    If a future change makes the prediction pay, this test keeps passing and
-    :func:`test_a_contrast_is_actually_being_measured` is where the improvement should
-    be asserted instead.
+    **Low power, and known to be.** A tenfold mis-scaling of every prediction does not
+    trip this (module docstring, last paragraph), so read it as a tripwire for gross
+    breakage and not as evidence the prediction is sound. It is here because a
+    regression *large* enough to matter would show, and because a future change that
+    makes the prediction pay should have to state where it pays.
     """
     arms = _all_arms()
     result = paired_bootstrap(
