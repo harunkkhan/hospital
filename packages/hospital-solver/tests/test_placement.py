@@ -14,7 +14,7 @@ from _solver_fixtures import (
     waiting,
 )
 
-from hospital.core import BayStatus, DecisionInput, Duration, EsiAcuity, Plan
+from hospital.core import BayStatus, DecisionInput, Duration, EsiAcuity, Plan, hours
 from hospital.core.time import seconds
 from hospital.core.validation import ValidationContext, validate
 from hospital.solver import SolveResult, SolverStatus, get_backend
@@ -207,6 +207,35 @@ def test_place_first_even_when_travel_exceeds_wait_penalty() -> None:
     oracle = GraphRoutingOracle(di.layout.graph)
     result = backend.solve(
         di, oracle, config=default_config(unplaced_wait_penalty=1), rules=demo_compiled()
+    )
+    assert _assignments(result.plan) == {"p3": "bay-1"}
+    assert result.status is SolverStatus.OPTIMAL
+
+
+def test_place_first_even_when_occupancy_exceeds_the_wait_penalty() -> None:
+    """The occupancy term must not make leaving a patient unplaced look cheap.
+
+    Same failure mode as its travel-term sibling above, but occupancy is the term with
+    room to get large: it scales with a *predicted* stay, so one bad prediction could
+    dwarf any travel proxy. Place-first survives only because `big_b` is derived from
+    the finished `weight` dict -- occupancy already folded in. Compute it from travel
+    alone and this test fails while every other placement test still passes.
+    """
+    patient = make_patient("p3", EsiAcuity.ESI3)
+    di = decision_input(
+        waiting_patients=(waiting(patient, 0),),
+        bays=(bay_state("bay-1"),),
+    )
+    backend = get_backend("placement_cpsat")
+    oracle = GraphRoutingOracle(di.layout.graph)
+    result = backend.solve(
+        di,
+        oracle,
+        # A tiny unplaced penalty against an absurd predicted stay and a heavy weight:
+        # the assignment cost here is orders of magnitude above the cost of refusing.
+        config=default_config(unplaced_wait_penalty=1, w_occupancy=50),
+        rules=demo_compiled(),
+        expected_stay={patient.id: hours(500)},
     )
     assert _assignments(result.plan) == {"p3": "bay-1"}
     assert result.status is SolverStatus.OPTIMAL
