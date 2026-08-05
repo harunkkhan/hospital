@@ -4,8 +4,14 @@ One SimPy process per monitored patient. The trajectory itself is **pre-sampled*
 by ``data.generate_vitals`` — a pure function of ``(seed, patient id)`` — and this
 process only *reveals* it, one reading per cadence tick. That split is the same
 construction/sampling rule the rest of the engine follows: ``data`` draws, ``sim``
-plays the draw out in time. It also means the vitals a patient will have do not
-depend on when anyone looks at them.
+plays the draw out in time.
+
+It also means the vitals a patient will have do not depend on how often anyone looks:
+``data.vitals`` advances its latent walk on a fixed grid and keys the measurement noise
+by elapsed time, so halving ``cadence`` returns twice the readings rather than a
+different patient. ``span`` is not in that guarantee — it places the deterioration
+onset, so it is a construction parameter (see :func:`~hospital.data.vitals.generate_vitals`)
+and any comparison across arms has to hold it fixed.
 
 Each tick appends a ``VitalsSampled`` stamped with its NEWS2 total (the rubric
 lives in ``core.vitals`` precisely so this module can reach it). If a
