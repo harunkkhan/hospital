@@ -52,23 +52,26 @@ the family: a p90 of a small acuity stratum. That is what a 26-key family does u
 noise, not an effect.
 
 That is the honest result and it is what this file asserts — the loop closes, the
-artifacts are real, the predictions reach decisions, and per-patient stay length
-does not measurably beat its own mean *through this objective term* on this floor.
-The tests are therefore written as liveness plus non-inferiority rather than as a
-win, and :func:`test_a_contrast_is_actually_being_measured` exists so that "no
-regression" cannot quietly degrade into "nothing was compared".
+artifacts are real, the predictions reach decisions, and per-patient stay length does
+not measurably beat its own mean *through this objective term* on this floor. The tests
+are written as liveness plus a bounded regression check rather than as a win, and
+:func:`test_a_contrast_is_actually_being_measured` exists so that "no regression"
+cannot quietly degrade into "nothing was compared".
 
 **How much this can detect, measured rather than assumed.** Multiplying every fitted
-prediction by ten — a gross mis-calibration — leaves all of it passing: the arms still
-differ, the predictions still reach decisions, and the non-inferiority guard still
-holds. So the KPI contrast here cannot detect even a tenfold error in its input. Two
-things follow, and both bound what the wash above is allowed to mean. The
-non-inferiority assertion is a tripwire for gross breakage, not evidence that the
-prediction is well calibrated. And the absence of a KPI effect is weak evidence
-either way: on this floor, changing *where* patients are placed barely propagates to
-the KPIs ``analysis`` folds at all. Measuring this properly needs either far more
-reps or a KPI nearer the decision — per-zone occupancy churn, say, or blocked-arrival
-counts — and that is the honest next step rather than something this file can claim.
+prediction by ten — a gross mis-calibration — leaves the arms differing, the predictions
+reaching decisions, and no KPI *significantly* worse: failure to reject equality at
+three replications is a claim about nothing. So
+:func:`test_the_fitted_arm_stays_within_the_predeclared_margin` bounds the observed
+regression against a margin fixed in advance instead, and that version does catch the
+tenfold case — ESI-1 mean LOS out by ~1900s against ~1100s allowed. The margin is what
+gives this file teeth; the significance test had none.
+
+Even so, the absence of a KPI effect is weak evidence either way. On this floor,
+changing *where* patients are placed barely propagates to the KPIs ``analysis`` folds.
+Measuring this properly needs more reps and a KPI nearer the decision — per-zone
+occupancy churn, say, or blocked-arrival counts — and that is the honest next step
+rather than something this file can claim.
 """
 
 from __future__ import annotations
@@ -134,6 +137,27 @@ _WATCH = VitalsWatch(cadence=minutes(10), span=hours(6), monitor_at_or_above=Esi
 # what makes the comparison a comparison at all.
 _WEIGHTED = DEFAULT_OBJECTIVE.model_copy(update={"w_occupancy": 2})
 _WARMUP = hours(4)
+
+# The non-inferiority margin, fixed before looking at any contrast: a cohort-mean KPI
+# may not come out more than this fraction worse than the baseline arm's own level.
+_MARGIN = 0.05
+
+# Cohort means only. The per-stratum p90s (`los_s_p90_by_esi_*`) are deliberately out:
+# an extreme quantile of a small acuity stratum swings by thousands of seconds between
+# neighbouring seeds, and at 8 reps two of them crossed the significance threshold in
+# OPPOSITE directions (see the module docstring). Asserting on those would buy
+# flakiness rather than sensitivity. The mean LOS keys are in, because if this term
+# helped or hurt for real, that is where it would show.
+_LOWER_IS_BETTER = frozenset(
+    {
+        "door_to_triage_s_mean",
+        "door_to_provider_s_mean",
+        "boarding_time_s_mean",
+        "turnaround_time_s_mean",
+        "staff_minutes_walked",
+        *(f"los_s_mean_by_esi_{esi}" for esi in range(1, 6)),
+    }
+)
 
 # A bay-constrained floor -- see the module docstring. 22 bays rather than 76.
 _TIGHT_ZONES = (
@@ -244,17 +268,30 @@ def _trained() -> _Trained:
 
 @cache
 def _flat_stay() -> Duration:
-    """The baseline model: one number, the mean completed LOS across the training weeks.
+    """The baseline model: one number, the mean completed LOS over the *training* folds.
 
-    Fitted on training data only, so the baseline arm peeks at nothing the fitted arm
-    does not also see. It is the weakest possible *honest* predictor of a stay — and,
-    being scale-matched to the fitted arm, it makes the contrast a question about
-    discrimination rather than about how hard occupancy is priced.
+    Fold-matched on purpose, and it takes an explicit filter to get right. ``train_all``
+    fits the regressor on ``report.train`` alone — the calibration and holdout weeks are
+    withheld from it — so averaging over every week in the corpus would hand the
+    baseline outcome data its opponent was denied, and "neither arm sees more" would
+    simply be false.
+
+    It is the weakest *honest* predictor of a stay, and being scale-matched to the
+    fitted arm it makes the contrast a question about discrimination rather than about
+    how hard occupancy is priced.
     """
+    trained = _trained()
+    train_runs = frozenset(trained.report.train)
+    assert train_runs, "the report names no training fold"
+    # The filter has to actually withhold something, or being fold-matched is a claim
+    # about nothing.
+    assert len(train_runs) < len(trained.weeks), "no week was held back from the fit"
+
     totals: list[float] = []
-    for week in _trained().weeks:
-        totals.extend(patient_los(week.log).values())
-    assert totals, "the training weeks discharged nobody"
+    for week in trained.weeks:
+        if week.run in train_runs:
+            totals.extend(patient_los(week.log).values())
+    assert totals, "the training folds discharged nobody"
     return seconds(math.fsum(totals) / len(totals))
 
 
@@ -292,6 +329,22 @@ class _Arms:
     flat_log: str
     fitted_log: str
     n_predicted: int
+
+
+def _differs_finitely(left: KpiVector, right: KpiVector) -> bool:
+    """Do two KPI vectors differ on a value that is actually a number?
+
+    Mapping equality will not do here. A :class:`KpiVector` carries NaN for an empty
+    stratum, and NaN never equals itself — so ``left.values != right.values`` is true
+    the moment *either* arm has an empty stratum, even when every finite KPI is
+    identical. The degeneracy guard would then pass on the strength of two unrelated
+    NaNs, which is precisely the vacuity it exists to rule out.
+    """
+    return any(
+        not math.isnan(value) and not math.isnan(other) and value != other
+        for key, value in left.values.items()
+        for other in (right.values.get(key, math.nan),)
+    )
 
 
 def _kpis(jsonl: str, window: OperatingWeek) -> KpiVector:
@@ -410,47 +463,41 @@ def test_the_two_arms_disagree_about_who_stays_long() -> None:
 # --- what closing the loop is worth ---------------------------------------------
 
 
-def test_the_fitted_arm_is_no_worse_than_its_own_mean() -> None:
-    """The measured result, stated as what it is.
+def test_the_fitted_arm_stays_within_the_predeclared_margin() -> None:
+    """The measured result, bounded by a margin fixed in advance.
 
     At this scale the contrast is a wash: predicting each patient's stay, rather than
-    giving everyone the training-week mean, does not move a realized KPI by an
-    operationally meaningful amount on this floor. So the assertion is non-inferiority
-    -- no KPI is significantly *worse* -- rather than a win this harness cannot
-    honestly claim.
+    giving everyone the training-fold mean, does not move a realized KPI by an
+    operationally meaningful amount on this floor.
 
-    **Low power, and known to be.** A tenfold mis-scaling of every prediction does not
-    trip this (module docstring, last paragraph), so read it as a tripwire for gross
-    breakage and not as evidence the prediction is sound. It is here because a
-    regression *large* enough to matter would show, and because a future change that
-    makes the prediction pay should have to state where it pays.
+    **Why a margin and not a significance test.** "No KPI is *significantly* worse" is
+    failure to reject equality, which is not a non-inferiority claim and, at three
+    replications under Bonferroni-adjusted intervals, is a claim about nothing: a
+    tenfold mis-scaling of every prediction leaves it passing. So this bounds the
+    observed regression instead — each cohort-mean KPI must stay within
+    :data:`_MARGIN` of the baseline arm's own level.
+
+    That is still weaker than textbook non-inferiority, which bounds the *interval*
+    (``ci_lo >= -margin``) rather than the point estimate. The intervals here are wider
+    than any margin worth declaring, so the honest move is to bound what was measured
+    and say plainly that the interval form needs far more reps. It is not asserted
+    below, and it should be the first thing a future scale-up adds.
     """
     arms = _all_arms()
     result = paired_bootstrap(
         [arm.flat for arm in arms], [arm.fitted for arm in arms], n_boot=1_000, seed=3
     )
-    # `diff = baseline - optimized`, so a KPI where less is better wants diff >= 0.
-    #
-    # Cohort means only. The per-stratum p90s (`los_s_p90_by_esi_*`) are deliberately
-    # out: an extreme quantile of a small acuity stratum swings by thousands of seconds
-    # between neighbouring seeds, and at 8 reps two of them crossed the threshold in
-    # OPPOSITE directions (see the module docstring). Asserting on those would buy
-    # flakiness rather than sensitivity. The mean LOS keys are in, because if this term
-    # helped or hurt for real, that is where it would show.
-    lower_is_better = {
-        "door_to_triage_s_mean",
-        "door_to_provider_s_mean",
-        "boarding_time_s_mean",
-        "turnaround_time_s_mean",
-        "staff_minutes_walked",
-        *(f"los_s_mean_by_esi_{esi}" for esi in range(1, 6)),
-    }
+    # `diff = baseline - optimized`, so for a KPI where less is better the fitted arm
+    # regressed by `-diff`, and that has to stay inside the margin.
     regressions = [
-        (key, contrast.diff_mean, contrast.ci_lo, contrast.ci_hi)
+        (key, round(-contrast.diff_mean, 1), round(_MARGIN * contrast.baseline_mean, 1))
         for key, contrast in result.contrasts.items()
-        if key in lower_is_better and contrast.significant and contrast.diff_mean < 0
+        if key in _LOWER_IS_BETTER
+        and not math.isnan(contrast.diff_mean)
+        and contrast.baseline_mean > 0
+        and -contrast.diff_mean > _MARGIN * contrast.baseline_mean
     ]
-    assert not regressions, f"the fitted arm is significantly worse on: {regressions}"
+    assert not regressions, f"(kpi, regression, allowed) beyond the margin: {regressions}"
 
 
 def test_a_contrast_is_actually_being_measured() -> None:
@@ -466,7 +513,7 @@ def test_a_contrast_is_actually_being_measured() -> None:
     )
     assert result.n_reps == _EVAL_SEEDS
     assert result.contrasts
-    assert any(arm.flat.values != arm.fitted.values for arm in arms), (
+    assert any(_differs_finitely(arm.flat, arm.fitted) for arm in arms), (
         "both arms folded to identical KPIs; the comparison is degenerate"
     )
 
