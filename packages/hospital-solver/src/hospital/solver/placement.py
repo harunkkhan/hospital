@@ -426,7 +426,13 @@ class CpSatPlacement:
             # delegate to the deterministic greedy backend, labeled honestly.
             from hospital.solver.heuristic import HeuristicPlacement
 
-            fallback = HeuristicPlacement().solve(di, oracle, config=config, rules=rules)
+            # `expected_stay` travels with the delegation. Dropping it would make the
+            # prediction arm silently revert to travel-only placement exactly when the
+            # instance is hardest — a difference in *what was optimized* that the
+            # HEURISTIC status alone would not reveal.
+            fallback = HeuristicPlacement().solve(
+                di, oracle, config=config, rules=rules, expected_stay=expected_stay
+            )
             elapsed_us = (time.perf_counter_ns() - started_ns) // 1000
             return SolveResult(
                 plan=fallback.plan,
