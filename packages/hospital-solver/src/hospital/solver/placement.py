@@ -289,6 +289,34 @@ def _waited(di: DecisionInput) -> dict[PatientId, Duration]:
     return {wp.patient.id: wp.waited for wp in di.waiting}
 
 
+def residual_stays(
+    di: DecisionInput, expected_stay: Mapping[PatientId, Duration] | None
+) -> dict[PatientId, Duration]:
+    """Predicted stays with the time already elapsed since arrival deducted.
+
+    The models predict *length of stay* — arrival to discharge — but what a bay is about
+    to be held for is only the part that has not happened yet. Charging the whole
+    duration would bill a patient for the hour they spent in triage and in the bay
+    queue, and it gets the sign of the incentive backwards: of two identical patients,
+    the one who has waited longer has *less* bay time left, yet would be priced as the
+    more expensive to admit.
+
+    Clamped at zero. A prediction already exceeded is a stale estimate, not a negative
+    stay, and a negative coefficient would turn the term into a reward for filling the
+    scarcest zone.
+    """
+    if not expected_stay:
+        return {}
+    out: dict[PatientId, Duration] = {}
+    for wp in di.waiting:
+        predicted = expected_stay.get(wp.patient.id)
+        if predicted is None:
+            continue
+        elapsed = max(0, di.now.root - wp.patient.arrival_time.root)
+        out[wp.patient.id] = Duration(max(0, predicted.root - elapsed))
+    return out
+
+
 class CpSatPlacement:
     """The CP-SAT bay/zone assignment backend (implements ``Solver``)."""
 
@@ -326,7 +354,7 @@ class CpSatPlacement:
         scarcity_by_zone = {
             zone: zone_scarcity(remaining) for zone, remaining in zone_remaining(di).items()
         }
-        stays: Mapping[PatientId, Duration] = expected_stay or {}
+        stays = residual_stays(di, expected_stay)
         weight = {
             (pid, bid): assignment_weight(
                 patient_by_id[pid],
@@ -498,6 +526,7 @@ __all__ = [
     "compat_pair",
     "occupancy_cost",
     "occupied_by_zone_type",
+    "residual_stays",
     "self_validate",
     "travel_weight",
     "zone_remaining",

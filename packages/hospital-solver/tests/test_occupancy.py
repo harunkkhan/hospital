@@ -12,11 +12,12 @@ Two claims, and both matter for the M3 acceptance test:
 
 from __future__ import annotations
 
-from _solver_fixtures import decision_input, default_config, make_patient
+from _solver_fixtures import decision_input, default_config, make_patient, waiting
 
 from hospital.core import (
     Bay,
     BayId,
+    Duration,
     EsiAcuity,
     NodeId,
     ZoneId,
@@ -26,7 +27,12 @@ from hospital.core import (
 )
 from hospital.solver.objective import ObjectiveConfig, assignment_coeffs
 from hospital.solver.oracle import GraphRoutingOracle
-from hospital.solver.placement import occupancy_cost, travel_weight, zone_scarcity
+from hospital.solver.placement import (
+    occupancy_cost,
+    residual_stays,
+    travel_weight,
+    zone_scarcity,
+)
 
 _SCARCE = ZoneId("scarce")
 _ROOMY = ZoneId("roomy")
@@ -171,3 +177,51 @@ def test_the_term_stays_commensurate_with_the_travel_it_competes_with() -> None:
     assert roomy < spread, (roomy, spread)
     # ...and even the worst case stays within a few travel spreads, not a thousand.
     assert scarcest < 5 * spread, (scarcest, spread)
+
+
+def test_a_patient_who_already_waited_is_charged_for_less_bay_time() -> None:
+    """The models predict arrival-to-discharge; a bay only holds what is left of it.
+
+    Charging the whole predicted LOS gets the incentive backwards: of two identical
+    patients, the one who has waited longer has *less* bay time ahead, yet the full
+    duration would price them as the more expensive to admit.
+    """
+    fresh = make_patient("fresh", esi=EsiAcuity.ESI3)
+    waited_long = make_patient("waited", esi=EsiAcuity.ESI3)
+    now = hours(3)
+    di = decision_input(
+        waiting_patients=(waiting(fresh, 0), waiting(waited_long, hours(2).root / 1_000_000)),
+        now_us=now.root,
+    )
+    # Same predicted stay for both; only the elapsed time since arrival differs.
+    predicted = dict.fromkeys((fresh.id, waited_long.id), hours(6))
+    residual = residual_stays(di, predicted)
+
+    # `make_patient` stamps arrival_time=0, so at now=3h both have 3h elapsed and the
+    # residual is 3h -- less than the 6h predicted, which is the point.
+    assert residual[fresh.id] == hours(3)
+    assert residual[waited_long.id] == hours(3)
+
+    coeffs = assignment_coeffs(ObjectiveConfig(w_occupancy=2), EsiAcuity.ESI3)
+    bay = _bay("b", _SCARCE)
+    scarcity = {_SCARCE: 8}
+    assert occupancy_cost(bay, coeffs, residual[fresh.id], scarcity) < occupancy_cost(
+        bay, coeffs, hours(6), scarcity
+    )
+
+
+def test_a_stay_already_exceeded_costs_nothing_rather_than_less_than_nothing() -> None:
+    """A stale prediction is a zero, never a negative -- which would reward scarcity."""
+    patient = make_patient("overdue", esi=EsiAcuity.ESI3)
+    di = decision_input(waiting_patients=(waiting(patient, 0),), now_us=hours(9).root)
+    residual = residual_stays(di, {patient.id: hours(4)})
+    assert residual[patient.id] == Duration(0)
+
+    coeffs = assignment_coeffs(ObjectiveConfig(w_occupancy=2), EsiAcuity.ESI3)
+    assert occupancy_cost(_bay("b", _SCARCE), coeffs, residual[patient.id], {_SCARCE: 12}) == 0
+
+
+def test_no_predictions_means_no_residuals_to_compute() -> None:
+    di = decision_input(waiting_patients=(waiting(make_patient("p"), 0),))
+    assert residual_stays(di, None) == {}
+    assert residual_stays(di, {}) == {}

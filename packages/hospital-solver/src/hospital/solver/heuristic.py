@@ -33,6 +33,7 @@ from hospital.solver.placement import (
     assignment_weight,
     candidates,
     occupied_by_zone_type,
+    residual_stays,
     self_validate,
     zone_remaining,
     zone_scarcity,
@@ -77,7 +78,7 @@ class HeuristicPlacement:
             ),
         )
 
-        stays: Mapping[PatientId, Duration] = expected_stay or {}
+        stays = residual_stays(di, expected_stay)
         remaining_by_zone = zone_remaining(di)
         # Scarcity is snapshotted before any placement, so the greedy order does not
         # make each successive bay look scarcer than the CP-SAT model saw it.
