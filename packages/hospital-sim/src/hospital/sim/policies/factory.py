@@ -14,9 +14,10 @@ neither). Both are static run-scoped facts, threaded once here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
-from hospital.core import CompiledRules, StaffMember
+from hospital.core import CompiledRules, Duration, PatientId, StaffMember
 from hospital.sim.policies.baseline import (
     FifoDischarge,
     FifoTurnaround,
@@ -39,8 +40,14 @@ def make_policies(
     rules: CompiledRules,
     roster: tuple[StaffMember, ...],
     objective: ObjectiveConfig | None = None,
+    expected_stay: Mapping[PatientId, Duration] | None = None,
 ) -> PolicySet:
-    """Build the ``PolicySet`` for an arm. ``objective`` is required for ``optimized``."""
+    """Build the ``PolicySet`` for an arm. ``objective`` is required for ``optimized``.
+
+    ``expected_stay`` is the prediction port. The baseline arm ignores it by design —
+    that asymmetry IS the A/B: both arms face the same realized week under CRN, and
+    only the optimized arm is told how long each stay is expected to run.
+    """
     if kind == "baseline":
         return PolicySet(
             placement=FirstAvailablePlacement(rules=rules),
@@ -53,7 +60,13 @@ def make_policies(
         )
     if objective is None:
         raise ValueError("the optimized arm requires an ObjectiveConfig")
-    return make_optimized_policies(oracle=oracle, objective=objective, rules=rules, roster=roster)
+    return make_optimized_policies(
+        oracle=oracle,
+        objective=objective,
+        rules=rules,
+        roster=roster,
+        expected_stay=expected_stay,
+    )
 
 
 __all__ = ["Arm", "make_policies"]

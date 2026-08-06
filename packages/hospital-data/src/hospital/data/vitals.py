@@ -12,7 +12,18 @@ Determinism (nuance 1.8): every draw comes from a content-addressed
 ``streams.substream("world", "vitals", patient, …)`` key, so a patient's
 trajectory is a pure function of ``(seed, patient id)`` — independent of how
 many other patients were sampled first, and identical across arms under CRN.
-The per-sample noise is keyed by tick index for the same reason.
+
+**And independent of the cadence it is sampled at.** The latent walk advances on a
+fixed internal grid of :data:`LATENT_STEP`, and both the walk and the observation
+noise are keyed by *elapsed time* rather than by tick index. Keying by index made
+looking more often change the patient: at a five-minute cadence the reading at ten
+minutes came from ``walk/2``, at ten minutes from ``walk/1``, so the same instant in
+the same patient's stream held different physiology depending on the monitor's
+settings. Observation must not move the thing observed.
+
+``until`` is the exception, and deliberately so: ``onset`` is placed as a fraction of
+it (see :func:`generate_vitals`), which makes it a *construction* parameter rather
+than a viewing window. Callers comparing arms must hold it fixed.
 
 Ground truth is carried explicitly: :attr:`VitalsStream.deteriorates` and
 :attr:`VitalsStream.onset` are the *labels*, not observable signals. Training
@@ -92,8 +103,19 @@ _BASELINE_SD: Final[_Baseline] = _Baseline(
     hr=9.0, spo2=1.6, sbp=12.0, dbp=8.0, temp_c_x10=4.0, rr=2.0
 )
 
-# Per-tick random-walk SD of the LATENT state (physiological drift).
+# Per-step random-walk SD of the LATENT state (physiological drift), where a step is
+# one `LATENT_STEP`.
 _WALK_SD: Final[_Baseline] = _Baseline(hr=2.2, spo2=0.35, sbp=2.6, dbp=1.8, temp_c_x10=1.1, rr=0.55)
+
+# The fixed grid the latent walk advances on, independent of the cadence anyone views
+# it at. Five minutes because that is what `_WALK_SD` above is calibrated against: the
+# drift accumulates per step, so re-gridding without re-tuning would rescale every
+# trajectory by the square root of the change. It also means a five-minute view is
+# byte-identical to what this generator produced before the walk was keyed by time.
+#
+# A view *finer* than this sees the latent state hold still between grid points while
+# the measurement noise still varies per instant — a plateau, not a frozen patient.
+LATENT_STEP: Final[Duration] = Duration(5 * _MICROS_PER_MINUTE)
 
 # Measurement noise (SD) added on top of the latent state at observation time.
 # This is what the monitor actually sees, and why a single reading is weak
@@ -204,18 +226,26 @@ def _walk(g: np.random.Generator, latent: _Baseline) -> _Baseline:
 def generate_vitals(
     patient: Patient, streams: RandomStreams, *, until: Duration, cadence: Duration
 ) -> VitalsStream:
-    """Sample a per-patient vitals trajectory up to ``until`` at ``cadence``.
+    """Sample a per-patient vitals trajectory up to ``until``, viewed at ``cadence``.
 
     Pure construction from ``(seed, patient.id)``: no wall clock, no global
     state, and no dependence on sampling order. ``until`` is inclusive of the
     final on-cadence tick, so a stream always carries at least the arrival
     reading (``elapsed == 0``).
 
+    ``cadence`` is purely a *view* onto the trajectory. The latent walk advances on the
+    fixed :data:`LATENT_STEP` grid and the observation noise is keyed by elapsed time,
+    so the reading at a given instant is the same whether the monitor looks every
+    minute or every half hour — sampling twice as often returns twice as many readings,
+    not a different patient.
+
     Whether the patient deteriorates, and when, is drawn here and reported on the
-    returned stream as ground truth. Onset is confined to ``[0.15, 0.85]`` of the
-    observation span so that a deteriorating patient always has both a pre-onset
-    baseline to contrast against and enough post-onset ticks to be detectable —
-    otherwise a "missed" detection would just be a labelling artefact.
+    returned stream as ground truth. Onset is confined to ``[0.15, 0.85]`` of
+    ``until``, which is what makes that argument a construction parameter and not a
+    window: it guarantees a deteriorating patient has both a pre-onset baseline to
+    contrast against and enough post-onset time to be detectable, so a "missed"
+    detection is a real miss rather than a labelling artefact. The cost is that two
+    spans give two different patients, so anything comparing arms must fix it.
     """
     if cadence.root <= 0:
         raise ValueError("cadence must be positive")
@@ -234,11 +264,16 @@ def generate_vitals(
     latent = _draw_baseline(streams.substream("world", "vitals", pid, "baseline"), patient.esi)
     ticks = int(until.root // cadence.root)
     samples: list[VitalsSample] = []
+    walked = 0
     for index in range(ticks + 1):
         elapsed = Duration(index * cadence.root)
-        if index > 0:
-            latent = _walk(streams.substream("world", "vitals", pid, "walk", index), latent)
-        observed = streams.substream("world", "vitals", pid, "observe", index)
+        # Advance the latent walk along the fixed internal grid up to this instant, so
+        # the state at `elapsed` is the same however coarsely it is being viewed.
+        target = elapsed.root // LATENT_STEP.root
+        while walked < target:
+            walked += 1
+            latent = _walk(streams.substream("world", "vitals", pid, "walk", walked), latent)
+        observed = streams.substream("world", "vitals", pid, "observe", elapsed.root)
         samples.append(_observe(observed, latent, elapsed, onset))
 
     return VitalsStream(

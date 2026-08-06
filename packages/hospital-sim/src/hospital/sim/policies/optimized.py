@@ -43,10 +43,19 @@ per-tick cost proportional to what there is to decide.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from hospital.core import BayStatus, CompiledRules, DecisionInput, PlanItem, StaffMember
+from hospital.core import (
+    BayStatus,
+    CompiledRules,
+    DecisionInput,
+    Duration,
+    PatientId,
+    PlanItem,
+    StaffMember,
+)
 from hospital.sim.policies.baseline import InputStaffing
 from hospital.sim.policies.protocols import PolicySet
 from hospital.solver import (
@@ -96,6 +105,9 @@ class SolverPlacement:
     backend: Solver
     objective: ObjectiveConfig
     rules: CompiledRules
+    # Per-patient predicted length of stay, or empty. Held here rather than read from
+    # `DecisionInput` because a prediction is not floor state (see `Solver.solve`).
+    expected_stay: Mapping[PatientId, Duration] = field(default_factory=dict[PatientId, Duration])
     _warm: Plan | None = field(default=None, init=False, repr=False)
 
     @property
@@ -114,7 +126,12 @@ class SolverPlacement:
         if not di.waiting or not any(bs.status is BayStatus.FREE for bs in di.bays):
             return ()  # nothing to place / nowhere to place — the empty solve
         result = self.backend.solve(
-            di, oracle, config=self.objective, rules=self.rules, warm_start=self._warm
+            di,
+            oracle,
+            config=self.objective,
+            rules=self.rules,
+            warm_start=self._warm,
+            expected_stay=self.expected_stay or None,
         )
         stamped = stamp(
             result, self.objective, rules_hash=self.rules.rules_hash or None, now=di.now
@@ -229,11 +246,15 @@ def make_optimized_policies(
     rules: CompiledRules,
     roster: tuple[StaffMember, ...],
     placement_backend: str = PLACEMENT_BACKEND,
+    expected_stay: Mapping[PatientId, Duration] | None = None,
 ) -> PolicySet:
     """Wire the solver-backed ``PolicySet`` (origin ``"solver"``)."""
     return PolicySet(
         placement=SolverPlacement(
-            backend=get_backend(placement_backend), objective=objective, rules=rules
+            backend=get_backend(placement_backend),
+            objective=objective,
+            rules=rules,
+            expected_stay=dict(expected_stay or {}),
         ),
         sequencing=SolverSequencing(objective=objective),
         dispatch=SolverDispatch(objective=objective, rules=rules, roster=roster),

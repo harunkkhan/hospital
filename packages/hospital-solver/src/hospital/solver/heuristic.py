@@ -15,6 +15,7 @@ every backend it self-validates before returning and never repairs.
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from typing import ClassVar
 
 from hospital.core import (
@@ -29,10 +30,12 @@ from hospital.core import (
 )
 from hospital.solver.objective import ObjectiveConfig, assignment_coeffs
 from hospital.solver.placement import (
+    assignment_weight,
     candidates,
     occupied_by_zone_type,
+    residual_stays,
+    scarcity_by_zone,
     self_validate,
-    travel_weight,
     zone_remaining,
 )
 from hospital.solver.protocol import RoutingOracle, SolveResult, SolverStatus
@@ -54,6 +57,7 @@ class HeuristicPlacement:
         rules: CompiledRules,
         time_cap: Duration | None = None,
         warm_start: Plan | None = None,
+        expected_stay: Mapping[PatientId, Duration] | None = None,
     ) -> SolveResult:
         del time_cap, warm_start  # greedy is a single deterministic pass
         started_ns = time.perf_counter_ns()
@@ -74,7 +78,11 @@ class HeuristicPlacement:
             ),
         )
 
+        stays = residual_stays(di, expected_stay)
         remaining_by_zone = zone_remaining(di)
+        # Scarcity is snapshotted before any placement, so the greedy order does not
+        # make each successive bay look scarcer than the CP-SAT model saw it.
+        scarcity = scarcity_by_zone(di)
         remaining_by_zt: dict[ZoneType, int] = {}
         occupied_zt = occupied_by_zone_type(di)
         for bay in bays:
@@ -97,7 +105,19 @@ class HeuristicPlacement:
             if not open_bays:
                 continue
             best = min(
-                open_bays, key=lambda b: (travel_weight(p, b, oracle, layout, coeffs), b.id.root)
+                open_bays,
+                key=lambda b: (
+                    assignment_weight(
+                        p,
+                        b,
+                        oracle,
+                        layout,
+                        coeffs,
+                        expected_stay=stays.get(p.id),
+                        scarcity_by_zone=scarcity,
+                    ),
+                    b.id.root,
+                ),
             )
             assignments.append((p.id, best.id))
             taken.add(best.id)

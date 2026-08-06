@@ -195,3 +195,47 @@ def test_a_stable_patient_is_never_labelled() -> None:
     stream = next(s for s in _cohort(EsiAcuity.ESI5, 200) if not s.deteriorates)
     for at_min in (0, 30, 90, 200):
         assert deterioration_label(stream, minutes(at_min), horizon=minutes(30)) is False
+
+
+def test_looking_more_often_does_not_change_the_patient() -> None:
+    """Cadence is a view, not a construction parameter (the walk is keyed by time).
+
+    Keying the walk and the noise by *tick index* made observation move the thing
+    observed: at a five-minute cadence the reading at ten minutes came from ``walk/2``,
+    at a ten-minute cadence from ``walk/1``, so the same instant in the same patient's
+    stream held different physiology depending on the monitor's settings.
+    """
+    fine = generate_vitals(
+        _patient("p", EsiAcuity.ESI2), RandomStreams(7), until=hours(6), cadence=minutes(5)
+    )
+    coarse = generate_vitals(
+        _patient("p", EsiAcuity.ESI2), RandomStreams(7), until=hours(6), cadence=minutes(30)
+    )
+    by_elapsed = {sample.elapsed: sample for sample in fine.samples}
+
+    assert len(coarse.samples) < len(fine.samples)
+    shared = [s for s in coarse.samples if s.elapsed in by_elapsed]
+    assert len(shared) == len(coarse.samples), "the coarse grid must land on the fine one"
+    for sample in shared:
+        assert sample == by_elapsed[sample.elapsed], f"physiology moved at {sample.elapsed}"
+
+
+def test_a_finer_view_agrees_with_the_grid_it_refines() -> None:
+    """A one-minute view must reproduce every five-minute reading exactly."""
+    coarse = generate_vitals(_patient("q"), RandomStreams(11), until=hours(2), cadence=minutes(5))
+    fine = generate_vitals(_patient("q"), RandomStreams(11), until=hours(2), cadence=minutes(1))
+    by_elapsed = {sample.elapsed: sample for sample in fine.samples}
+    for sample in coarse.samples:
+        assert by_elapsed[sample.elapsed] == sample, f"disagreement at {sample.elapsed}"
+
+
+def test_the_deterioration_label_is_unchanged_by_the_cadence() -> None:
+    """Ground truth belongs to the patient; only `until` may move it (by design)."""
+    for cadence in (minutes(1), minutes(5), minutes(10), minutes(30)):
+        stream = generate_vitals(
+            _patient("r", EsiAcuity.ESI1), RandomStreams(3), until=hours(6), cadence=cadence
+        )
+        reference = generate_vitals(
+            _patient("r", EsiAcuity.ESI1), RandomStreams(3), until=hours(6), cadence=minutes(5)
+        )
+        assert (stream.deteriorates, stream.onset) == (reference.deteriorates, reference.onset)

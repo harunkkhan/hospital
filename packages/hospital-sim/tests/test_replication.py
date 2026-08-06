@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 
 import pytest
 from _sim_fixtures import tiny_scenario
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hospital.core import EventLog, TimeWindow, hours
+from hospital.core import Duration, EventLog, PatientId, TimeWindow, hours
 from hospital.data.layout import generate_floor
 from hospital.data.scenario import realize_staff
 from hospital.sim.experiment.replication import Replication, default_rules, run_replication
@@ -196,9 +197,17 @@ def test_callers_objective_drives_policies_and_the_hash(
         rules: CompiledRules,
         roster: tuple[StaffMember, ...],
         objective: ObjectiveConfig | None = None,
+        expected_stay: Mapping[PatientId, Duration] | None = None,
     ) -> PolicySet:
         captured.append(objective)
-        return make_policies(kind, oracle=oracle, rules=rules, roster=roster, objective=objective)
+        return make_policies(
+            kind,
+            oracle=oracle,
+            rules=rules,
+            roster=roster,
+            objective=objective,
+            expected_stay=expected_stay,
+        )
 
     monkeypatch.setattr(replication_mod, "make_policies", spy)
     custom = ObjectiveConfig(w_time=7, w_travel=2, unplaced_wait_penalty=99)

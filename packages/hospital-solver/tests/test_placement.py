@@ -11,10 +11,23 @@ from _solver_fixtures import (
     default_config,
     demo_compiled,
     make_patient,
+    tiny_layout,
     waiting,
 )
 
-from hospital.core import BayStatus, DecisionInput, Duration, EsiAcuity, Plan
+from hospital.core import (
+    BayId,
+    BayStatus,
+    DecisionInput,
+    Duration,
+    EsiAcuity,
+    FloorLayout,
+    Plan,
+    Zone,
+    ZoneId,
+    ZoneType,
+    hours,
+)
 from hospital.core.time import seconds
 from hospital.core.validation import ValidationContext, validate
 from hospital.solver import SolveResult, SolverStatus, get_backend
@@ -212,6 +225,35 @@ def test_place_first_even_when_travel_exceeds_wait_penalty() -> None:
     assert result.status is SolverStatus.OPTIMAL
 
 
+def test_place_first_even_when_occupancy_exceeds_the_wait_penalty() -> None:
+    """The occupancy term must not make leaving a patient unplaced look cheap.
+
+    Same failure mode as its travel-term sibling above, but occupancy is the term with
+    room to get large: it scales with a *predicted* stay, so one bad prediction could
+    dwarf any travel proxy. Place-first survives only because `big_b` is derived from
+    the finished `weight` dict -- occupancy already folded in. Compute it from travel
+    alone and this test fails while every other placement test still passes.
+    """
+    patient = make_patient("p3", EsiAcuity.ESI3)
+    di = decision_input(
+        waiting_patients=(waiting(patient, 0),),
+        bays=(bay_state("bay-1"),),
+    )
+    backend = get_backend("placement_cpsat")
+    oracle = GraphRoutingOracle(di.layout.graph)
+    result = backend.solve(
+        di,
+        oracle,
+        # A tiny unplaced penalty against an absurd predicted stay and a heavy weight:
+        # the assignment cost here is orders of magnitude above the cost of refusing.
+        config=default_config(unplaced_wait_penalty=1, w_occupancy=50),
+        rules=demo_compiled(),
+        expected_stay={patient.id: hours(500)},
+    )
+    assert _assignments(result.plan) == {"p3": "bay-1"}
+    assert result.status is SolverStatus.OPTIMAL
+
+
 def test_search_budget_is_deterministic_time_not_wall_clock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -286,3 +328,78 @@ def test_no_incumbent_falls_back_to_deterministic_heuristic(
     assert result.backend == "placement_greedy"
     assert _assignments(result.plan) == {"p3": "bay-1"}  # the validated greedy plan
     assert validate(result.plan, _ctx(di)) == ()
+
+
+def _two_general_zones() -> FloorLayout:
+    """A one-bay GENERAL zone next to a three-bay one, the nearer bay in the tight zone.
+
+    ``tiny_layout`` gives each acuity exactly one eligible zone, so no patient there ever
+    faces a cross-zone choice and scarcity can never break a tie. Scarcity is measured
+    from *assignable* bays, so the roomy zone needs more than one of them — hence the two
+    extra bays, cloned from bay-2 onto its own node so travel stays identical between
+    them and bay-1 keeps its distance advantage.
+    """
+    base = tiny_layout()
+    roomy, tight = ZoneId("z-gen"), ZoneId("z-gen-tight")
+    original = {b.id: b for b in base.bays}
+    clones = tuple(
+        original[BayId("bay-2")].model_copy(update={"id": BayId(f"bay-2{suffix}")})
+        for suffix in ("b", "c")
+    )
+    bays = (
+        *(b.model_copy(update={"zone": tight}) if b.id == BayId("bay-1") else b for b in base.bays),
+        *clones,
+    )
+    zones = (
+        Zone(id=roomy, zone_type=ZoneType.GENERAL, capacity=4),
+        Zone(id=tight, zone_type=ZoneType.GENERAL, capacity=1),
+        *(z for z in base.zones if z.id != roomy),
+    )
+    return base.model_copy(update={"bays": bays, "zones": zones})
+
+
+def test_the_fallback_still_prices_the_predicted_stay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Delegating to the greedy backend must not silently drop the predictions.
+
+    The fallback fires exactly when the instance is hardest, so an arm that quietly
+    reverts to travel-only placement there is optimizing something other than what it
+    reports — and ``HEURISTIC`` names *which backend* answered, never which terms it
+    read, so nothing downstream would show it.
+    """
+    from ortools.sat.python import cp_model
+
+    def unknown(
+        self: cp_model.CpSolver,
+        model: cp_model.CpModel,
+        solution_callback: cp_model.CpSolverSolutionCallback | None = None,
+    ):
+        return cp_model.UNKNOWN
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", unknown)
+    patient = make_patient("p3", EsiAcuity.ESI3)
+    di = decision_input(
+        waiting_patients=(waiting(patient, 30),),
+        bays=(
+            bay_state("bay-1"),
+            bay_state("bay-2"),
+            bay_state("bay-2b"),
+            bay_state("bay-2c"),
+        ),
+        layout=_two_general_zones(),
+    )
+    backend = get_backend("placement_cpsat")
+    oracle = GraphRoutingOracle(di.layout.graph)
+    config = default_config(w_occupancy=40)
+
+    priced = backend.solve(
+        di, oracle, config=config, rules=demo_compiled(), expected_stay={patient.id: hours(8)}
+    )
+    unpriced = backend.solve(di, oracle, config=config, rules=demo_compiled())
+    assert priced.status is SolverStatus.HEURISTIC
+    assert unpriced.status is SolverStatus.HEURISTIC
+    # Travel alone takes the nearer bay-1; it is also the last bay in its zone, so a
+    # long predicted stay must send the patient to the roomy zone instead.
+    assert _assignments(unpriced.plan) == {"p3": "bay-1"}
+    assert _assignments(priced.plan) == {"p3": "bay-2"}

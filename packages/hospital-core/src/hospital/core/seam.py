@@ -243,10 +243,32 @@ class RiskMonitor(Protocol):
         ...
 
 
+@runtime_checkable
+class ForgetfulMonitor(Protocol):
+    """A :class:`RiskMonitor` that keeps per-patient state and can be told to drop it.
+
+    Separate from ``RiskMonitor`` on purpose. Buffering is an implementation choice — a
+    stateless monitor scoring one reading at a time needs no lifecycle at all — so
+    requiring ``forget`` of every monitor would make the simpler kind harder to write for
+    no gain. The engine checks structurally (``isinstance``, which this Protocol supports)
+    and calls it when it is there.
+
+    Without it, a rolling monitor has no signal that a patient is gone: its buffers grow
+    for every discharge across a week-long run, and because patient ids are unique only
+    *within* a run, reusing one monitor across runs would feed the previous week's
+    readings into this week's window.
+    """
+
+    def forget(self, patient: PatientId) -> None:
+        """Drop everything retained for ``patient``. Must tolerate an unknown id."""
+        ...
+
+
 __all__ = [
     "BayState",
     "DecisionInput",
     "DecisionResponse",
+    "ForgetfulMonitor",
     "Plan",
     "PlanDiff",
     "PlanItem",

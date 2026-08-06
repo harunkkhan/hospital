@@ -23,12 +23,10 @@ from hospital.forecast.arrivals import (
 )
 from hospital.forecast.deterioration import (
     DeteriorationModel,
-    News2Result,
     RollingDeteriorationMonitor,
     ThresholdChoice,
     fit_deterioration_model,
     news2_for_features,
-    news2_score,
 )
 from hospital.forecast.features import (
     ComplaintEncoder,
@@ -78,7 +76,6 @@ __all__ = [
     "GbtParams",
     "LognormalParams",
     "ModelStore",
-    "News2Result",
     "PatientFeatures",
     "PredictionBundle",
     "RollingDeteriorationMonitor",
@@ -102,7 +99,6 @@ __all__ = [
     "fit_surge_forecaster",
     "intensity_from_rates",
     "news2_for_features",
-    "news2_score",
     "online_vitals_features",
     "patient_features",
     "retrain_loop",

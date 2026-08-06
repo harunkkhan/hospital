@@ -34,6 +34,7 @@ side channel (deviation from the doc's field list, noted in the build report).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import simpy
@@ -49,7 +50,9 @@ from hospital.core import (
     FrozenModel,
     InfeasiblePlan,
     OperatingWeek,
+    PatientId,
     RandomStreams,
+    RiskMonitor,
     Rule,
     RunId,
     TimeWindow,
@@ -62,6 +65,7 @@ from hospital.data.workload import generate_workload
 from hospital.sim.experiment.disruptions import schedule_disruptions
 from hospital.sim.flow.patient import patient_process
 from hospital.sim.flow.staff import staff_process
+from hospital.sim.flow.vitals import VitalsWatch, vitals_process
 from hospital.sim.physics.executor import PriorityTier, TaskExecutor
 from hospital.sim.physics.resources import build_resources
 from hospital.sim.physics.service_times import ServiceTimes, default_service_table
@@ -210,13 +214,21 @@ def _spawn_arrivals(
     arrivals: tuple[PatientArrival, ...],
     service_times: ServiceTimes,
     streams: RandomStreams,
+    watch: VitalsWatch | None = None,
+    monitor: RiskMonitor | None = None,
 ) -> Generator[simpy.Event, object]:
-    """Start each patient process at its arrival instant, in workload order."""
+    """Start each patient process at its arrival instant, in workload order.
+
+    A vitals process is started beside it only when ``watch`` is set and the
+    patient is acute enough to be monitored. Without a watch nothing extra is
+    scheduled and no ``VitalsSampled`` is written, so the run stays byte-identical
+    to the M1/M2 engine.
+    """
     for arrival in arrivals:
         dt = arrival.patient.arrival_time.root - int(env.now)
         if dt > 0:
             yield executor.delay(Duration(dt), PriorityTier.COMPLETION)
-        env.process(
+        stay = env.process(
             patient_process(
                 env,
                 world,
@@ -227,6 +239,20 @@ def _spawn_arrivals(
                 streams=streams,
             )
         )
+        if watch is not None and int(arrival.patient.esi) <= int(watch.monitor_at_or_above):
+            env.process(
+                vitals_process(
+                    env,
+                    world,
+                    executor,
+                    log,
+                    arrival.patient,
+                    streams=streams,
+                    watch=watch,
+                    stay=stay,
+                    monitor=monitor,
+                )
+            )
 
 
 def run_replication(
@@ -235,6 +261,9 @@ def run_replication(
     seed: int,
     *,
     objective: ObjectiveConfig = DEFAULT_OBJECTIVE,
+    watch: VitalsWatch | None = None,
+    monitor: RiskMonitor | None = None,
+    expected_stay: Mapping[PatientId, Duration] | None = None,
 ) -> Replication:
     """Run one full horizon of ``scenario`` under ``arm`` — deterministic in ``seed``.
 
@@ -264,12 +293,34 @@ def run_replication(
     # 6-8: oracle + the caller's objective + compiled rules + the chosen arm
     oracle = GraphRoutingOracle(layout.graph)
     rules = compile_rules(scenario.rules if scenario.rules else default_rules())
-    policies = make_policies(arm, oracle=oracle, rules=rules, roster=roster, objective=objective)
+    # `expected_stay` is the prediction port (doc 06 §3). `None` -> the arm decides
+    # exactly as it did before predictions existed, which is what keeps the M1 goldens
+    # a check rather than a re-baseline. Only the optimized arm consumes it.
+    policies = make_policies(
+        arm,
+        oracle=oracle,
+        rules=rules,
+        roster=roster,
+        objective=objective,
+        expected_stay=expected_stay,
+    )
     world.set_decision_hook(_make_tick(world, oracle, policies, rules, executor, log))
 
     # 9-11: the one workload generator (surges included), agents, disruptions
     arrivals = generate_workload(scenario.workload, streams, disruptions=scenario.disruptions)
-    env.process(_spawn_arrivals(env, world, executor, log, arrivals, service_times, streams))
+    env.process(
+        _spawn_arrivals(
+            env,
+            world,
+            executor,
+            log,
+            arrivals,
+            service_times,
+            streams,
+            watch=watch,
+            monitor=monitor,
+        )
+    )
     staff_processes = {
         member.id: env.process(
             staff_process(env, world, executor, log, member, resources.mailboxes[member.id])

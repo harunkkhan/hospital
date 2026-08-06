@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -16,6 +17,7 @@ from hospital.core import (
     DecisionInput,
     Duration,
     EsiAcuity,
+    PatientId,
     Plan,
     PlanItem,
     Rule,
@@ -370,6 +372,7 @@ class _StubBackend:
         default_factory=list[tuple[DecisionInput, "Plan | None"]]
     )
     statuses: list[SolverStatus] = field(default_factory=list[SolverStatus])
+    seen_stay: Mapping[PatientId, Duration] | None = field(default=None, init=False)
 
     def solve(
         self,
@@ -380,7 +383,9 @@ class _StubBackend:
         rules: CompiledRules,
         time_cap: Duration | None = None,
         warm_start: Plan | None = None,
+        expected_stay: Mapping[PatientId, Duration] | None = None,
     ) -> SolveResult:
+        self.seen_stay = expected_stay
         self.calls.append((di, warm_start))
         status = self.statuses.pop(0) if self.statuses else SolverStatus.OPTIMAL
         return SolveResult(

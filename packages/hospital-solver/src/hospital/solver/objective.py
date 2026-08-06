@@ -69,6 +69,17 @@ class ObjectiveConfig(FrozenModel):
         default_factory=_default_urgency_pairs
     )
     unplaced_wait_penalty: int = 1000
+    # Per (bay-second x scarcity-unit) cost of a predicted stay occupying a bay.
+    #
+    # **Zero by default, deliberately.** At zero the occupancy term vanishes and every
+    # M1/M2 golden is byte-identical, so turning prediction on is an explicit opt-in
+    # rather than a silent re-baselining of the whole suite.
+    #
+    # Scale note for anyone tuning it: the travel term is roughly
+    # `u(esi) * 1e3..1e4`, while occupancy is `u(esi) * stay_seconds * scarcity`, and a
+    # one-hour stay in a nearly-full zone is already ~2e4. A weight of 1 therefore
+    # makes occupancy comparable to travel; larger values let it dominate.
+    w_occupancy: int = 0
 
     @field_validator("acuity_urgency", mode="before")
     @classmethod
@@ -96,6 +107,7 @@ class AssignmentCoeffs(FrozenModel):
 
     travel_weight: int  # w_travel * u(esi) — per-second travel cost for this patient
     wait_penalty: int  # w_time * u(esi) * unplaced_wait_penalty — per-second unplaced cost
+    occupancy_weight: int  # w_occupancy * u(esi) — per (bay-second x scarcity) cost
 
 
 def acuity_urgency(config: ObjectiveConfig, esi: EsiAcuity) -> int:
@@ -112,6 +124,7 @@ def assignment_coeffs(config: ObjectiveConfig, esi: EsiAcuity) -> AssignmentCoef
     return AssignmentCoeffs(
         travel_weight=config.w_travel * u,
         wait_penalty=config.w_time * u * config.unplaced_wait_penalty,
+        occupancy_weight=config.w_occupancy * u,
     )
 
 
@@ -146,6 +159,7 @@ def config_hash(config: ObjectiveConfig) -> str:
         "w_time": config.w_time,
         "w_travel": config.w_travel,
         "unplaced_wait_penalty": config.unplaced_wait_penalty,
+        "w_occupancy": config.w_occupancy,
         "acuity_urgency": {str(int(a)): u for a, u in config.acuity_urgency},
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
