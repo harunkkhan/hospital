@@ -34,9 +34,9 @@ from hospital.solver.placement import (
     candidates,
     occupied_by_zone_type,
     residual_stays,
+    scarcity_by_zone,
     self_validate,
     zone_remaining,
-    zone_scarcity,
 )
 from hospital.solver.protocol import RoutingOracle, SolveResult, SolverStatus
 from hospital.solver.sequencing import DEFAULT_STARVATION_RATE, priority_score
@@ -82,7 +82,7 @@ class HeuristicPlacement:
         remaining_by_zone = zone_remaining(di)
         # Scarcity is snapshotted before any placement, so the greedy order does not
         # make each successive bay look scarcer than the CP-SAT model saw it.
-        scarcity_by_zone = {zone: zone_scarcity(free) for zone, free in remaining_by_zone.items()}
+        scarcity = scarcity_by_zone(di)
         remaining_by_zt: dict[ZoneType, int] = {}
         occupied_zt = occupied_by_zone_type(di)
         for bay in bays:
@@ -114,7 +114,7 @@ class HeuristicPlacement:
                         layout,
                         coeffs,
                         expected_stay=stays.get(p.id),
-                        scarcity_by_zone=scarcity_by_zone,
+                        scarcity_by_zone=scarcity,
                     ),
                     b.id.root,
                 ),

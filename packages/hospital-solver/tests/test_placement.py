@@ -331,17 +331,24 @@ def test_no_incumbent_falls_back_to_deterministic_heuristic(
 
 
 def _two_general_zones() -> FloorLayout:
-    """Two GENERAL zones of different capacity — the shape the reference floor has.
+    """A one-bay GENERAL zone next to a three-bay one, the nearer bay in the tight zone.
 
-    ``tiny_layout`` gives each acuity exactly one eligible zone, so no patient there
-    ever faces a cross-zone choice and scarcity can never break a tie. bay-1 is the
-    nearer of the two general bays, so putting *it* in the one-bay zone is what makes
-    travel and occupancy genuinely disagree.
+    ``tiny_layout`` gives each acuity exactly one eligible zone, so no patient there ever
+    faces a cross-zone choice and scarcity can never break a tie. Scarcity is measured
+    from *assignable* bays, so the roomy zone needs more than one of them — hence the two
+    extra bays, cloned from bay-2 onto its own node so travel stays identical between
+    them and bay-1 keeps its distance advantage.
     """
     base = tiny_layout()
     roomy, tight = ZoneId("z-gen"), ZoneId("z-gen-tight")
-    bays = tuple(
-        b.model_copy(update={"zone": tight}) if b.id == BayId("bay-1") else b for b in base.bays
+    original = {b.id: b for b in base.bays}
+    clones = tuple(
+        original[BayId("bay-2")].model_copy(update={"id": BayId(f"bay-2{suffix}")})
+        for suffix in ("b", "c")
+    )
+    bays = (
+        *(b.model_copy(update={"zone": tight}) if b.id == BayId("bay-1") else b for b in base.bays),
+        *clones,
     )
     zones = (
         Zone(id=roomy, zone_type=ZoneType.GENERAL, capacity=4),
@@ -374,7 +381,12 @@ def test_the_fallback_still_prices_the_predicted_stay(
     patient = make_patient("p3", EsiAcuity.ESI3)
     di = decision_input(
         waiting_patients=(waiting(patient, 30),),
-        bays=(bay_state("bay-1"), bay_state("bay-2")),
+        bays=(
+            bay_state("bay-1"),
+            bay_state("bay-2"),
+            bay_state("bay-2b"),
+            bay_state("bay-2c"),
+        ),
         layout=_two_general_zones(),
     )
     backend = get_backend("placement_cpsat")

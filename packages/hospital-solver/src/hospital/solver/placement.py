@@ -192,6 +192,20 @@ def travel_weight(
 # a roomy zone imposes almost no occupancy cost, which is the intended behaviour.
 _SCARCITY_BASE: Final[int] = 12
 
+# Ceiling on a single occupancy term. Both `w_occupancy` and a predicted `Duration` are
+# unbounded integers, and every `w[p,b]` is multiplied up again by the place-first big-M
+# (`reward = (wait_penalty + 1) * B`, `B = sum of per-patient maxima`), so an absurd
+# prediction — a mis-fitted regressor returning a year — could push an objective
+# coefficient outside CP-SAT's signed-64-bit domain. That does not degrade the solve, it
+# breaks it: model construction raises or returns MODEL_INVALID, and the always-feasible
+# all-unplaced solution cannot save a model that was never built.
+#
+# Clamping rather than raising, because a saturated bias still yields a valid placement
+# (every bay prices alike, so travel decides) whereas a refusal yields none. The value is
+# far above any legitimate term — measured ones span ~10-3600 — so hitting it means the
+# prediction is wrong, not that the floor is unusual.
+MAX_OCCUPANCY_COST: Final[int] = 10**7
+
 
 def zone_scarcity(remaining: int) -> int:
     """How costly one more occupied bay is in a zone with ``remaining`` free.
@@ -237,7 +251,9 @@ def occupancy_cost(
     if expected_stay is None or coeffs.occupancy_weight == 0:
         return 0
     scarcity = scarcity_by_zone.get(bay.zone, 1)
-    return coeffs.occupancy_weight * (_seconds(expected_stay) // 60) * scarcity // _SCARCITY_BASE
+    held = max(0, _seconds(expected_stay) // 60)
+    cost = coeffs.occupancy_weight * held * scarcity // _SCARCITY_BASE
+    return min(cost, MAX_OCCUPANCY_COST)
 
 
 def assignment_weight(
@@ -283,6 +299,35 @@ def zone_remaining(di: DecisionInput) -> dict[ZoneId, int]:
         if bay is not None and bs.status in (BayStatus.OCCUPIED, BayStatus.CLEANING):
             used[bay.zone] = used.get(bay.zone, 0) + 1
     return {zone.id: max(0, zone.capacity - used.get(zone.id, 0)) for zone in di.layout.zones}
+
+
+def zone_assignable(di: DecisionInput) -> dict[ZoneId, int]:
+    """Per-zone count of bays a patient could actually be put in right now.
+
+    Deliberately *not* :func:`zone_remaining`, which is the capacity constraint and is
+    defined by doc 03 §4.3 as ``capacity - |OCCUPIED or CLEANING|``. That formula does
+    not subtract ``CLOSED`` bays, which is correct for a capacity bound — a closed bay
+    still counts against nothing — but wrong as a measure of how scarce a zone *feels*.
+    Mid-closure, a zone with nine closed bays and one free one has ten "remaining" and
+    would be priced as the roomiest place on the floor while sitting on its last usable
+    bed.
+
+    Bounded by ``zone_remaining`` as well as by the free count, so a zone that is over
+    its staffing-limited capacity cannot look roomy just because bays are empty.
+    """
+    remaining = zone_remaining(di)
+    static_bays = {b.id: b for b in di.layout.bays}
+    free: dict[ZoneId, int] = {}
+    for bs in di.bays:
+        bay = static_bays.get(bs.bay)
+        if bay is not None and bs.status is BayStatus.FREE:
+            free[bay.zone] = free.get(bay.zone, 0) + 1
+    return {zone: min(spare, free.get(zone, 0)) for zone, spare in remaining.items()}
+
+
+def scarcity_by_zone(di: DecisionInput) -> dict[ZoneId, int]:
+    """The scarcity multiplier per zone, from what is actually assignable."""
+    return {zone: zone_scarcity(count) for zone, count in zone_assignable(di).items()}
 
 
 def _waited(di: DecisionInput) -> dict[PatientId, Duration]:
@@ -351,9 +396,7 @@ class CpSatPlacement:
             for b in bays
             if (p.id, b.id) in compat
         }
-        scarcity_by_zone = {
-            zone: zone_scarcity(remaining) for zone, remaining in zone_remaining(di).items()
-        }
+        scarcity = scarcity_by_zone(di)
         stays = residual_stays(di, expected_stay)
         weight = {
             (pid, bid): assignment_weight(
@@ -363,7 +406,7 @@ class CpSatPlacement:
                 layout,
                 coeffs[patient_by_id[pid].esi],
                 expected_stay=stays.get(pid),
-                scarcity_by_zone=scarcity_by_zone,
+                scarcity_by_zone=scarcity,
             )
             for (pid, bid) in x
         }
@@ -519,6 +562,7 @@ def self_validate(plan: Plan, di: DecisionInput, rules: CompiledRules) -> None:
 
 __all__ = [
     "DEFAULT_TIME_CAP",
+    "MAX_OCCUPANCY_COST",
     "NEEDS_BAY_STAGES",
     "CpSatPlacement",
     "assignment_weight",
@@ -527,8 +571,10 @@ __all__ = [
     "occupancy_cost",
     "occupied_by_zone_type",
     "residual_stays",
+    "scarcity_by_zone",
     "self_validate",
     "travel_weight",
+    "zone_assignable",
     "zone_remaining",
     "zone_scarcity",
 ]

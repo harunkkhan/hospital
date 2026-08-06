@@ -12,11 +12,19 @@ Two claims, and both matter for the M3 acceptance test:
 
 from __future__ import annotations
 
-from _solver_fixtures import decision_input, default_config, make_patient, waiting
+from _solver_fixtures import (
+    bay_state,
+    decision_input,
+    default_config,
+    make_patient,
+    tiny_layout,
+    waiting,
+)
 
 from hospital.core import (
     Bay,
     BayId,
+    BayStatus,
     Duration,
     EsiAcuity,
     NodeId,
@@ -28,9 +36,12 @@ from hospital.core import (
 from hospital.solver.objective import ObjectiveConfig, assignment_coeffs
 from hospital.solver.oracle import GraphRoutingOracle
 from hospital.solver.placement import (
+    MAX_OCCUPANCY_COST,
     occupancy_cost,
     residual_stays,
+    scarcity_by_zone,
     travel_weight,
+    zone_assignable,
     zone_scarcity,
 )
 
@@ -225,3 +236,63 @@ def test_no_predictions_means_no_residuals_to_compute() -> None:
     di = decision_input(waiting_patients=(waiting(make_patient("p"), 0),))
     assert residual_stays(di, None) == {}
     assert residual_stays(di, {}) == {}
+
+
+def test_a_zone_full_of_closed_bays_is_not_roomy() -> None:
+    """Scarcity must read assignable bays, not capacity minus occupancy.
+
+    `zone_remaining` is the capacity constraint and doc 03 §4.3 defines it as
+    `capacity - |OCCUPIED or CLEANING|` -- CLOSED bays are not subtracted, which is right
+    for a bound and wrong as a measure of how scarce a zone feels. Mid-closure a zone
+    with three closed bays and one free one has four "remaining" and would be priced as
+    the roomiest spot on the floor while sitting on its last usable bed.
+    """
+    layout = tiny_layout()
+    general = [b for b in layout.bays if b.zone == ZoneId("z-gen")]
+    assert len(general) >= 2, "fixture must give the general zone more than one bay"
+
+    healthy = decision_input(bays=tuple(bay_state(b.id.root) for b in general))
+    mid_closure = decision_input(
+        bays=(
+            bay_state(general[0].id.root),
+            *(bay_state(b.id.root, BayStatus.CLOSED) for b in general[1:]),
+        )
+    )
+    assert zone_assignable(healthy)[ZoneId("z-gen")] == len(general)
+    assert zone_assignable(mid_closure)[ZoneId("z-gen")] == 1
+    # Fewer assignable bays must read as scarcer, which is what the cost multiplies by.
+    assert (
+        scarcity_by_zone(mid_closure)[ZoneId("z-gen")] > scarcity_by_zone(healthy)[ZoneId("z-gen")]
+    )
+
+
+def test_being_over_capacity_does_not_look_roomy_either() -> None:
+    """The free count is bounded by remaining capacity, not just by bay status."""
+    layout = tiny_layout()
+    resus = next(b for b in layout.bays if b.zone == ZoneId("z-resus"))
+    general = [b for b in layout.bays if b.zone == ZoneId("z-gen")]
+    # z-resus has capacity 1; its one bay free means exactly one assignable.
+    di = decision_input(bays=(bay_state(resus.id.root), *(bay_state(b.id.root) for b in general)))
+    assert zone_assignable(di)[ZoneId("z-resus")] == 1
+
+
+def test_an_absurd_prediction_saturates_instead_of_overflowing_the_model() -> None:
+    """A mis-fitted regressor must not be able to break model construction.
+
+    Every `w[p,b]` is multiplied up again by the place-first big-M, so an unbounded term
+    could push an objective coefficient outside CP-SAT's signed-64-bit domain -- which
+    does not merely degrade the solve, it prevents the model from being built at all, and
+    the always-feasible all-unplaced solution cannot rescue a model that never existed.
+    """
+    coeffs = assignment_coeffs(ObjectiveConfig(w_occupancy=1000), EsiAcuity.ESI1)
+    bay = _bay("b", _SCARCE)
+    absurd = occupancy_cost(bay, coeffs, hours(24 * 365), {_SCARCE: 12})
+    assert absurd == MAX_OCCUPANCY_COST
+    # Saturation, not wraparound: still a cost, and still at least as much as a sane stay.
+    assert absurd >= occupancy_cost(bay, coeffs, hours(6), {_SCARCE: 12})
+
+
+def test_a_negative_duration_is_not_a_reward_for_taking_a_scarce_bay() -> None:
+    """Defensive: a negative coefficient would invert the term's whole purpose."""
+    coeffs = assignment_coeffs(ObjectiveConfig(w_occupancy=2), EsiAcuity.ESI3)
+    assert occupancy_cost(_bay("b", _SCARCE), coeffs, Duration(-hours(3).root), {_SCARCE: 12}) == 0
