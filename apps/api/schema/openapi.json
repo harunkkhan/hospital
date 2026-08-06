@@ -1097,13 +1097,21 @@
       },
       "FloorLayout": {
         "additionalProperties": false,
-        "description": "The static floor: route graph plus zones/bays/stations/entrances.",
+        "description": "The static built environment: route graph plus zones/bays/stations/entrances.\n\nNamed for the single ER floor it described through M3, and still exactly that for an\nED-only scenario. A multi-floor hospital is the *same* type with a graph that spans\nfloors, joined by ``elevators`` \u2014 which is why nothing downstream had to change to\ngain vertical movement: an elevator is an edge whose ``seconds`` greatly exceed its\ndistance, and :class:`~hospital.core.graph.RouteEdge` was built to allow that.\n\n``elevators`` lists the boarding node on each floor. Empty for a single floor: there\nis nowhere to go.",
         "properties": {
           "bays": {
             "items": {
               "$ref": "#/components/schemas/Bay"
             },
             "title": "Bays",
+            "type": "array"
+          },
+          "elevators": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "title": "Elevators",
             "type": "array"
           },
           "entrances": {
@@ -3065,10 +3073,16 @@
       },
       "Zone": {
         "additionalProperties": false,
-        "description": "A care zone with a static capacity.",
+        "description": "A care zone with a static capacity, on a floor.\n\n``floor`` defaults to ``0`` so a single-floor ER scenario \u2014 every scenario before the\nmulti-floor hospital \u2014 describes itself exactly as it did before. It is an index into\nthe hospital's floors, not a storey number: routing never reads it, because vertical\nmovement is edges in the graph like any other movement. It is here so a *decision*\ncan be about a floor (is this ward upstairs from the ED?) without re-deriving that\nfrom node ids.",
         "properties": {
           "capacity": {
             "title": "Capacity",
+            "type": "integer"
+          },
+          "floor": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Floor",
             "type": "integer"
           },
           "id": {
@@ -3131,7 +3145,7 @@
         "type": "object"
       },
       "ZoneType": {
-        "description": "Functional type of a care zone.",
+        "description": "Functional type of a care zone.\n\nThe first block is the emergency department, which is the whole of M1-M3. The\n``WARD_ZONE_TYPES`` block below arrives with the multi-floor hospital: a boarded ED\npatient is admitted *into* one of those, so they are placement targets rather than\nstops in an ED workup. Adding a member is a contract change \u2014 rules, the placement\nvalidator, and any scenario naming zone types all read this vocabulary.",
         "enum": [
           "triage",
           "general",
@@ -3139,7 +3153,11 @@
           "fast_track",
           "observation",
           "imaging",
-          "lab"
+          "lab",
+          "icu",
+          "surgery",
+          "med_surg",
+          "maternity"
         ],
         "title": "ZoneType",
         "type": "string"

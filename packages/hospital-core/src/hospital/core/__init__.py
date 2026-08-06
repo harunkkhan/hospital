@@ -18,6 +18,8 @@ from hospital.core.entities import (
     Zone,
 )
 from hospital.core.enums import (
+    ED_ZONE_TYPES,
+    WARD_ZONE_TYPES,
     Activity,
     ArrivalMode,
     BayStatus,
@@ -131,10 +133,12 @@ from hospital.core.vitals import (
 )
 
 __all__ = [
+    "ED_ZONE_TYPES",
     "KPI_KEYS",
     "MICROS_PER_SEC",
     "NEWS2_PARAMETERS",
     "STAFF_FRAC_KEYS",
+    "WARD_ZONE_TYPES",
     "Activity",
     "ArrivalMode",
     "Band",

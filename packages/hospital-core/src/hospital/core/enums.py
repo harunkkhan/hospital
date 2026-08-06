@@ -49,7 +49,14 @@ class ArrivalMode(StrEnum):
 
 
 class ZoneType(StrEnum):
-    """Functional type of a care zone."""
+    """Functional type of a care zone.
+
+    The first block is the emergency department, which is the whole of M1-M3. The
+    ``WARD_ZONE_TYPES`` block below arrives with the multi-floor hospital: a boarded ED
+    patient is admitted *into* one of those, so they are placement targets rather than
+    stops in an ED workup. Adding a member is a contract change — rules, the placement
+    validator, and any scenario naming zone types all read this vocabulary.
+    """
 
     TRIAGE = "triage"
     GENERAL = "general"
@@ -58,6 +65,30 @@ class ZoneType(StrEnum):
     OBSERVATION = "observation"
     IMAGING = "imaging"
     LAB = "lab"
+    # Inpatient wards (M4). Not reachable from an ED-only scenario, because nothing
+    # allocates them unless a floor spec asks for them.
+    ICU = "icu"
+    SURGERY = "surgery"
+    MED_SURG = "med_surg"
+    MATERNITY = "maternity"
+
+
+# Where an admitted patient goes. Kept as data rather than a predicate so a caller can
+# ask the question without restating the list, and so adding a ward type is one edit.
+WARD_ZONE_TYPES: frozenset[ZoneType] = frozenset(
+    {ZoneType.ICU, ZoneType.SURGERY, ZoneType.MED_SURG, ZoneType.MATERNITY}
+)
+
+# The emergency department's own zones: where a patient is *worked up*, not admitted.
+ED_ZONE_TYPES: frozenset[ZoneType] = frozenset(
+    {
+        ZoneType.TRIAGE,
+        ZoneType.GENERAL,
+        ZoneType.RESUS_TRAUMA,
+        ZoneType.FAST_TRACK,
+        ZoneType.OBSERVATION,
+    }
+)
 
 
 class BayStatus(StrEnum):
@@ -102,6 +133,8 @@ class Activity(StrEnum):
 
 
 __all__ = [
+    "ED_ZONE_TYPES",
+    "WARD_ZONE_TYPES",
     "Activity",
     "ArrivalMode",
     "BayStatus",

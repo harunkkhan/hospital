@@ -16,6 +16,7 @@ const EMPTY_LAYOUT: FloorLayout = {
   entrances: [],
   imaging_nodes: [],
   lab_nodes: [],
+  elevators: [],
 };
 
 function makeFakeApi(opts: { failLayoutFor?: (runId: string) => boolean } = {}): {
