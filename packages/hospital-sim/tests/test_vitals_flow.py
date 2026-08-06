@@ -17,6 +17,7 @@ from hospital.core import (
     EsiAcuity,
     ForgetfulMonitor,
     PatientId,
+    RandomStreams,
     RiskAssessment,
     RiskMonitor,
     SimTime,
@@ -25,6 +26,8 @@ from hospital.core import (
     news2_score,
 )
 from hospital.core.events import VitalsSampled
+from hospital.data.vitals import generate_vitals
+from hospital.data.workload import generate_workload
 from hospital.sim import run_replication
 from hospital.sim.flow.vitals import VitalsWatch, vitals_process
 
@@ -295,10 +298,59 @@ def test_vitals_process_is_exported_for_composition() -> None:
     assert VitalsWatch().cadence == minutes(5)
 
 
-def test_news2_stamped_on_an_event_matches_the_core_rubric() -> None:
-    """One definition: the engine stamps exactly what `core.vitals` scores."""
-    reading = VitalsReading(hr=132, spo2=90, sbp=88, dbp=55, temp_c_x10=392, rr=27)
-    scored = news2_score(reading)
-    event = VitalsSampled(occurred_at=SimTime(0), patient=_ANY_PATIENT, news2=scored.total)
-    assert event.news2 == scored.total
+def test_news2_stamped_by_the_engine_matches_the_reading_it_reports() -> None:
+    """The engine must stamp the rubric's score for *that sample*, not any number.
+
+    The earlier version of this test built ``VitalsSampled(news2=scored.total)`` itself
+    and then asserted the field came back unchanged — true of any assignment, and it never
+    reached ``vitals_process`` at all. An engine that stamped a constant, or the score of
+    the wrong tick, passed it.
+
+    So the stream is regenerated independently here (``generate_vitals`` is content-
+    addressed by patient, so a fresh ``RandomStreams(seed)`` reproduces exactly what the
+    run revealed) and each event is checked against the sample its own timestamp points at.
+    """
+    scenario = tiny_scenario()
+    seed = 5
+    log = run_replication(scenario, "baseline", seed, watch=_WATCH).event_log_jsonl
+
+    arrivals = generate_workload(
+        scenario.workload, RandomStreams(seed), disruptions=scenario.disruptions
+    )
+    cohort = {arrival.patient.id: arrival.patient for arrival in arrivals}
+    arrived = {
+        PatientId(str(e["patient"])): int(e["occurred_at"]) for e in _kinds(log, "patient_arrived")
+    }
+    streams = RandomStreams(seed)
+    expected: dict[PatientId, dict[int, int]] = {}
+    for patient in cohort.values():
+        stream = generate_vitals(patient, streams, until=_WATCH.span, cadence=_WATCH.cadence)
+        expected[patient.id] = {
+            sample.elapsed.root: news2_score(sample).total for sample in stream.samples
+        }
+
+    readings = _kinds(log, "vitals_sampled")
+    assert readings, "the fixture must sample somebody"
+    checked = 0
+    for event in readings:
+        patient = PatientId(str(event["patient"]))
+        elapsed = int(event["occurred_at"]) - arrived[patient]
+        by_elapsed = expected[patient]
+        assert elapsed in by_elapsed, f"{patient.root} sampled off-cadence at {elapsed}"
+        assert int(event["news2"]) == by_elapsed[elapsed], (
+            f"{patient.root} at {elapsed}: stamped {event['news2']}, rubric says "
+            f"{by_elapsed[elapsed]}"
+        )
+        checked += 1
+    assert checked > 1, "one reading proves nothing about a stamped constant"
+    # ...and the scores are not all the same number, or the check above is satisfiable
+    # by a constant after all.
+    stamped = {int(event["news2"]) for event in readings}
+    assert len(stamped) > 1, f"every reading stamped the same score: {stamped}"
+
+
+def test_the_rubric_calls_an_unmistakably_sick_reading_high() -> None:
+    """An anchor on the shared definition, independent of the engine."""
+    scored = news2_score(VitalsReading(hr=132, spo2=90, sbp=88, dbp=55, temp_c_x10=392, rr=27))
     assert scored.band == "high"
+    assert VitalsSampled(occurred_at=SimTime(0), patient=_ANY_PATIENT, news2=scored.total).news2 > 6
