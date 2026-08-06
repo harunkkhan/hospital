@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Final
 from hospital.core import (
     Duration,
     EsiAcuity,
+    ForgetfulMonitor,
     FrozenModel,
     StaffRole,
     minutes,
@@ -136,27 +137,38 @@ def vitals_process(
     escalated = False
     previous = 0
 
-    for sample in stream.samples:
-        step = sample.elapsed.root - previous
-        previous = sample.elapsed.root
-        if step > 0:
-            yield executor.delay(Duration(step), PriorityTier.COMPLETION)
-        if stay is not None and stay.processed:
-            return
+    try:
+        for sample in stream.samples:
+            step = sample.elapsed.root - previous
+            previous = sample.elapsed.root
+            if step > 0:
+                yield executor.delay(Duration(step), PriorityTier.COMPLETION)
+            if stay is not None and stay.processed:
+                return
 
-        scored = news2_score(sample)
-        event = VitalsSampled(occurred_at=executor.now(), patient=patient.id, news2=scored.total)
-        event_log.append(event)
+            scored = news2_score(sample)
+            event = VitalsSampled(
+                occurred_at=executor.now(), patient=patient.id, news2=scored.total
+            )
+            event_log.append(event)
 
-        if monitor is None or escalated:
-            continue
-        assessment = monitor.observe(event, sample)
-        if assessment is not None and assessment.escalate:
-            # Once only. A model that stays above threshold for an hour would
-            # otherwise raise a fresh emergency every tick, and twelve identical
-            # pages are how a real alarm gets ignored.
-            escalated = True
-            _raise_emergency(world, executor, event_log, patient, scored.total)
+            if monitor is None or escalated:
+                continue
+            assessment = monitor.observe(event, sample)
+            if assessment is not None and assessment.escalate:
+                # Once only. A model that stays above threshold for an hour would
+                # otherwise raise a fresh emergency every tick, and twelve identical
+                # pages are how a real alarm gets ignored.
+                escalated = True
+                _raise_emergency(world, executor, event_log, patient, scored.total)
+    finally:
+        # Every exit path releases the monitor's per-patient state: the early return on
+        # discharge, running out of samples, and an interrupt. A rolling monitor has no
+        # other signal that the patient is gone -- its buffers would grow for every
+        # discharge across a week, and since ids are unique only within a run, reusing
+        # one monitor would leak the previous week's readings into this week's window.
+        if isinstance(monitor, ForgetfulMonitor):
+            monitor.forget(patient.id)
 
 
 __all__ = ["EMERGENCY_RESPONSE", "VitalsWatch", "vitals_process"]

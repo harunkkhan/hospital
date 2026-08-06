@@ -15,6 +15,7 @@ from _sim_fixtures import tiny_scenario
 
 from hospital.core import (
     EsiAcuity,
+    ForgetfulMonitor,
     PatientId,
     RiskAssessment,
     RiskMonitor,
@@ -223,6 +224,64 @@ def test_escalation_does_not_perturb_a_run_that_never_escalates() -> None:
     with_monitor = run_replication(scenario, "baseline", 5, watch=_WATCH, monitor=_NeverEscalates())
     without = run_replication(scenario, "baseline", 5, watch=_WATCH)
     assert with_monitor.event_log_jsonl == without.event_log_jsonl
+
+
+class _Forgetful:
+    """Records the lifecycle calls so a leak is visible rather than merely likely."""
+
+    def __init__(self) -> None:
+        self.seen: set[PatientId] = set()
+        self.forgotten: list[PatientId] = []
+
+    def observe(self, event: VitalsSampled, reading: VitalsReading) -> RiskAssessment | None:
+        del reading
+        self.seen.add(event.patient)
+        return None
+
+    def forget(self, patient: PatientId) -> None:
+        self.forgotten.append(patient)
+
+
+def test_every_monitored_patient_is_released_when_their_process_ends() -> None:
+    """A rolling monitor has no other signal that a patient is gone.
+
+    Without release its buffers grow for every discharge across a week-long run, and
+    since patient ids are unique only *within* a run, reusing one monitor across runs
+    would feed the previous week's readings into this week's window.
+
+    Scoped to patients who actually *left*. A process still suspended when the horizon
+    cuts the run never finishes, so its ``finally`` never runs — and that is fine: the
+    whole monitor is discarded with the run. The leak worth preventing is the one that
+    accumulates *during* a run, patient after discharged patient.
+    """
+    scenario = tiny_scenario()
+    monitor = _Forgetful()
+    log = run_replication(scenario, "baseline", 5, watch=_WATCH, monitor=monitor).event_log_jsonl
+
+    assert monitor.seen, "the fixture must monitor somebody"
+    discharged = {PatientId(str(e["patient"])) for e in _kinds(log, "discharge_completed")}
+    assert discharged, "the fixture must discharge somebody"
+
+    released = set(monitor.forgotten)
+    assert len(monitor.forgotten) == len(released), "a patient was released twice"
+    left_while_monitored = monitor.seen & discharged
+    assert left_while_monitored, "no monitored patient was discharged; the release is untested"
+    assert left_while_monitored <= released, (
+        f"{len(left_while_monitored - released)} discharged patients were never released"
+    )
+    # Nothing is released that was never watched in the first place.
+    assert released <= monitor.seen
+
+
+def test_a_monitor_without_a_lifecycle_is_still_accepted() -> None:
+    """`forget` is opt-in: a stateless monitor needs no lifecycle and must not be forced."""
+    assert not isinstance(_NeverEscalates(), ForgetfulMonitor)
+    assert isinstance(_Forgetful(), ForgetfulMonitor)
+    scenario = tiny_scenario()
+    quiet = run_replication(
+        scenario, "baseline", 5, watch=_WATCH, monitor=_NeverEscalates()
+    ).event_log_jsonl
+    assert quiet == run_replication(scenario, "baseline", 5, watch=_WATCH).event_log_jsonl
 
 
 def test_the_monitor_protocol_is_satisfied_structurally() -> None:
