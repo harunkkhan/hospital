@@ -1,6 +1,10 @@
 cost: null
 disruptions:
   events: []
+elevators:
+  dwell_seconds: 20.0
+  seconds_per_floor: 12.0
+  shafts: 2
 facility:
   aspect_ratio: 1.55
   corridor_margin_cm: 600
@@ -110,6 +114,7 @@ staffing:
     physician: 3
     porter: 1
     tech: 3
+upper_floors: []
 workload:
   ambulance_fraction: 0.15
   base_rate_per_hour: 6.0

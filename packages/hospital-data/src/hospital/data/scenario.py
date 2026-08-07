@@ -111,6 +111,45 @@ class FacilitySpec(FrozenModel):
         return self
 
 
+class FloorSpec(FrozenModel):
+    """One floor: a name, and the geometry spec that fills it."""
+
+    name: str = Field(min_length=1)
+    facility: FacilitySpec
+
+
+class HospitalSpec(FrozenModel):
+    """A stack of floors and the elevators joining them.
+
+    ``floors[0]`` is the ground floor and the only one with entrances: ambulances and
+    walk-ins arrive at the emergency department, and everything above is reached through
+    the shafts.
+    """
+
+    floors: tuple[FloorSpec, ...] = Field(min_length=1)
+    elevator_shafts: int = Field(default=2, ge=1)
+    # Time for the car to move one floor, and the fixed cost of a boarding/exit cycle.
+    # `dwell` is charged once per shaft edge traversed, which is what makes a two-floor
+    # trip cheaper than two one-floor trips through a lobby.
+    seconds_per_floor: float = Field(default=12.0, gt=0.0, allow_inf_nan=False)
+    dwell_seconds: float = Field(default=20.0, ge=0.0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _floor_names_are_unique(self) -> HospitalSpec:
+        names = [floor.name for floor in self.floors]
+        if len(names) != len(set(names)):
+            raise ValueError("hospital.floors have duplicate names")
+        return self
+
+
+class ElevatorSpec(FrozenModel):
+    """The shafts joining a scenario's floors. Ignored when there is only one."""
+
+    shafts: int = Field(default=2, ge=1)
+    seconds_per_floor: float = Field(default=12.0, gt=0.0, allow_inf_nan=False)
+    dwell_seconds: float = Field(default=20.0, ge=0.0, allow_inf_nan=False)
+
+
 class WorkupProfile(FrozenModel):
     """A complaint-keyed profile driving ``distributions.sample_workup``."""
 
@@ -240,6 +279,20 @@ class Scenario(FrozenModel):
     disruptions: DisruptionSpec = DisruptionSpec()
     rules: tuple[Rule, ...] = ()
     cost: CostSpec | None = None
+    # The floors above the emergency department. Empty is the ED-only hospital every
+    # scenario described before M4 — `facility` is the ground floor either way, so the
+    # building is never stated twice.
+    upper_floors: tuple[FloorSpec, ...] = ()
+    elevators: ElevatorSpec = ElevatorSpec()
+
+    def hospital(self) -> HospitalSpec:
+        """The whole building: the ED on the ground, ``upper_floors`` above it."""
+        return HospitalSpec(
+            floors=(FloorSpec(name="ground", facility=self.facility), *self.upper_floors),
+            elevator_shafts=self.elevators.shafts,
+            seconds_per_floor=self.elevators.seconds_per_floor,
+            dwell_seconds=self.elevators.dwell_seconds,
+        )
 
 
 def load_scenario(path: str | Path) -> Scenario:

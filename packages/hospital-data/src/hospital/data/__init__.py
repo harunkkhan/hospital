@@ -9,14 +9,23 @@ is reachable by importing the owning submodule directly
 
 from __future__ import annotations
 
-from hospital.data.hospital import FloorSpec, HospitalSpec, generate_hospital
+from hospital.data.hospital import generate_hospital
 from hospital.data.layout import generate_floor
 from hospital.data.movement import export_movement_traces
-from hospital.data.scenario import Scenario, dump_scenario, load_arm, load_scenario
+from hospital.data.scenario import (
+    ElevatorSpec,
+    FloorSpec,
+    HospitalSpec,
+    Scenario,
+    dump_scenario,
+    load_arm,
+    load_scenario,
+)
 from hospital.data.vitals import generate_vitals
 from hospital.data.workload import PatientArrival, generate_workload
 
 __all__ = [
+    "ElevatorSpec",
     "FloorSpec",
     "HospitalSpec",
     "PatientArrival",

@@ -105,6 +105,18 @@ _DISPOSITION_MIX: Final[dict[EsiAcuity, dict[DispositionKind, float]]] = {
 _BOARDING_MEAN_S: Final[float] = 7_200.0
 _BOARDING_CV: Final[float] = 0.5
 
+# Inpatient length of stay once a bed is occupied, by the acuity that got them admitted.
+# Days, not hours: a ward bed turns over on a completely different timescale from an ED
+# bay, which is exactly why a handful of beds can block an ED all week.
+_WARD_STAY_MEAN_S: Final[Mapping[EsiAcuity, float]] = {
+    EsiAcuity.ESI1: 4.0 * 86_400.0,
+    EsiAcuity.ESI2: 3.0 * 86_400.0,
+    EsiAcuity.ESI3: 2.0 * 86_400.0,
+    EsiAcuity.ESI4: 1.5 * 86_400.0,
+    EsiAcuity.ESI5: 1.0 * 86_400.0,
+}
+_WARD_STAY_CV: Final[float] = 0.7
+
 
 @dataclass(frozen=True)
 class ServiceTable:
@@ -187,6 +199,16 @@ def sample_disposition(streams: RandomStreams, patient: Patient) -> DispositionK
     return sample_categorical(g, ordered)
 
 
+def sample_ward_stay(streams: RandomStreams, patient: Patient) -> Duration:
+    """How long an admitted patient occupies their inpatient bed.
+
+    World randomness, content-addressed on the patient like every other draw here, so the
+    same patient stays the same length under both arms of a comparison.
+    """
+    g = streams.substream("world", "ward_stay", str(patient.id))
+    return sample_lognormal(g, _WARD_STAY_MEAN_S[patient.esi], _WARD_STAY_CV)
+
+
 def sample_boarding_delay(streams: RandomStreams, patient: Patient) -> Duration:
     """How long an admitted patient boards (holds the bay) before leaving the floor."""
     g = streams.substream("world", "boarding", str(patient.id))
@@ -199,4 +221,5 @@ __all__ = [
     "default_service_table",
     "sample_boarding_delay",
     "sample_disposition",
+    "sample_ward_stay",
 ]

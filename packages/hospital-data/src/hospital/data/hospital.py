@@ -33,14 +33,11 @@ from __future__ import annotations
 import itertools
 from typing import TYPE_CHECKING
 
-from pydantic import Field, model_validator
-
 from hospital.core import (
     BayId,
     Distance,
     Duration,
     FloorLayout,
-    FrozenModel,
     LayoutError,
     NodeId,
     RouteEdge,
@@ -52,7 +49,7 @@ from hospital.core import (
     walk_duration,
 )
 from hospital.data.layout import generate_floor
-from hospital.data.scenario import FacilitySpec
+from hospital.data.scenario import HospitalSpec
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -64,37 +61,6 @@ _SHAFT_PITCH_CM = 400
 # A shaft edge's *distance* is the car's actual travel; its `seconds` are set from the
 # spec, not derived from that distance. This is the one place the two are decoupled.
 _FLOOR_HEIGHT_CM = 400
-
-
-class FloorSpec(FrozenModel):
-    """One floor: a name, and the geometry spec that fills it."""
-
-    name: str = Field(min_length=1)
-    facility: FacilitySpec
-
-
-class HospitalSpec(FrozenModel):
-    """A stack of floors and the elevators joining them.
-
-    ``floors[0]`` is the ground floor and the only one with entrances: ambulances and
-    walk-ins arrive at the emergency department, and everything above is reached through
-    the shafts.
-    """
-
-    floors: tuple[FloorSpec, ...] = Field(min_length=1)
-    elevator_shafts: int = Field(default=2, ge=1)
-    # Time for the car to move one floor, and the fixed cost of a boarding/exit cycle.
-    # `dwell` is charged once per shaft edge traversed, which is what makes a two-floor
-    # trip cheaper than two one-floor trips through a lobby.
-    seconds_per_floor: float = Field(default=12.0, gt=0.0, allow_inf_nan=False)
-    dwell_seconds: float = Field(default=20.0, ge=0.0, allow_inf_nan=False)
-
-    @model_validator(mode="after")
-    def _floor_names_are_unique(self) -> HospitalSpec:
-        names = [floor.name for floor in self.floors]
-        if len(names) != len(set(names)):
-            raise ValueError("hospital.floors have duplicate names")
-        return self
 
 
 def _prefix(floor: int) -> str:
@@ -291,4 +257,4 @@ def _assert_reachable(layout: FloorLayout) -> None:
             ) from exc
 
 
-__all__ = ["FloorSpec", "HospitalSpec", "generate_hospital"]
+__all__ = ["generate_hospital"]

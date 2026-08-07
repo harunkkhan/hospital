@@ -59,7 +59,7 @@ from hospital.core import (
     ZoneType,
     compile_rules,
 )
-from hospital.data.layout import generate_floor
+from hospital.data.hospital import generate_hospital
 from hospital.data.scenario import Scenario, realize_staff
 from hospital.data.workload import generate_workload
 from hospital.sim.experiment.disruptions import schedule_disruptions
@@ -275,7 +275,9 @@ def run_replication(
     """
     # 1-2: the single CRN source; randomness-free floor construction
     streams = RandomStreams(seed)
-    layout = generate_floor(scenario.facility)
+    # One code path for one floor or ten: `generate_hospital` over a scenario with no
+    # upper floors returns exactly what `generate_floor` does, ids included.
+    layout = generate_hospital(scenario.hospital())
     horizon = scenario.workload.horizon
 
     # 3-5: one clock, one log, resources, the one mutable World, physics wiring

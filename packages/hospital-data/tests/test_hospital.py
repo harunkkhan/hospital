@@ -12,9 +12,9 @@ from __future__ import annotations
 import pytest
 
 from hospital.core import ED_ZONE_TYPES, WARD_ZONE_TYPES, LayoutError, NodeId, ZoneType
-from hospital.data.hospital import FloorSpec, HospitalSpec, generate_hospital
+from hospital.data.hospital import generate_hospital
 from hospital.data.layout import generate_floor
-from hospital.data.scenario import FacilitySpec, ZoneQuota
+from hospital.data.scenario import FacilitySpec, FloorSpec, HospitalSpec, ZoneQuota
 
 
 def _ed() -> FacilitySpec:

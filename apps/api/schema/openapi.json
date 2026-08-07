@@ -797,6 +797,32 @@
         "title": "Duration",
         "type": "integer"
       },
+      "ElevatorSpec": {
+        "additionalProperties": false,
+        "description": "The shafts joining a scenario's floors. Ignored when there is only one.",
+        "properties": {
+          "dwell_seconds": {
+            "default": 20.0,
+            "minimum": 0.0,
+            "title": "Dwell Seconds",
+            "type": "number"
+          },
+          "seconds_per_floor": {
+            "default": 12.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Seconds Per Floor",
+            "type": "number"
+          },
+          "shafts": {
+            "default": 2,
+            "minimum": 1.0,
+            "title": "Shafts",
+            "type": "integer"
+          }
+        },
+        "title": "ElevatorSpec",
+        "type": "object"
+      },
       "EmergencyRaised": {
         "additionalProperties": false,
         "properties": {
@@ -1163,6 +1189,26 @@
           "lab_nodes"
         ],
         "title": "FloorLayout",
+        "type": "object"
+      },
+      "FloorSpec": {
+        "additionalProperties": false,
+        "description": "One floor: a name, and the geometry spec that fills it.",
+        "properties": {
+          "facility": {
+            "$ref": "#/components/schemas/FacilitySpec"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "facility"
+        ],
+        "title": "FloorSpec",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2182,6 +2228,14 @@
               "events": []
             }
           },
+          "elevators": {
+            "$ref": "#/components/schemas/ElevatorSpec",
+            "default": {
+              "dwell_seconds": 20.0,
+              "seconds_per_floor": 12.0,
+              "shafts": 2
+            }
+          },
           "facility": {
             "$ref": "#/components/schemas/FacilitySpec"
           },
@@ -2225,6 +2279,14 @@
           },
           "staffing": {
             "$ref": "#/components/schemas/StaffingSpec"
+          },
+          "upper_floors": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FloorSpec"
+            },
+            "title": "Upper Floors",
+            "type": "array"
           },
           "workload": {
             "$ref": "#/components/schemas/WorkloadSpec"

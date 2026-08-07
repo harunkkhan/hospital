@@ -53,6 +53,7 @@ from hospital.core import (
     TestOrdered,
     TestResulted,
 )
+from hospital.sim.flow.ward import admit_to_ward, has_ward_beds
 from hospital.sim.physics.executor import PriorityTier, TaskExecutor
 from hospital.sim.physics.service_times import (
     ServiceTimes,
@@ -180,8 +181,25 @@ def patient_process(
     world.request_decision()
 
     # 8 — terminal path
+    if disposition is DispositionKind.ADMIT and has_ward_beds(world):
+        # The building has somewhere to admit them, so boarding is a *consequence* of
+        # ward capacity rather than a draw: `admit_to_ward` holds this bay until a bed
+        # frees, escorts them to it, and runs the inpatient stay and discharge itself.
+        yield from admit_to_ward(
+            world,
+            executor,
+            event_log,
+            patient,
+            bay,
+            streams=streams,
+            service_times=service_times,
+            transport=_transport,
+            enqueue_cleaning=_enqueue_cleaning,
+        )
+        return
     if disposition is DispositionKind.ADMIT:
-        # boarding: hold the bay until the ward accepts, then leave the floor
+        # No ward on this floor plan: the M1 abstraction stands, and an ED-only run is
+        # byte-identical to every milestone before wards existed.
         yield executor.delay(sample_boarding_delay(streams, patient), PriorityTier.COMPLETION)
     else:
         yield from _bedside_service(
