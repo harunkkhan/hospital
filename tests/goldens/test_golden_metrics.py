@@ -15,17 +15,25 @@ The pins assert the HONEST M1 story, trade included:
 * The explicit, quantified trade: unweighted mean door-to-provider is
   significantly WORSE (negative diff), and so is ESI-3 mean LOS. These pins
   are deliberate — the golden asserts the real numbers, never a fake win.
+* ``deadline_breach_hours_total`` (added M4b+) states that same trade in the sharpest
+  available terms: the optimized arm breaches acuity care deadlines by **38 more
+  patient-hours a week**, significantly. It is the acuity-relative, extensive form of
+  the door-to-provider regression — an ESI-1 is due immediately and an ESI-5 in two
+  hours, so this weights the delay by who was waiting, which an unweighted mean cannot.
+  It is also now *priced*, so the trade shows up in money and not only in seconds.
 * Throughput is demand-limited at this operating point: completions flat (ns).
 
-Re-baselined once, at M4b, when ``KPI_KEYS`` grew from 27 to 30. Only the interval
-bounds moved: ``paired_bootstrap`` corrects across the whole KPI family, so three more
-keys means each is tested at ``alpha/30`` instead of ``alpha/27`` and every exploratory
-CI widens slightly. Every ``diff_mean`` is byte-identical — the runs, seeds, and CRN
-draws did not change, and measuring more things cannot move an estimate — and **no
-significance verdict flipped**. That the milestone survived is by construction rather
-than luck: ``weighted_objective_total`` is a pre-registered primary endpoint tested at
-the full alpha *outside* the multiplicity family (see ``analysis.compare``), which is
-exactly what lets the exploratory family grow without putting the G1 claim at risk.
+Re-baselined twice: at M4b, when ``KPI_KEYS`` grew 27 -> 30, and again when
+``deadline_breach_hours_total`` made it 31. Both times **only the interval bounds moved.**
+``paired_bootstrap`` corrects across the whole KPI family, so each extra key tightens the
+per-key alpha and widens every exploratory CI a little. Every ``diff_mean`` stayed
+byte-identical — the runs, seeds, and CRN draws did not change, and measuring more things
+cannot move an estimate — and **no significance verdict flipped** either time.
+
+That the milestone survived both is by construction rather than luck:
+``weighted_objective_total`` is a pre-registered primary endpoint tested at the full alpha
+*outside* the multiplicity family (see ``analysis.compare``), which is exactly what lets the
+exploratory family grow without putting the G1 claim at risk.
 """
 
 from __future__ import annotations
@@ -47,14 +55,14 @@ _EXPECTED_CONTRASTS: dict[str, dict[str, float | bool]] = {
     },
     "door_to_provider_s_mean": {
         "diff_mean": -175.3940930754121,
-        "ci_lo": -241.29276109288745,
-        "ci_hi": -113.41138486078536,
+        "ci_lo": -241.31364886167134,
+        "ci_hi": -113.35732724683747,
         "significant": True,
     },
     "staff_minutes_walked": {
         "diff_mean": 109.84885813000001,
-        "ci_lo": 64.28099293587515,
-        "ci_hi": 149.45663335284553,
+        "ci_lo": 64.24918887197596,
+        "ci_hi": 149.6187587377005,
         "significant": True,
     },
     "completions_per_week": {
@@ -63,34 +71,40 @@ _EXPECTED_CONTRASTS: dict[str, dict[str, float | bool]] = {
         "ci_hi": 1.7,
         "significant": False,
     },
+    "deadline_breach_hours_total": {
+        "diff_mean": -38.33453320263889,
+        "ci_lo": -61.691274358627545,
+        "ci_hi": -24.049869710752425,
+        "significant": True,
+    },
     "los_s_mean_by_esi_1": {
         "diff_mean": 848.553831845413,
-        "ci_lo": 416.8503219445996,
-        "ci_hi": 1409.8690259214611,
+        "ci_lo": 416.29985383525894,
+        "ci_hi": 1412.6054062426847,
         "significant": True,
     },
     "los_s_mean_by_esi_2": {
         "diff_mean": 826.3164328646739,
-        "ci_lo": 518.3023666114325,
-        "ci_hi": 1207.1921968466932,
+        "ci_lo": 518.1955895066719,
+        "ci_hi": 1207.2626389699285,
         "significant": True,
     },
     "los_s_mean_by_esi_3": {
         "diff_mean": -386.81699092937487,
-        "ci_lo": -564.2406099047945,
-        "ci_hi": -225.1550057469606,
+        "ci_lo": -564.3914300786852,
+        "ci_hi": -225.1071757991806,
         "significant": True,
     },
     "los_s_mean_by_esi_4": {
         "diff_mean": -128.6644707584579,
-        "ci_lo": -499.9060913698322,
-        "ci_hi": 415.43325919144195,
+        "ci_lo": -499.9273161109475,
+        "ci_hi": 415.5051593243789,
         "significant": False,
     },
     "los_s_mean_by_esi_5": {
         "diff_mean": -732.6016454713905,
-        "ci_lo": -2065.8584776486405,
-        "ci_hi": 593.3824787160917,
+        "ci_lo": -2069.4940888563424,
+        "ci_hi": 601.2090499654846,
         "significant": False,
     },
 }

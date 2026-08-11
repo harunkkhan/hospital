@@ -40,6 +40,18 @@ CARE_SLA_BY_ACUITY: dict[EsiAcuity, Duration] = {
 }
 
 
+def care_deadline_for(arrival: SimTime, esi: EsiAcuity) -> SimTime:
+    """When a patient arriving at ``arrival`` with acuity ``esi`` should have been seen.
+
+    The ONE place the deadline formula lives. :attr:`Patient.care_deadline` is this function
+    applied to its own fields; ``analysis`` calls it directly, because the KPI fold works
+    from an event-log index that has an arrival and an acuity but no ``Patient`` to ask.
+    Two callers, one formula — the alternative is ``arrival + SLA[esi]`` written twice and
+    a rate table that only half the codebase honours.
+    """
+    return arrival + CARE_SLA_BY_ACUITY[esi]
+
+
 class WorkupNeeds(FrozenModel):
     """The pre-sampled diagnostic/care workup for a patient."""
 
@@ -76,7 +88,7 @@ class Patient(FrozenModel):
         every other instant here is: a countdown would need a "now" to be meaningful and
         would therefore be a different number every time it was read.
         """
-        return self.arrival_time + CARE_SLA_BY_ACUITY[self.esi]
+        return care_deadline_for(self.arrival_time, self.esi)
 
 
 class Bay(FrozenModel):
@@ -184,4 +196,5 @@ __all__ = [
     "StaffMember",
     "WorkupNeeds",
     "Zone",
+    "care_deadline_for",
 ]

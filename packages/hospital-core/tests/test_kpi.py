@@ -12,9 +12,9 @@ from hospital.core import EXTENSIVE_KEYS, KPI_KEYS, KpiContractError, KpiVector
 from hospital.core.kpi import PROPORTION_KEYS
 
 
-def test_kpi_keys_are_the_30_unique_closed_set() -> None:
-    assert len(KPI_KEYS) == 30
-    assert len(set(KPI_KEYS)) == 30
+def test_kpi_keys_are_the_31_unique_closed_set() -> None:
+    assert len(KPI_KEYS) == 31
+    assert len(set(KPI_KEYS)) == 31
     # Spot-check representative keys, including per-ESI strata.
     for key in ("completions_per_week", "los_s_mean_by_esi_1", "los_s_p90_by_esi_5"):
         assert key in KPI_KEYS

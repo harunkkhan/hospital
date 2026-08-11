@@ -29,12 +29,12 @@ naive one.
 
 One evaluation week, both arms shift-aware under CRN, folded through the M1 analysis path::
 
-    safety   paid-h   door-to-provider   completions
-    flat       4608        403 s              913
-    1.0        1456        617 s              912
-    1.5        2040        445 s              914
-    2.0        2576        406 s              912
-    2.5        3144        395 s              914
+    safety   paid-h   door-to-provider   breach-h   completions
+    flat       4608        403 s               6           913
+    1.0        1456        617 s              19           912
+    1.5        2040        445 s               -           914
+    2.0        2576        406 s               6           912
+    2.5        3144        395 s               -           914
 
 Three readings, and the third is a criticism of this repository rather than a result.
 
@@ -61,14 +61,27 @@ It is also, still, as much a statement about the committed scenario being over-s
 about the lever, and *not* evidence that a solved roster is 31% better on a floor that is
 genuinely staff-constrained.
 
-**The cost model would advise under-staffing, and that is a real gap.** Priced with
-``analysis.cost``, the *cheapest* arm in the table is ``safety=1.0`` — the one with 53%
-worse door-to-provider — because the weekly P&L prices staff hours and bed hours but has no
-term for a patient waiting. Boarding is the only delay it charges for. Reading the money
-column alone therefore points the wrong way, which is exactly why this file asserts service
-alongside cost and why ``care_deadline`` exists as a measurement reference that no lever
-prices. Closing it would mean pricing acuity-weighted waiting, which is a KPI-contract
-change and a deliberate one, not something to slip in here.
+**The cheapest arm is the thinnest, and — measured — that is defensible rather than a
+modelling error.** An earlier version of this file called it "a real gap: the cost model
+would advise under-staffing". Pricing delay was then added to ``analysis.cost``
+(``deadline_breach_hours_total``, the acuity-relative hours waited past ``care_deadline``)
+and it did **not** overturn the ordering. The numbers say why:
+
+* Breach is 6 h/week for the flat roster and 19 h for ``safety=1.0``. Sensitive in the right
+  direction, but small.
+* The thin roster's cost advantage over the evaluated one is ~$61.5k against 13 extra breach
+  hours, so flipping the ordering would need roughly **$4,700 per breach-hour**. No
+  defensible rate does that.
+* The reason is the SLA ladder: a 10.3-minute mean door-to-provider breaches ESI-1 (due
+  immediately) and marginally ESI-2 (10 min), and is comfortably inside ESI-3/4/5 (30/60/120
+  min) — which is 87% of arrivals. The thin roster is slower *and still compliant for almost
+  everyone.*
+
+So "403 s → 617 s" is not self-evidently a service failure, and the original framing
+overstated it. What pricing delay buys is that the ESI-1/2 cost is now visible and charged
+instead of invisible, and that on a floor whose waits approach the targets the term would
+dominate rather than round to nothing. The honest conclusion is that at *this* operating
+point the model is not misadvising — the floor is over-staffed, exactly as reading 1 says.
 """
 
 from __future__ import annotations
@@ -129,6 +142,10 @@ _RATES = CostRates(
     bay_hour_cents=1_000,
     boarding_hour_cents=5_000,
     wip_carry_cents=20_000,
+    # An hour of a patient waiting past their acuity's deadline, priced at half a
+    # staff-hour. Ordinal like the rest of these: enough that delay is not free, not a
+    # researched valuation of anyone's time.
+    deadline_breach_hour_cents=3_000,
     completion_revenue_cents=100_000,
 )
 
@@ -266,6 +283,7 @@ class _Outcome:
     door_to_provider_s: float
     completions: float
     cost_cents: int
+    breach_hours: float
 
 
 def _run(spec: StaffingSpec) -> _Outcome:
@@ -282,6 +300,7 @@ def _run(spec: StaffingSpec) -> _Outcome:
         door_to_provider_s=values["door_to_provider_s_mean"],
         completions=values["completions_per_week"],
         cost_cents=WeeklyCost(rates=_RATES).price(arm.kpis).root,
+        breach_hours=values["deadline_breach_hours_total"],
     )
 
 
@@ -444,20 +463,36 @@ def test_the_mean_load_roster_is_measurably_too_thin() -> None:
     )
 
 
-def test_pricing_alone_would_advise_under_staffing() -> None:
-    """A named gap in ``analysis.cost``, pinned so it cannot be forgotten.
+def test_pricing_delay_does_not_overturn_the_thin_roster_and_that_is_measured() -> None:
+    """Corrects an earlier conclusion of this file, and pins the correction.
 
-    The weekly P&L prices staff hours and bed hours but has no term for a patient waiting —
-    boarding is the only delay it charges for. So the *cheapest* roster in the sweep is the
-    one with the worst door-to-provider, and anyone optimizing the money column alone would
-    under-staff on purpose. Closing it means pricing acuity-weighted waiting, which is a
-    versioned KPI-contract change; until then this test is the guard rail that keeps the
-    limitation visible.
+    ``analysis.cost`` now charges for acuity-relative delay, so "the P&L ignores patient
+    waiting" is no longer the explanation for the thin roster winning. It still wins, and the
+    reason is quantitative rather than a missing term: the delay it causes is small against
+    the labour it saves, because a ten-minute mean door-to-provider sits inside the
+    thirty-, sixty-, and hundred-twenty-minute deadlines that 87% of arrivals carry.
+
+    What is asserted is therefore the *sensitivity*, not a flip: breach must rise when the
+    roster thins (or the term is inert and pricing it bought nothing), while the cost
+    ordering is allowed to stand. A future floor whose waits approach the targets would flip
+    it without any change here.
     """
     flat, solved = _outcomes()
     thin = _thin_outcome()
     assert thin.cost_cents < solved.cost_cents < flat.cost_cents
     assert thin.door_to_provider_s > solved.door_to_provider_s
+    # The term is live and directional: thinning the roster costs deadline hours.
+    assert thin.breach_hours > solved.breach_hours, (
+        "pricing delay changed nothing measurable — the term is inert at this operating point"
+    )
+    # And it is small: no defensible rate per breach-hour would reverse the ordering.
+    cost_gap = solved.cost_cents - thin.cost_cents
+    breach_gap = thin.breach_hours - solved.breach_hours
+    flip_rate_cents = cost_gap / breach_gap
+    assert flip_rate_cents > 100_000, (
+        f"the ordering is now within reach of a plausible breach rate "
+        f"(${flip_rate_cents / 100:,.0f}/h) — re-read the module docstring's arithmetic"
+    )
 
 
 def test_the_loop_is_deterministic() -> None:

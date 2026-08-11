@@ -17,6 +17,7 @@ from hospital.core.entities import (
     StaffMember,
     WorkupNeeds,
     Zone,
+    care_deadline_for,
 )
 from hospital.core.enums import (
     ED_ZONE_TYPES,
@@ -244,6 +245,7 @@ __all__ = [
     "Zone",
     "ZoneId",
     "ZoneType",
+    "care_deadline_for",
     "compile_rules",
     "hours",
     "minutes",

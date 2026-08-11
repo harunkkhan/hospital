@@ -9,7 +9,7 @@ possible, and adding them was the versioned KPI change ``core.cost`` predicted i
 
 The model is a weekly operating P&L, lower is better::
 
-    total = labour + capacity + boarding penalty + carried backlog - revenue
+    total = labour + capacity + boarding + waiting + carried backlog - revenue
 
 Four deliberate choices, each of which could reasonably have gone the other way:
 
@@ -27,6 +27,14 @@ Four deliberate choices, each of which could reasonably have gone the other way:
   already paid for under ``bay_hours_occupied``; ``boarding_hour_cents`` prices the
   crowding their holding an ED bay imposes on everyone else. Counting it twice would be
   wrong; counting it not at all would make the whole M4 mechanism free.
+* **Waiting is priced, because not pricing it inverted the model's advice.** With labour and
+  beds on the books and patient delay absent, the cheapest roster is always the thinnest
+  one — measured, in the staffing loop, as a 53% worse door-to-provider being *rewarded*.
+  ``deadline_breach_hours_total`` is the term that closes it, and it is the right one to
+  price because the deadline is already acuity-relative: an hour of an ESI-1 waiting
+  breaches where an hour of an ESI-5 does not. Boarding stays separate — that is delay
+  *after* a disposition, in a bed, and double-counting it as breach would charge one wait
+  twice.
 * **Revenue is subtracted, not maximized separately.** A single scalar is what makes
   cost rankable against the objective; a two-vector "cost and revenue" answer would need
   a rate to trade them, which is the thing we would be pretending not to choose.
@@ -85,6 +93,9 @@ class WeeklyCost:
                 "labour": round(_finite(kpis, "staff_hours_paid") * r.staff_hour_cents),
                 "capacity": round(_finite(kpis, "bay_hours_occupied") * r.bay_hour_cents),
                 "boarding": round(_finite(kpis, "boarding_hours_total") * r.boarding_hour_cents),
+                "waiting": round(
+                    _finite(kpis, "deadline_breach_hours_total") * r.deadline_breach_hour_cents
+                ),
                 "backlog": round(_finite(kpis, "wip_end_of_week") * r.wip_carry_cents),
                 "revenue": -round(
                     _finite(kpis, "completions_per_week") * r.completion_revenue_cents

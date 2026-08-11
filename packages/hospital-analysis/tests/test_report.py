@@ -160,6 +160,7 @@ def test_cost_headline_only_when_rates_are_supplied() -> None:
         boarding_hour_cents=5_000,
         wip_carry_cents=20_000,
         completion_revenue_cents=100_000,
+        deadline_breach_hour_cents=3_000,
     )
     priced = build_metrics("s", 1, arm, arm, comparison, cost=WeeklyCost(rates=rates))
     assert priced_keys <= set(priced.headline)

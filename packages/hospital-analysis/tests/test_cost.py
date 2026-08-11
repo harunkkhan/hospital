@@ -19,6 +19,7 @@ RATES = CostRates(
     boarding_hour_cents=5_000,
     wip_carry_cents=20_000,
     completion_revenue_cents=100_000,
+    deadline_breach_hour_cents=3_000,
 )
 
 
@@ -27,6 +28,7 @@ def _kpis(**overrides: float) -> KpiVector:
         staff_hours_paid=1_000.0,
         bay_hours_occupied=500.0,
         boarding_hours_total=100.0,
+        deadline_breach_hours_total=100.0,
         wip_end_of_week=10.0,
         completions_per_week=800.0,
         staff_minutes_walked=6_000.0,
@@ -50,10 +52,11 @@ def test_the_total_is_exactly_the_sum_of_its_terms() -> None:
         "labour": 6_000_000,  # 1000 h x $60
         "capacity": 500_000,  # 500 bed-h x $10
         "boarding": 500_000,  # 100 boarded-h x $50
+        "waiting": 300_000,  # 100 breach-h x $30
         "backlog": 200_000,  # 10 carried x $200
         "revenue": -80_000_000,  # 800 completions x $1000, earned
     }
-    assert model.price(kpis).root == -72_800_000
+    assert model.price(kpis).root == -72_500_000
 
 
 def test_walking_is_priced_inside_labour_and_not_added_twice() -> None:
@@ -111,6 +114,7 @@ def test_zero_rates_price_a_week_at_nothing() -> None:
         boarding_hour_cents=0,
         wip_carry_cents=0,
         completion_revenue_cents=0,
+        deadline_breach_hour_cents=0,
     )
     assert WeeklyCost(rates=free).price(_kpis()).root == 0
 
@@ -126,4 +130,47 @@ def test_rates_must_be_stated_and_non_negative() -> None:
             boarding_hour_cents=0,
             wip_carry_cents=0,
             completion_revenue_cents=0,
+            deadline_breach_hour_cents=0,
         )
+
+
+def test_waiting_past_the_care_deadline_costs_money() -> None:
+    """The term that exists because its absence inverted the model's advice.
+
+    Without it, a roster could always be made cheaper by making patients wait — measured in
+    the staffing loop as a 53% worse door-to-provider being *rewarded* with a lower total.
+    """
+    model = WeeklyCost(rates=RATES)
+    prompt = model.price(_kpis(deadline_breach_hours_total=10.0)).root
+    slow = model.price(_kpis(deadline_breach_hours_total=500.0)).root
+    assert slow > prompt
+    assert slow - prompt == (500 - 10) * RATES.deadline_breach_hour_cents
+
+
+def test_pricing_delay_can_outweigh_the_labour_it_saves() -> None:
+    """The whole point: a thinner roster must be able to lose on total cost.
+
+    Two hypothetical weeks — one paying 500 more staff-hours, one letting patients breach
+    their deadlines for 2000 more hours. With delay priced, the cheap-labour week is the
+    dearer one, which is the incentive the model was missing.
+    """
+    model = WeeklyCost(rates=RATES)
+    generous = model.price(_kpis(staff_hours_paid=1_500.0, deadline_breach_hours_total=50.0))
+    thin = model.price(_kpis(staff_hours_paid=1_000.0, deadline_breach_hours_total=2_050.0))
+    assert thin.root > generous.root
+
+
+def test_boarding_and_breach_are_not_the_same_wait_charged_twice() -> None:
+    """Breach is delay *before* a provider; boarding is delay after a disposition, in a bed.
+
+    They are disjoint stretches of a stay, so each moves the total on its own — a model that
+    conflated them would charge one wait twice.
+    """
+    model = WeeklyCost(rates=RATES)
+    base = model.price(_kpis()).root
+    more_breach = model.price(_kpis(deadline_breach_hours_total=200.0)).root
+    more_boarding = model.price(_kpis(boarding_hours_total=200.0)).root
+    assert more_breach != base
+    assert more_boarding != base
+    assert more_breach - base == 100 * RATES.deadline_breach_hour_cents
+    assert more_boarding - base == 100 * RATES.boarding_hour_cents

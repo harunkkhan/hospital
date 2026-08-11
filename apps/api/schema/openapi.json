@@ -570,6 +570,11 @@
             "title": "Completion Revenue Cents",
             "type": "integer"
           },
+          "deadline_breach_hour_cents": {
+            "minimum": 0.0,
+            "title": "Deadline Breach Hour Cents",
+            "type": "integer"
+          },
           "staff_hour_cents": {
             "minimum": 0.0,
             "title": "Staff Hour Cents",
@@ -586,7 +591,8 @@
           "bay_hour_cents",
           "boarding_hour_cents",
           "wip_carry_cents",
-          "completion_revenue_cents"
+          "completion_revenue_cents",
+          "deadline_breach_hour_cents"
         ],
         "title": "CostRates",
         "type": "object"
