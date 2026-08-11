@@ -30,6 +30,7 @@ from hospital.analysis.utilization import (
 from hospital.analysis.waits import StageAggregate, WaitDecomposition, decompose_waits
 from hospital.core import (
     KPI_KEYS,
+    CostModel,
     Duration,
     EsiAcuity,
     EventLog,
@@ -209,7 +210,12 @@ def _avg_utilization(reports: Sequence[UtilizationReport]) -> UtilizationReport:
         for name in role_names
     }
     return UtilizationReport(
-        per_staff=tuple(per_staff), fractions=fractions, util_by_role=util_by_role
+        per_staff=tuple(per_staff),
+        fractions=fractions,
+        util_by_role=util_by_role,
+        # Averaged like every other field rather than left to its 0.0 default, which
+        # would report a rep-averaged arm as having paid nobody.
+        on_shift_s=_nanmean([r.on_shift_s for r in reports]),
     )
 
 
@@ -302,8 +308,13 @@ def build_metrics(
     acuity_weights: Mapping[EsiAcuity, float] | None = None,
     horizon_s: float = _DEFAULT_HORIZON_S,
     warmup_s: float = _DEFAULT_WARMUP_S,
+    cost: CostModel | None = None,
 ) -> Metrics:
     """Pair the two arms with the ``ComparisonResult`` and compute the headline.
+
+    ``cost`` is optional and off by default: a scenario states dollar rates or it
+    reports time only, and every scenario committed so far reports time only. Passing
+    one adds the priced headline entries and changes nothing else.
 
     ``horizon_s``/``warmup_s`` default to the reference one-week/24h scenario;
     doc 05 §3's ``build_metrics`` signature has no ``window``/``warmup``
@@ -338,6 +349,21 @@ def build_metrics(
     weighted = comparison.contrasts.get(WEIGHTED_OBJECTIVE_KEY)
     if weighted is not None:
         headline["weighted_objective_total_saved"] = weighted.diff_mean
+
+    # The money layer (M4b), and only when a scenario states its rates. Reported as
+    # both arms' totals plus the saving, because a saving alone hides its own scale:
+    # "$40k cheaper" reads very differently against a $200k week and a $4M one.
+    #
+    # `weekly_cost_saved_cents` is a point estimate, deliberately NOT a contrast with a
+    # confidence interval. Cost here is a pure function of KPIs that are already in the
+    # multiplicity family, so testing it as a 31st key would be testing the same
+    # evidence twice under a correction that assumes it is new.
+    if cost is not None:
+        b_cost = cost.price(baseline.kpis).root
+        o_cost = cost.price(optimized.kpis).root
+        headline["weekly_cost_cents_baseline"] = float(b_cost)
+        headline["weekly_cost_cents_optimized"] = float(o_cost)
+        headline["weekly_cost_saved_cents"] = float(b_cost - o_cost)
 
     if acuity_weights is not None:
         total = 0.0

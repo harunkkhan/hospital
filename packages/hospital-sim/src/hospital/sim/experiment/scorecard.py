@@ -42,7 +42,7 @@ from hospital.core import (
     TriageCompleted,
     hours,
 )
-from hospital.data.layout import generate_floor
+from hospital.data.hospital import generate_hospital
 from hospital.data.scenario import realize_staff
 from hospital.solver import ObjectiveConfig, SolverStatus, weighted_total
 
@@ -117,7 +117,12 @@ def fold_scorecard(
 ) -> Scorecard:
     """Fold the persisted bytes: re-parse the JSONL, one KPI fold, one scalar."""
     log = EventLog.from_jsonl(rep.event_log_jsonl)
-    layout = generate_floor(rep.scenario.facility)
+    # The WHOLE building, exactly as `run_replication` built it. `generate_floor` here
+    # was correct until floors existed and silently wrong after: it omits every ward
+    # bay, so half a hospital's occupied bed-hours vanish from the fold while the log
+    # still reports them. For an ED-only scenario `generate_hospital` returns precisely
+    # what `generate_floor` returns, ids included, so nothing before M4 moves.
+    layout = generate_hospital(rep.scenario.hospital())
     window = TimeWindow(start=rep.horizon.start, end=rep.horizon.end)
     roster = realize_staff(rep.scenario.staffing, layout, window)
     effective_warmup = warmup if warmup is not None else _default_warmup(rep.horizon)

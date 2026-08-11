@@ -24,6 +24,7 @@ import yaml
 from pydantic import Field, field_serializer, field_validator, model_validator
 
 from hospital.core import (
+    CostRates,
     Duration,
     EsiAcuity,
     FloorLayout,
@@ -260,12 +261,12 @@ class DisruptionSpec(FrozenModel):
     events: tuple[DisruptionEvent, ...] = ()
 
 
-class CostSpec(FrozenModel):
-    """DEFERRED — mirrors ``core.cost``. No dollar rates in M1.
-
-    Empty now, but ``extra="forbid"`` (inherited from ``FrozenModel``) means a
-    future stray cost key is validated the day it is added, not silently accepted.
-    """
+# The rate vocabulary is ``core.CostRates``, not a spec type mirroring it here (M4b).
+# Same reasoning as ``rules: tuple[Rule, ...]``: the frozen value lives in the lowest
+# package that needs it and the scenario simply holds one, so there is no second
+# definition to drift. The M1 placeholder ``CostSpec`` was empty precisely so that
+# whatever landed later could be the real thing rather than a translation of it.
+CostSpec = CostRates
 
 
 class Scenario(FrozenModel):
@@ -278,7 +279,10 @@ class Scenario(FrozenModel):
     staffing: StaffingSpec
     disruptions: DisruptionSpec = DisruptionSpec()
     rules: tuple[Rule, ...] = ()
-    cost: CostSpec | None = None
+    # Dollar rates, or None to report time only — which every committed scenario does.
+    # `core.CostRates` has no default rates on purpose (see its module docstring): what
+    # an hour of nursing costs is a fact about a hospital, not about a simulator.
+    cost: CostRates | None = None
     # The floors above the emergency department. Empty is the ED-only hospital every
     # scenario described before M4 — `facility` is the ground floor either way, so the
     # building is never stated twice.

@@ -31,9 +31,10 @@ from typing import Literal, cast
 
 from hospital.analysis import ArmSummary, fold_arm, write_metrics
 from hospital.analysis.compare import WEIGHTED_OBJECTIVE_KEY, ComparisonResult
+from hospital.analysis.cost import WeeklyCost
 from hospital.analysis.report import Metrics, build_metrics
 from hospital.core import KPI_KEYS, Duration, EventLog, TimeWindow, hours
-from hospital.data.layout import generate_floor
+from hospital.data.hospital import generate_hospital
 from hospital.data.scenario import Scenario, load_scenario, realize_staff
 from hospital.sim import Replication, run_replication
 from hospital.sim.experiment.comparison import compare_replications
@@ -84,7 +85,12 @@ def _run_arm(
 
 
 def _summarize(scenario: Scenario, reps: list[Replication], warmup: Duration) -> ArmSummary:
-    layout = generate_floor(scenario.facility)
+    # The WHOLE building, exactly as `run_replication` built it. `generate_floor` here
+    # was correct until floors existed and silently wrong after: it omits every ward
+    # bay, so half a hospital's occupied bed-hours vanish from the fold while the log
+    # still reports them. For an ED-only scenario `generate_hospital` returns precisely
+    # what `generate_floor` returns, ids included, so nothing before M4 moves.
+    layout = generate_hospital(scenario.hospital())
     horizon = scenario.workload.horizon
     roster = realize_staff(
         scenario.staffing,
@@ -174,6 +180,9 @@ def run_command(args: argparse.Namespace) -> int:
             horizon_s=(scenario.workload.horizon.end.root - scenario.workload.horizon.start.root)
             / 1_000_000,
             warmup_s=warmup.root / 1_000_000,
+            # Priced only if the scenario says what things cost (M4b). `cost: null` —
+            # which is every scenario committed so far — reports time, exactly as before.
+            cost=WeeklyCost(rates=scenario.cost) if scenario.cost is not None else None,
         )
         write_metrics(metrics, out)
         print(f"\nwrote {out}\n")

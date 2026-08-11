@@ -8,7 +8,7 @@ contract legible and the import-linter contracts meaningful.
 
 from __future__ import annotations
 
-from hospital.core.cost import CostModel, Money
+from hospital.core.cost import CostModel, CostRates, Money
 from hospital.core.entities import (
     Bay,
     FloorLayout,
@@ -78,7 +78,7 @@ from hospital.core.ids import (
     TypedId,
     ZoneId,
 )
-from hospital.core.kpi import KPI_KEYS, STAFF_FRAC_KEYS, KpiVector
+from hospital.core.kpi import EXTENSIVE_KEYS, KPI_KEYS, STAFF_FRAC_KEYS, KpiVector
 from hospital.core.models import FrozenModel
 from hospital.core.rng import (
     RandomStreams,
@@ -138,6 +138,7 @@ from hospital.core.vitals import (
 __all__ = [
     "AWAITING_ADMISSION",
     "ED_ZONE_TYPES",
+    "EXTENSIVE_KEYS",
     "KPI_KEYS",
     "MICROS_PER_SEC",
     "NEWS2_PARAMETERS",
@@ -160,6 +161,7 @@ __all__ = [
     "CompatibilityRule",
     "CompiledRules",
     "CostModel",
+    "CostRates",
     "DecisionInput",
     "DecisionResponse",
     "DeteriorationDetected",

@@ -6,6 +6,7 @@ import math
 
 from _analysis_fixtures import build_sample_log, t, tiny_layout, tiny_roster
 
+from hospital.analysis._stats import DEFAULT_WINDOW, measurement_window
 from hospital.analysis.fold import compute_kpis
 from hospital.core import (
     KPI_KEYS,
@@ -25,7 +26,7 @@ def test_emits_exactly_kpi_keys() -> None:
     roster = tiny_roster()
     vec = compute_kpis(log, layout, roster, warmup=hours(0))
     assert set(vec.values.keys()) == set(KPI_KEYS)
-    assert len(vec.values) == 27
+    assert len(vec.values) == 30
 
 
 def test_hand_computed_values_match() -> None:
@@ -130,3 +131,43 @@ def test_empty_log_all_nan_or_zero_without_raising() -> None:
     assert v["bay_utilization"] == 0.0
     frac_total = math.fsum(v[k] for k in KPI_KEYS if k.startswith("staff_frac_"))
     assert math.isclose(frac_total, 1.0, abs_tol=1e-9)
+
+
+def test_the_extensive_keys_are_the_totals_their_ratios_are_ratios_of() -> None:
+    """Each new key must be the numerator or denominator of an existing intensive one.
+
+    That is the whole justification for adding them: not new measurements, but the
+    scale the fractions and means were already computed against and then divided away.
+    If they drift apart, the cost model is pricing a different week than the KPI
+    report describes.
+    """
+    log = build_sample_log()
+    layout, roster = tiny_layout(), tiny_roster()
+    vec = compute_kpis(log, layout, roster, warmup=hours(0))
+    v = vec.values
+
+    # staff_hours_paid is the denominator of every staff_frac_*.
+    walked_h = v["staff_minutes_walked"] / 60.0
+    assert v["staff_hours_paid"] > 0
+    assert math.isclose(v["staff_frac_walk"], walked_h / v["staff_hours_paid"], rel_tol=1e-9)
+
+    # bay_hours_occupied is the numerator of bay_utilization.
+    window_h = measurement_window(DEFAULT_WINDOW, hours(0)).duration().to_seconds() / 3600.0
+    assert math.isclose(
+        v["bay_utilization"],
+        v["bay_hours_occupied"] / (len(layout.bays) * window_h),
+        rel_tol=1e-9,
+    )
+
+
+def test_boarding_hours_total_counts_a_patient_who_never_reached_a_bed() -> None:
+    """The censored total must see a wait the conditioned mean throws away.
+
+    This is the failure mode the key exists for: with ward capacity finite, the patients
+    who never get a bed are the longest waits, and dropping them makes a gridlocked week
+    report a *calmer* mean than a roomy one. The sample log admits a patient who never
+    exits, so the mean is NaN while the total is a real positive number of hours.
+    """
+    vec = compute_kpis(build_sample_log(), tiny_layout(), tiny_roster(), warmup=hours(0))
+    assert math.isnan(vec.values["boarding_time_s_mean"])
+    assert vec.values["boarding_hours_total"] >= 0.0

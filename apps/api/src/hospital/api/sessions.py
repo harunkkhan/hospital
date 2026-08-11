@@ -47,7 +47,7 @@ from hospital.core import (
     TimeWindow,
     compile_rules,
 )
-from hospital.data.layout import generate_floor
+from hospital.data.hospital import generate_hospital
 from hospital.data.scenario import Scenario, realize_staff
 from hospital.data.workload import generate_workload
 from hospital.sim.experiment.disruptions import schedule_disruptions
@@ -193,7 +193,9 @@ class RunSession:
         # headless run_replication composition root (steps 1-11) — minus the
         # terminal `env.run(until=end)`, which the driver replaces. ---
         self.streams = RandomStreams(seed)
-        self.layout = generate_floor(scenario.facility)
+        # The whole building (see scorecard.fold_scorecard) — a session must render
+        # and route over the same floors the engine is simulating.
+        self.layout = generate_hospital(scenario.hospital())
         self.env = simpy.Environment()
         self.log = TappedEventLog()
         window = TimeWindow(start=self.horizon.start, end=self.horizon.end)

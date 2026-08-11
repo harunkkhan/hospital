@@ -551,11 +551,44 @@
         "title": "ControlCommand",
         "type": "object"
       },
-      "CostSpec": {
+      "CostRates": {
         "additionalProperties": false,
-        "description": "DEFERRED \u2014 mirrors ``core.cost``. No dollar rates in M1.\n\nEmpty now, but ``extra=\"forbid\"`` (inherited from ``FrozenModel``) means a\nfuture stray cost key is validated the day it is added, not silently accepted.",
-        "properties": {},
-        "title": "CostSpec",
+        "description": "What a hospital pays, per unit of the thing the KPI fold measures.\n\nAll in integer minor units (cents), all required \u2014 see the module docstring on why\nthere are no defaults. Each rate names the ``KPI_KEYS`` entry it multiplies, so the\ncontract between the fold and the price is legible in one place and a KPI that is\nrenamed cannot leave a rate quietly multiplying nothing.",
+        "properties": {
+          "bay_hour_cents": {
+            "minimum": 0.0,
+            "title": "Bay Hour Cents",
+            "type": "integer"
+          },
+          "boarding_hour_cents": {
+            "minimum": 0.0,
+            "title": "Boarding Hour Cents",
+            "type": "integer"
+          },
+          "completion_revenue_cents": {
+            "minimum": 0.0,
+            "title": "Completion Revenue Cents",
+            "type": "integer"
+          },
+          "staff_hour_cents": {
+            "minimum": 0.0,
+            "title": "Staff Hour Cents",
+            "type": "integer"
+          },
+          "wip_carry_cents": {
+            "minimum": 0.0,
+            "title": "Wip Carry Cents",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "staff_hour_cents",
+          "bay_hour_cents",
+          "boarding_hour_cents",
+          "wip_carry_cents",
+          "completion_revenue_cents"
+        ],
+        "title": "CostRates",
         "type": "object"
       },
       "DeteriorationDetected": {
@@ -2248,7 +2281,7 @@
           "cost": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/CostSpec"
+                "$ref": "#/components/schemas/CostRates"
               },
               {
                 "type": "null"

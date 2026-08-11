@@ -14,18 +14,32 @@ from typing import Any
 
 from _sim_fixtures import tiny_scenario
 
+from hospital.analysis import fold_arm
 from hospital.core import (
     WARD_ZONE_TYPES,
     BayStatus,
+    EventLog,
+    FloorLayout,
     RandomStreams,
+    TimeWindow,
     ZoneType,
     compile_rules,
+    hours,
 )
 from hospital.data.hospital import generate_hospital
-from hospital.data.scenario import FacilitySpec, FloorSpec, Scenario, ZoneQuota, load_scenario
+from hospital.data.layout import generate_floor
+from hospital.data.scenario import (
+    FacilitySpec,
+    FloorSpec,
+    Scenario,
+    ZoneQuota,
+    load_scenario,
+    realize_staff,
+)
 from hospital.data.workload import generate_workload
 from hospital.sim import run_replication
-from hospital.sim.experiment.replication import default_rules
+from hospital.sim.experiment.replication import DEFAULT_OBJECTIVE, default_rules
+from hospital.sim.experiment.scorecard import fold_scorecard
 from hospital.sim.flow.ward import has_ward_beds, ward_beds
 from hospital.sim.physics.service_times import admit_probability, mean_ward_stay
 from hospital.sim.policies.factory import Arm
@@ -410,3 +424,42 @@ def test_the_committed_hospital_is_tight_but_not_gridlocked() -> None:
     horizon_days = scenario.workload.horizon.end.root / 1e6 / 86_400.0
     needed = bed_days / horizon_days
     assert 0.7 <= beds / needed <= 0.9, f"{beds} beds against {needed:.0f} for full occupancy"
+
+
+def test_the_scorecard_folds_against_the_whole_building() -> None:
+    """Analysis must see the floors the engine ran, or it reports half a hospital.
+
+    `run_replication` builds the building with `generate_hospital`; through M4 §2 the
+    scorecard, the CLI's arm summary, and the API session still built the ground floor
+    with `generate_floor`. On an ED-only scenario the two are identical, so the mismatch
+    was invisible — and on a hospital it silently drops every ward bay from the index,
+    so the occupied bed-hours the log reports simply do not reach the KPI. It does not
+    raise and it does not look wrong, which is why a test rather than a type had to
+    catch it — and it matters more now than it reads, because `bay_hours_occupied` is
+    what the cost model prices capacity from.
+
+    Asserted by folding the SAME log both ways: the ED-only layout must under-report.
+    """
+    scenario = _with_wards(beds=8)
+    rep = run_replication(scenario, "baseline", _SEED)
+    horizon = scenario.workload.horizon
+    log = EventLog.from_jsonl(rep.event_log_jsonl)
+    warmup = hours(1)
+
+    whole = generate_hospital(scenario.hospital())
+    ed_only = generate_floor(scenario.facility)
+    assert len(whole.bays) > len(ed_only.bays), "the fixture has no upstairs to lose"
+
+    def occupied_hours(layout: FloorLayout) -> float:
+        roster = realize_staff(
+            scenario.staffing, layout, TimeWindow(start=horizon.start, end=horizon.end)
+        )
+        arm = fold_arm([log], layout, roster, window=horizon, warmup=warmup)
+        return arm.kpis.values["bay_hours_occupied"]
+
+    assert occupied_hours(ed_only) < occupied_hours(whole)
+
+    # And the scorecard — the path the CLI and the comparison actually use — is on the
+    # right side of that inequality.
+    folded = fold_scorecard(rep, DEFAULT_OBJECTIVE).kpis.values["bay_hours_occupied"]
+    assert folded > occupied_hours(ed_only)
