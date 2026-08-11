@@ -6,10 +6,26 @@ from pathlib import Path
 
 import pytest
 
-from hospital.core import WARD_ZONE_TYPES, LayoutError, RandomStreams, RouteGraph
+from hospital.core import (
+    WARD_ZONE_TYPES,
+    LayoutError,
+    RandomStreams,
+    RouteGraph,
+    SimTime,
+    StaffRole,
+    TimeWindow,
+    hours,
+)
 from hospital.data.hospital import generate_hospital
 from hospital.data.layout import generate_floor
-from hospital.data.scenario import dump_scenario, load_arm, load_scenario
+from hospital.data.scenario import (
+    ShiftBlock,
+    StaffingSpec,
+    dump_scenario,
+    load_arm,
+    load_scenario,
+    realize_staff,
+)
 from hospital.data.workload import generate_workload
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -144,3 +160,87 @@ def test_hospital_yaml_builds_one_connected_building_reachable_by_elevator() -> 
     )
     with pytest.raises(LayoutError):
         severed.dijkstra(entrance, ward_bays[-1].node)
+
+
+def test_shift_aware_is_opt_in_and_the_default_is_the_old_behaviour() -> None:
+    """Same people either way; only their schedules differ.
+
+    Ids are deliberately unchanged by the mode, so flipping the flag does not renumber
+    anyone — and with the flag off nobody carries a schedule at all, which is what keeps
+    every scenario and golden written before shift-awareness byte-identical.
+    """
+    scenario = load_scenario(_SCENARIOS / "er_floor.yaml")
+    assert scenario.staffing.shift_aware is False
+    layout = generate_hospital(scenario.hospital())
+    horizon = scenario.workload.horizon
+    window = TimeWindow(start=horizon.start, end=horizon.end)
+
+    flat = realize_staff(scenario.staffing, layout, window)
+    aware = realize_staff(
+        scenario.staffing.model_copy(update={"shift_aware": True}), layout, window
+    )
+    assert [m.id.root for m in flat] == [m.id.root for m in aware]
+    assert all(not m.shifts for m in flat)
+    assert all(m.shifts for m in aware)
+
+
+def test_the_reference_ed_declares_no_night_cover_which_is_why_it_is_opt_in() -> None:
+    """The finding that made this a mode rather than a fix.
+
+    The committed reference scenario schedules 07:00-19:00 blocks only, leaving 84 of the
+    week's 168 hours in no block at all. Collapsed, that runs day headcount at 03:00;
+    enacted, it runs *nobody*. Flipping the default would therefore un-staff every
+    committed ED overnight — a re-siting of every scenario, not a bug fix.
+    """
+    scenario = load_scenario(_SCENARIOS / "er_floor.yaml")
+    layout = generate_hospital(scenario.hospital())
+    horizon = scenario.workload.horizon
+    window = TimeWindow(start=horizon.start, end=horizon.end)
+    aware = realize_staff(
+        scenario.staffing.model_copy(update={"shift_aware": True}), layout, window
+    )
+    noon = SimTime(hours(12).root)
+    three_am = SimTime(hours(3).root)
+    assert any(m.on_shift(noon) for m in aware)
+    assert not any(m.on_shift(three_am) for m in aware)
+
+
+def test_member_k_works_every_block_that_schedules_more_than_k_of_their_role() -> None:
+    """A tapering headcount rosters the low-numbered members for more blocks."""
+    layout = generate_hospital(load_scenario(_SCENARIOS / "er_floor.yaml").hospital())
+    window = TimeWindow(start=SimTime(0), end=SimTime(hours(48).root))
+    spec = StaffingSpec(
+        shift_aware=True,
+        blocks=(
+            ShiftBlock(
+                window=TimeWindow(start=SimTime(0), end=SimTime(hours(12).root)),
+                role_counts={StaffRole.NURSE: 3},
+            ),
+            ShiftBlock(
+                window=TimeWindow(start=SimTime(hours(24).root), end=SimTime(hours(36).root)),
+                role_counts={StaffRole.NURSE: 1},
+            ),
+        ),
+    )
+    nurses = sorted(realize_staff(spec, layout, window), key=lambda m: m.id.root)
+    assert len(nurses) == 3
+    assert len(nurses[0].shifts) == 2  # scheduled by both blocks
+    assert len(nurses[1].shifts) == 1  # only the block asking for 3
+    assert len(nurses[2].shifts) == 1
+
+
+def test_shifts_are_clipped_to_the_run_window() -> None:
+    """A block running past the horizon must not roster anyone beyond it."""
+    layout = generate_hospital(load_scenario(_SCENARIOS / "er_floor.yaml").hospital())
+    window = TimeWindow(start=SimTime(0), end=SimTime(hours(10).root))
+    spec = StaffingSpec(
+        shift_aware=True,
+        blocks=(
+            ShiftBlock(
+                window=TimeWindow(start=SimTime(0), end=SimTime(hours(24).root)),
+                role_counts={StaffRole.NURSE: 1},
+            ),
+        ),
+    )
+    member = realize_staff(spec, layout, window)[0]
+    assert member.shifts == (TimeWindow(start=SimTime(0), end=SimTime(hours(10).root)),)

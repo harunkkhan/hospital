@@ -12,6 +12,7 @@ from hospital.core import (
     BayCleaningCompleted,
     BayCleaningStarted,
     BayStatus,
+    Duration,
     NurseVisitCompleted,
     NurseVisitStarted,
     PatientMoved,
@@ -20,12 +21,17 @@ from hospital.core import (
     StaffMember,
     StaffMoved,
     StaffRole,
+    TimeWindow,
+    compile_rules,
     hours,
     minutes,
 )
 from hospital.sim.flow.staff import staff_process
 from hospital.sim.physics.executor import PriorityTier
 from hospital.sim.physics.world import SimTask
+from hospital.sim.policies.baseline import NearestIdleDispatch
+from hospital.sim.seam_adapter import build_decision_input
+from hospital.solver.oracle import GraphRoutingOracle
 
 
 def _start_staff(h: PhysicsHarness, member: StaffMember) -> simpy.Process:
@@ -224,3 +230,102 @@ class TestAbsence:
         completions = [e.event for e in h.log if isinstance(e.event, BayCleaningCompleted)]
         assert len(completions) == 1
         assert h.world.bay_status(bay.id) is BayStatus.FREE
+
+
+class TestShiftAwareness:
+    """Off-shift rides the absence channel, so no policy learned about schedules."""
+
+    @staticmethod
+    def _rostered(h: PhysicsHarness, member: StaffMember, *shifts: TimeWindow) -> StaffMember:
+        """Re-register ``member`` carrying a schedule, replacing the unscheduled one."""
+        scheduled = member.model_copy(update={"shifts": shifts})
+        h.world.register_staff(scheduled)
+        return scheduled
+
+    def test_an_unscheduled_member_is_available_exactly_as_before(self) -> None:
+        """The default path: no schedule, no busy_until, byte-identical behaviour."""
+        h = build_physics()
+        nurse = _nurse(h)
+        assert not nurse.shifts
+        assert h.world.unavailable_until(nurse.id) is None
+        state = next(s for s in h.world.snapshot_staff() if s.staff == nurse.id)
+        assert state.busy_until is None
+
+    def test_off_shift_surfaces_as_busy_until_the_next_shift_starts(self) -> None:
+        """The whole mechanism: dispatch already skips a future busy_until, so it skips
+        an off-shift member without knowing shifts exist."""
+        h = build_physics()
+        nurse = _nurse(h)
+        self._rostered(
+            h,
+            nurse,
+            TimeWindow(start=SimTime(hours(4).root), end=SimTime(hours(6).root)),
+        )
+        # now == 0, before the shift: unavailable until it starts.
+        assert h.world.unavailable_until(nurse.id) == SimTime(hours(4).root)
+        state = next(s for s in h.world.snapshot_staff() if s.staff == nurse.id)
+        assert state.busy_until == SimTime(hours(4).root)
+
+    def test_on_shift_is_available(self) -> None:
+        h = build_physics()
+        nurse = _nurse(h)
+        self._rostered(h, nurse, TimeWindow(start=SimTime(0), end=SimTime(hours(6).root)))
+        assert h.world.unavailable_until(nurse.id) is None
+
+    def test_a_member_with_no_remaining_shift_stays_unavailable(self) -> None:
+        """ "No more shifts" must not read as "available" — hence the far-future sentinel."""
+        h = build_physics()
+        nurse = _nurse(h)
+        self._rostered(h, nurse, TimeWindow(start=SimTime(0), end=SimTime(hours(1).root)))
+        h.env.run(until=hours(2).root)
+        resumes = h.world.unavailable_until(nurse.id)
+        assert resumes is not None
+        assert resumes.root > hours(24 * 7).root
+
+    def test_absence_and_off_shift_take_the_later_instant(self) -> None:
+        """Someone off shift *and* off sick is not back at the earlier of the two."""
+        h = build_physics()
+        nurse = _nurse(h)
+        self._rostered(
+            h,
+            nurse,
+            TimeWindow(start=SimTime(hours(2).root), end=SimTime(hours(6).root)),
+        )
+        h.world.set_absent(nurse.id, SimTime(hours(5).root))
+        # Shift starts at 2h but the absence runs to 5h: available at 5h, not 2h.
+        assert h.world.unavailable_until(nurse.id) == SimTime(hours(5).root)
+
+    def test_the_baseline_dispatch_lever_skips_an_off_shift_member(self) -> None:
+        """The end of the argument for reusing busy_until: an unmodified policy honours it."""
+        h = build_physics()
+        nurse = _nurse(h)
+        self._rostered(
+            h,
+            nurse,
+            TimeWindow(start=SimTime(hours(4).root), end=SimTime(hours(6).root)),
+        )
+        roster = tuple(
+            m.model_copy(
+                update={
+                    "shifts": (
+                        TimeWindow(start=SimTime(hours(4).root), end=SimTime(hours(6).root)),
+                    )
+                }
+            )
+            if m.id == nurse.id
+            else m
+            for m in h.roster
+        )
+        lever = NearestIdleDispatch(rules=compile_rules(()), roster=roster)
+        h.world.add_task(
+            kind="nurse_visit",
+            patient=None,
+            at=h.layout.stations[0],
+            required_role=StaffRole.NURSE,
+            activity=Activity.NURSE_VISIT,
+            duration=Duration(0),
+        )
+        di = build_decision_input(h.world, h.world.now(), ())
+        items = lever.dispatch(di, GraphRoutingOracle(h.layout.graph))
+        assert items, "nobody was dispatched at all — the fixture would prove nothing"
+        assert all(item.staff != nurse.id for item in items), "an off-shift nurse was dispatched"

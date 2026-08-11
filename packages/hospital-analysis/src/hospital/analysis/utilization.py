@@ -116,12 +116,25 @@ def classify_staff_seconds(
 ) -> tuple[StaffSecondBudget, ...]:
     """Per-staff second budget: the disjoint partition that ``UtilizationReport`` pools."""
     m = measurement_window(window, warmup)
-    # M1 staffing is a fixed scenario input: on_shift = the whole measurement
-    # window minus absence. `DisruptionInjected` carries only a free-text
+
+    # On-shift seconds, per member, from their own schedule.
+    #
+    # With no schedule (`shifts == ()`, every scenario that does not opt into
+    # `StaffingSpec.shift_aware`) this is the whole measurement window, exactly as it was:
+    # staffing was a fixed input on duty for the entire horizon. With a schedule it is the
+    # part of the window their shifts actually cover, which is what makes every
+    # `staff_frac_*` and `staff_hours_paid` describe hours the hospital really pays for
+    # rather than hours it merely spans. A rostered-half-time member who idles their whole
+    # shift must read as 100% idle over 12 hours, not 50% idle over 24.
+    #
+    # Absence is still not subtracted: `DisruptionInjected` carries only a free-text
     # `disruption`/`detail` string in the current core schema — no structured
-    # staff-id/time-range payload to subtract — so absence is not modeled here
-    # (judgment call; revisit once disruptions carry a structured target).
-    on_shift_total = m.duration().to_seconds()
+    # staff-id/time-range payload to subtract (judgment call; revisit once disruptions
+    # carry a structured target).
+    def _on_shift_seconds(member: StaffMember) -> float:
+        if not member.shifts:
+            return m.duration().to_seconds()
+        return sum(clip_seconds(shift.start, shift.end, m) for shift in member.shifts)
 
     direct_care: dict[StaffId, float] = defaultdict(float)
     documentation: dict[StaffId, float] = defaultdict(float)
@@ -150,6 +163,7 @@ def classify_staff_seconds(
         )
         dc = direct_care.get(member.id, 0.0)
         doc = documentation.get(member.id, 0.0)
+        on_shift_total = _on_shift_seconds(member)
         idle_s = on_shift_total - walk_s - dc - cleaning_s - doc
         if idle_s < -_IDLE_TOLERANCE_S:
             raise ValueError(

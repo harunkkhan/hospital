@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from hospital.core.cost import CostModel, CostRates, Money
 from hospital.core.entities import (
+    CARE_SLA_BY_ACUITY,
     Bay,
     FloorLayout,
     Patient,
@@ -137,6 +138,7 @@ from hospital.core.vitals import (
 
 __all__ = [
     "AWAITING_ADMISSION",
+    "CARE_SLA_BY_ACUITY",
     "ED_ZONE_TYPES",
     "EXTENSIVE_KEYS",
     "KPI_KEYS",
