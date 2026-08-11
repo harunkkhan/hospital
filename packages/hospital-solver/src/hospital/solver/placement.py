@@ -24,6 +24,16 @@ return (doc 00 §5 rule 5). Key disciplines:
 ``ortools`` is imported lazily *inside* ``solve`` so importing this module (e.g.
 for the shared helpers the heuristic reuses) never pulls OR-Tools.
 
+**Two care phases, one model (M4 §3).** A patient waiting for an ED bay to be
+worked up in and an admitted patient waiting for an inpatient bed are both in the
+one bay queue, are both placed by this backend, and produce the same ``assign_bay``
+item — but they are judged by different rules and priced by different weights. The
+phase comes from ``WaitingPatient.stage``; it selects the zone whitelist through
+``CompiledRules.zone_types_for_stage`` (so a just-triaged patient has no *variable*
+for an ICU bed, not merely an expensive one) and selects the cost through
+:func:`placement_weights`. Deciding them jointly is the point: the ED bay a boarding
+patient is blocking and the ward bed that would free it are the same solve.
+
 Formulation note — the instance-derived place-first big-M. The unplaced penalty
 is ``reward[p] = (wait_penalty[p] + 1) · B`` with ``B = Σ_p max_b w[p,b] + 1``
 and ``wait_penalty[p] = w_time·unplaced_wait_penalty·score(p)``, where
@@ -46,17 +56,20 @@ a degenerate config (``w_time`` or ``unplaced_wait_penalty`` of ``0``).
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, ClassVar, Final
 
 from hospital.core import (
+    AWAITING_ADMISSION,
     MICROS_PER_SEC,
+    WAITING_FOR_BAY,
     Bay,
     BayId,
     BayStatus,
     CompiledRules,
     DecisionInput,
     Duration,
+    EsiAcuity,
     InfeasiblePlan,
     NodeId,
     Patient,
@@ -77,9 +90,35 @@ if TYPE_CHECKING:
 
     from hospital.core import FloorLayout, ZoneId
 
-# Stages of ``WaitingPatient.stage`` that mean "awaiting a bay". The exact stage
-# vocabulary is not fixed in ``core.seam`` yet; this is the placement convention.
-NEEDS_BAY_STAGES: frozenset[str] = frozenset({"needs_bay", "awaiting_bay", "waiting_for_bay"})
+# Stages of ``WaitingPatient.stage`` that mean "awaiting an ED bay to be worked up
+# in". ``core.seam`` owns the canonical spelling; the two legacy synonyms are kept
+# because callers outside the engine (tests, an operator tool) still write them.
+NEEDS_BAY_STAGES: frozenset[str] = frozenset({"needs_bay", "awaiting_bay", WAITING_FOR_BAY})
+
+# Every stage this backend will place. An admitted patient waiting for an inpatient
+# bed is placeable too (M4) — same queue, same ``assign_bay`` item, same validator —
+# but against the ward whitelist and priced by a different weight (see
+# :func:`admission_weight`), because what a ward bed costs has nothing in common with
+# what an ED bay costs.
+PLACEABLE_STAGES: frozenset[str] = NEEDS_BAY_STAGES | {AWAITING_ADMISSION}
+
+# Where an admitted patient is *preferred*, most-preferred first — a 🟡-tunable
+# clinical routing heuristic in the same family as the travel proxy below, and
+# deliberately NOT a rule. The distinction is load-bearing: an ``AdmissionRule``
+# says where a patient may go (a hard constraint the validator enforces and no
+# objective can buy its way past), while this says which of those permitted wards
+# is better, and it can always lose to capacity. The fallbacks matter more than the
+# first entry — a full ICU boards its ESI-1s in surgery rather than in the ED.
+#
+# Moved here from ``sim.flow.ward`` in M4 §3: it biases a placement, so it belongs
+# beside the other placement biases, on the solver's side of the seam.
+WARD_PREFERENCE: Final[dict[EsiAcuity, tuple[ZoneType, ...]]] = {
+    EsiAcuity.ESI1: (ZoneType.ICU, ZoneType.SURGERY, ZoneType.MED_SURG),
+    EsiAcuity.ESI2: (ZoneType.ICU, ZoneType.MED_SURG, ZoneType.SURGERY),
+    EsiAcuity.ESI3: (ZoneType.MED_SURG, ZoneType.SURGERY, ZoneType.ICU),
+    EsiAcuity.ESI4: (ZoneType.MED_SURG, ZoneType.SURGERY),
+    EsiAcuity.ESI5: (ZoneType.MED_SURG,),
+}
 
 # Default real-time solve budget (doc 03 §4.3 example); small so tests stay fast.
 # Interpreted as CP-SAT *deterministic time* (reproducible work units calibrated
@@ -89,13 +128,22 @@ DEFAULT_TIME_CAP: Duration = seconds(0.05)
 _CandidateSet = tuple[list[Patient], list[Bay], set[tuple[PatientId, BayId]]]
 
 
-def _needs_bay(stage: str) -> bool:
-    return stage in NEEDS_BAY_STAGES
+def _placeable(stage: str) -> bool:
+    return stage in PLACEABLE_STAGES
 
 
-def compat_pair(patient: Patient, bay: Bay, rules: CompiledRules) -> bool:
-    """``compat[p,b]`` — the same predicates the validator applies (doc 03 §4.3)."""
-    if bay.zone_type not in rules.zone_types_for(patient.esi):
+def compat_pair(
+    patient: Patient, bay: Bay, rules: CompiledRules, *, stage: str = WAITING_FOR_BAY
+) -> bool:
+    """``compat[p,b]`` — the same predicates the validator applies (doc 03 §4.3).
+
+    ``stage`` is the patient's care phase and selects the zone whitelist through the
+    ONE :meth:`~hospital.core.CompiledRules.zone_types_for_stage`, so the model and
+    the validator agree on *which* rule applies as well as on what it says. Isolation
+    and equipment are phase-independent — they are facts about the patient and the
+    bay, not about the moment — so they are checked identically either way.
+    """
+    if bay.zone_type not in rules.zone_types_for_stage(patient.esi, stage):
         return False
     if rules.equipment_for(patient.esi) - bay.equipment:
         return False
@@ -104,14 +152,37 @@ def compat_pair(patient: Patient, bay: Bay, rules: CompiledRules) -> bool:
     )
 
 
+def stages(di: DecisionInput) -> dict[PatientId, str]:
+    """Each waiting patient's care phase, keyed by id."""
+    return {wp.patient.id: wp.stage for wp in di.waiting}
+
+
+def admitted_patients(di: DecisionInput) -> frozenset[PatientId]:
+    """The *queued* patients in the inpatient care phase — this solve's ward set.
+
+    ``ValidationContext.inpatients`` spans the whole phase, including patients already
+    housed in a ward bed; this is its restriction to the bay queue, which is the only
+    population a placement plan can name. That makes it exactly the right set for
+    :func:`self_validate` — every item the backend just produced is for a queued
+    patient — and the wrong one for the engine, which also re-judges standing
+    assignments. Derived from the projection, so a backend is never told it separately.
+    """
+    return frozenset(pid for pid, stage in stages(di).items() if stage == AWAITING_ADMISSION)
+
+
 def candidates(di: DecisionInput, rules: CompiledRules) -> _CandidateSet:
     """Patients needing a bay, FREE bays, and the sparse compatible ``(p,b)`` set.
 
-    Both lists are sorted by id so the CP-SAT model build is byte-stable.
+    Both lists are sorted by id so the CP-SAT model build is byte-stable. The compat
+    set is phase-aware, which is what keeps the two populations from crossing: a
+    just-triaged patient gets no variable for an ICU bed, and an admitted one gets
+    none for a fast-track bay, so neither is expressible in a plan rather than merely
+    being expensive.
     """
     static_bays = {b.id: b for b in di.layout.bays}
+    stage_by_patient = stages(di)
     patients = sorted(
-        (wp.patient for wp in di.waiting if _needs_bay(wp.stage)), key=lambda p: p.id.root
+        (wp.patient for wp in di.waiting if _placeable(wp.stage)), key=lambda p: p.id.root
     )
     free_bays = sorted(
         (
@@ -121,7 +192,12 @@ def candidates(di: DecisionInput, rules: CompiledRules) -> _CandidateSet:
         ),
         key=lambda b: b.id.root,
     )
-    compat = {(p.id, b.id) for p in patients for b in free_bays if compat_pair(p, b, rules)}
+    compat = {
+        (p.id, b.id)
+        for p in patients
+        for b in free_bays
+        if compat_pair(p, b, rules, stage=stage_by_patient[p.id])
+    }
     return patients, free_bays, compat
 
 
@@ -275,6 +351,110 @@ def assignment_weight(
     return travel + occupancy_cost(bay, coeffs, expected_stay, scarcity_by_zone or {})
 
 
+def patient_origins(di: DecisionInput) -> dict[PatientId, NodeId]:
+    """Where each bay-occupying patient currently is, as the projection reveals it.
+
+    An admitted patient is still holding the ED bay they are boarding in — that is
+    the whole mechanism of M4 §2 — so the bay they occupy locates them, and the
+    escort upstairs starts from its node. Derived from ``BayState.occupant``, which
+    is already in ``DecisionInput``: pricing the trip needs no new seam field, and
+    adding one would have handed the solver a position it has no other reason to see.
+    """
+    static_bays = {b.id: b for b in di.layout.bays}
+    out: dict[PatientId, NodeId] = {}
+    for state in di.bays:
+        bay = static_bays.get(state.bay)
+        if bay is not None and state.occupant is not None:
+            out[state.occupant] = bay.node
+    return out
+
+
+def ward_rank(patient: Patient, bay: Bay) -> int:
+    """How preferred ``bay``'s ward is for ``patient`` — 0 is best, larger is worse.
+
+    A zone type absent from the patient's :data:`WARD_PREFERENCE` ranks last rather
+    than being refused: permission is the ``AdmissionRule``'s job, and a bed the rules
+    allow should still be usable when every preferred ward is full.
+    """
+    preference = WARD_PREFERENCE.get(patient.esi, ())
+    if bay.zone_type in preference:
+        return preference.index(bay.zone_type)
+    return len(preference)
+
+
+def admission_travel(
+    patient: Patient,
+    bay: Bay,
+    origin: NodeId | None,
+    oracle: RoutingOracle,
+    coeffs: AssignmentCoeffs,
+) -> int:
+    """The escorted trip from the patient's ED bay to an inpatient bed.
+
+    Deliberately **not** :func:`travel_weight`, whose every term is wrong here rather
+    than merely imprecise. That function prices the walking a patient's *workup*
+    implies — provider and nurse visits from the serving station, imaging round trips,
+    the entrance round trip — and an admitted patient's workup is finished. Applied to
+    a ward bed it would price visits that never happen, and an entrance round trip for
+    a patient who will not leave from the ground floor at all. Every term would vary
+    across candidate beds, so the error would not even cancel: it would pick the bed.
+
+    What the decision actually costs is the one move it causes — a porter escorting
+    the patient from the bay they are boarding in to the bed, over the same graph, its
+    elevator edges included. Both actors walk it, hence the doubling (the same
+    reasoning as the imaging term). The porter's own walk to reach the patient is
+    excluded because it is a dispatch outcome, not a property of the bed chosen.
+
+    Ward nursing is not priced: the inpatient stay is a single delay with no modeled
+    bedside visits, and inventing a term for physics the twin does not simulate would
+    bias the choice on made-up numbers.
+    """
+    if origin is None:
+        return 0
+    return coeffs.travel_weight * 2 * _seconds(oracle.distance(origin, bay.node))
+
+
+def admission_weight(
+    patient: Patient,
+    bay: Bay,
+    origin: NodeId | None,
+    oracle: RoutingOracle,
+    coeffs: AssignmentCoeffs,
+    *,
+    rank_cost: int,
+    scarcity_by_zone: Mapping[ZoneId, int] | None = None,
+) -> int:
+    """``w[p,b]`` for an admitted patient — ward preference first, then the escort.
+
+    Lexicographic by construction: ``rank_cost`` is derived per solve as one more than
+    any escort term in the instance (:func:`ward_rank_cost`), so a better-preferred
+    ward always beats a nearer bed, and distance only breaks ties *within* a ward. That
+    reproduces the ordering the greedy claim used before placement was a decision —
+    preference exhausted before distance is consulted — while making it a property of
+    the objective rather than of the loop that happened to enumerate the beds.
+
+    Scarcity multiplies the *rank* penalty, not the travel: taking a bed a
+    less-preferred patient could have used costs more when that ward is nearly full,
+    which is what stops an ESI-4 filling the last ICU bed at ESI-1's expense. At rank 0
+    the term vanishes, so a patient in their first-choice ward is never charged for it
+    however scarce that ward is — they are exactly who it is scarce for.
+    """
+    scarcity = (scarcity_by_zone or {}).get(bay.zone, 1)
+    rank = ward_rank(patient, bay) * rank_cost * scarcity
+    return rank + admission_travel(patient, bay, origin, oracle, coeffs)
+
+
+def ward_rank_cost(escort_terms: Iterable[int]) -> int:
+    """One more than the largest escort term, so ward rank strictly dominates travel.
+
+    Instance-derived for the same reason the place-first big-M is (module docstring):
+    a hand-tuned constant is only lexicographic on the floors it was tuned on, and
+    silently stops being so on a bigger building or a heavier acuity weight. Bounded
+    below at 1 so an instance with no escort terms still separates the ranks.
+    """
+    return max([*escort_terms, 0]) + 1
+
+
 def occupied_by_zone_type(di: DecisionInput) -> dict[ZoneType, int]:
     """Count of currently-OCCUPIED bays per zone type (matches the validator's count)."""
     static_bays = {b.id: b for b in di.layout.bays}
@@ -362,6 +542,77 @@ def residual_stays(
     return out
 
 
+def placement_weights(
+    di: DecisionInput,
+    patients: list[Patient],
+    bays: list[Bay],
+    compat: set[tuple[PatientId, BayId]],
+    oracle: RoutingOracle,
+    config: ObjectiveConfig,
+    *,
+    expected_stay: Mapping[PatientId, Duration] | None = None,
+) -> dict[tuple[PatientId, BayId], int]:
+    """The complete ``w[p,b]`` table — the ONE place a placement is priced.
+
+    Both backends read it rather than each folding the terms themselves, which is
+    what makes the greedy fallback a *different search* over the same objective
+    instead of a different objective. Each pair is priced by its patient's care
+    phase: an ED placement by :func:`assignment_weight`, an admission by
+    :func:`admission_weight`.
+
+    Two passes, because the admission weight's lexicographic guarantee needs a scale
+    the instance itself supplies: the escort terms are computed first, and the largest
+    of them fixes the per-rank cost that must exceed it.
+    """
+    layout = di.layout
+    stage_by_patient = stages(di)
+    patient_by_id = {p.id: p for p in patients}
+    bay_by_id = {b.id: b for b in bays}
+    coeffs = {esi: assignment_coeffs(config, esi) for esi in {p.esi for p in patients}}
+    scarcity = scarcity_by_zone(di)
+    residual = residual_stays(di, expected_stay)
+    origins = patient_origins(di)
+
+    admissions = [
+        key for key in compat if stage_by_patient.get(key[0], WAITING_FOR_BAY) == AWAITING_ADMISSION
+    ]
+    rank_cost = ward_rank_cost(
+        admission_travel(
+            patient_by_id[pid],
+            bay_by_id[bid],
+            origins.get(pid),
+            oracle,
+            coeffs[patient_by_id[pid].esi],
+        )
+        for pid, bid in admissions
+    )
+
+    weights: dict[tuple[PatientId, BayId], int] = {}
+    for pid, bid in compat:
+        patient, bay = patient_by_id[pid], bay_by_id[bid]
+        if stage_by_patient.get(pid, WAITING_FOR_BAY) == AWAITING_ADMISSION:
+            weights[(pid, bid)] = admission_weight(
+                patient,
+                bay,
+                origins.get(pid),
+                oracle,
+                coeffs[patient.esi],
+                rank_cost=rank_cost,
+                scarcity_by_zone=scarcity,
+            )
+        else:
+            weights[(pid, bid)] = assignment_weight(
+                patient,
+                bay,
+                oracle,
+                layout,
+                coeffs[patient.esi],
+                expected_stay=residual.get(pid),
+                scarcity_by_zone=scarcity,
+            )
+    return weights
+
+
 class CpSatPlacement:
     """The CP-SAT bay/zone assignment backend (implements ``Solver``)."""
 
@@ -384,10 +635,7 @@ class CpSatPlacement:
         started_ns = time.perf_counter_ns()
         patients, bays, compat = candidates(di, rules)
         layout = di.layout
-        patient_by_id = {p.id: p for p in patients}
-        bay_by_id = {b.id: b for b in bays}
         waited = _waited(di)
-        coeffs = {esi: assignment_coeffs(config, esi) for esi in {p.esi for p in patients}}
 
         model = cp_model.CpModel()
         x: dict[tuple[PatientId, BayId], cp_model.IntVar] = {
@@ -396,20 +644,9 @@ class CpSatPlacement:
             for b in bays
             if (p.id, b.id) in compat
         }
-        scarcity = scarcity_by_zone(di)
-        stays = residual_stays(di, expected_stay)
-        weight = {
-            (pid, bid): assignment_weight(
-                patient_by_id[pid],
-                bay_by_id[bid],
-                oracle,
-                layout,
-                coeffs[patient_by_id[pid].esi],
-                expected_stay=stays.get(pid),
-                scarcity_by_zone=scarcity,
-            )
-            for (pid, bid) in x
-        }
+        weight = placement_weights(
+            di, patients, bays, compat, oracle, config, expected_stay=expected_stay
+        )
         # Scarcity priority = the ONE sequencing score u(esi) + alpha·waited
         # (anti-starvation), scaled onto the objective's wait-penalty currency —
         # so who wins a scarce bay agrees with the enacted queue order.
@@ -547,13 +784,20 @@ def _pairs(
 
 
 def self_validate(plan: Plan, di: DecisionInput, rules: CompiledRules) -> None:
-    """Independent cross-check (doc 00 §5 rule 5) — never repair, raise instead."""
+    """Independent cross-check (doc 00 §5 rule 5) — never repair, raise instead.
+
+    ``awaiting_admission`` is passed so the self-check judges each placement against
+    the phase the backend priced it under. Omitting it would make the cross-check
+    weaker than the engine's — every ward grant would be measured against the ED
+    whitelist and rejected here, or worse, an ED grant into a ward bed would pass.
+    """
     ctx = ValidationContext(
         layout=di.layout,
         bays=di.bays,
         staff=di.staff,
         rules=rules,
         patients=tuple(wp.patient for wp in di.waiting),
+        inpatients=admitted_patients(di),
     )
     violations = validate(plan, ctx)
     if violations:
@@ -564,16 +808,26 @@ __all__ = [
     "DEFAULT_TIME_CAP",
     "MAX_OCCUPANCY_COST",
     "NEEDS_BAY_STAGES",
+    "PLACEABLE_STAGES",
+    "WARD_PREFERENCE",
     "CpSatPlacement",
+    "admission_travel",
+    "admission_weight",
+    "admitted_patients",
     "assignment_weight",
     "candidates",
     "compat_pair",
     "occupancy_cost",
     "occupied_by_zone_type",
+    "patient_origins",
+    "placement_weights",
     "residual_stays",
     "scarcity_by_zone",
     "self_validate",
+    "stages",
     "travel_weight",
+    "ward_rank",
+    "ward_rank_cost",
     "zone_assignable",
     "zone_remaining",
     "zone_scarcity",

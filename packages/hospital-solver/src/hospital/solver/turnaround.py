@@ -12,11 +12,13 @@ critical-patient bay" is priced in the same currency as everything else -- the
 The valuation is myopic (currently-waiting compatible patients only; no arrivals
 lookahead) and ``compat``-coupled — a bay no waiting patient is compatible with
 scores ``0`` and is deprioritized. Acceptable under M1; recomputed every re-solve.
-Only patients actually waiting *for a bay* (``NEEDS_BAY_STAGES``) count as
+Only patients actually waiting *for a bay* (``PLACEABLE_STAGES``) count as
 demand — a placed patient waiting for a provider/lab/documentation is not
-unblocked by a clean. Housekeeper candidates are filtered against
-``rules.skills_for("cleaning")`` (e.g. hazmat), the same union the validator's
-SkillRule check applies, in addition to the HOUSEKEEPING role.
+unblocked by a clean. Both care phases count, each against its own whitelist, so a
+dirty inpatient bed is valued by the admits boarding for it (M4 §3). Housekeeper
+candidates are filtered against ``rules.skills_for("cleaning")`` (e.g. hazmat), the
+same union the validator's SkillRule check applies, in addition to the HOUSEKEEPING
+role.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from hospital.core import (
     WaitingPatient,
 )
 from hospital.solver.objective import ObjectiveConfig, acuity_urgency
-from hospital.solver.placement import NEEDS_BAY_STAGES, compat_pair
+from hospital.solver.placement import PLACEABLE_STAGES, compat_pair
 from hospital.solver.protocol import RoutingOracle
 
 
@@ -53,13 +55,22 @@ def unblock_value(
     freeing ``bay`` would unblock. Shared by turnaround (a clean frees the
     bay), discharge (a discharge frees it identically), and dispatch's
     priority-augmented urgency — never re-derived per lever. Only patients
-    actually waiting FOR A BAY (``NEEDS_BAY_STAGES``) count as demand; a
+    actually waiting FOR A BAY (``PLACEABLE_STAGES``) count as demand; a
     placed patient waiting on providers/labs/documentation is not unblocked.
+
+    Both care phases count, and each against its own whitelist (M4 §3). A patient
+    boarding for an inpatient bed is waiting for a bay in exactly the sense that
+    matters here, and scoring a dirty ICU bed only against the ED queue would have
+    valued it at zero however many admits were stacked up for it — so housekeeping
+    would never have prioritized the one clean that unblocks a ward, which in a
+    hospital-wide model also unblocks the ED bay that admit is holding. Passing the
+    stage keeps the other direction honest too: a boarding patient is not demand for
+    a general bay, since they already occupy one.
     """
     return sum(
         acuity_urgency(config, wp.patient.esi)
         for wp in waiting
-        if wp.stage in NEEDS_BAY_STAGES and compat_pair(wp.patient, bay, rules)
+        if wp.stage in PLACEABLE_STAGES and compat_pair(wp.patient, bay, rules, stage=wp.stage)
     )
 
 

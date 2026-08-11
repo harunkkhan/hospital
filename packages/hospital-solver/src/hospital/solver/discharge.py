@@ -15,7 +15,7 @@ Two coupled levers:
 comparison — they never enter the integer objective, so they cannot flap a
 golden hash. The ``gamma·boarding_seconds`` term of the doc is omitted: ``DecisionInput``
 carries no boarding clock, so ``value(d)`` is the unblock-demand term alone (M1).
-Only patients waiting *for a bay* (``NEEDS_BAY_STAGES``) count toward the
+Only patients waiting *for a bay* (``PLACEABLE_STAGES``) count toward the
 unblock value — a placed patient waiting for providers/labs/documentation is
 not freed by a discharge.
 

@@ -31,7 +31,15 @@ from hospital.core.enums import BayStatus
 from hospital.core.ids import BayId, PatientId, StaffId, TaskId
 from hospital.core.models import FrozenModel
 from hospital.core.rules import CompiledRules
-from hospital.core.seam import BayState, Plan, PlanItem, StaffState, TaskSpec
+from hospital.core.seam import (
+    AWAITING_ADMISSION,
+    WAITING_FOR_BAY,
+    BayState,
+    Plan,
+    PlanItem,
+    StaffState,
+    TaskSpec,
+)
 
 ViolationKind = Literal[
     "unknown_entity",
@@ -62,6 +70,21 @@ class ValidationContext(FrozenModel):
     patients: tuple[Patient, ...] = ()
     staff_members: tuple[StaffMember, ...] = ()
     tasks: tuple[TaskSpec, ...] = ()
+    # Patients in the inpatient care phase — disposition ADMIT, whether still boarding
+    # in an ED bay, waiting for a bed, or already in one. Their placements are judged
+    # against the ward whitelist rather than the ED one (M4); see
+    # ``CompiledRules.zone_types_for_stage``.
+    #
+    # Dynamic state, so it belongs here beside ``bays``/``staff`` and not on
+    # ``Patient``: the same patient is judged by the ED rule before their disposition
+    # and by the ward rule after it.
+    #
+    # Spans the whole phase and not just the queue, because ``validate`` is asked
+    # about placements that are already in force as well as proposed ones — an
+    # operator's bay closure re-validates every standing assignment, and a patient
+    # asleep in an ICU bed left the queue long ago. Defaults empty, which is every
+    # ED-only scenario and therefore every run that predates wards.
+    inpatients: frozenset[PatientId] = frozenset()
 
 
 def _v(kind: ViolationKind, detail: str, entity: str) -> Violation:
@@ -79,7 +102,15 @@ def validate(plan: Plan, ctx: ValidationContext) -> tuple[Violation, ...]:
     rules = ctx.rules
 
     _check_items(
-        plan.items, static_bay, bay_state, patient_by_id, staff_by_id, task_by_id, rules, violations
+        plan.items,
+        static_bay,
+        bay_state,
+        patient_by_id,
+        staff_by_id,
+        task_by_id,
+        rules,
+        ctx.inpatients,
+        violations,
     )
     _check_capacity(plan.items, static_bay, bay_state, rules, violations)
     _check_double_booking(plan.items, bay_state, violations)
@@ -94,11 +125,12 @@ def _check_items(
     staff_by_id: dict[StaffId, StaffMember],
     task_by_id: dict[TaskId, TaskSpec],
     rules: CompiledRules,
+    inpatients: frozenset[PatientId],
     out: list[Violation],
 ) -> None:
     for item in items:
         if item.kind == "assign_bay":
-            _check_assign_bay(item, static_bay, bay_state, patient_by_id, rules, out)
+            _check_assign_bay(item, static_bay, bay_state, patient_by_id, rules, inpatients, out)
         elif item.kind == "dispatch":
             _check_dispatch(item, staff_by_id, task_by_id, rules, out)
         elif item.kind == "sequence":
@@ -117,6 +149,7 @@ def _check_assign_bay(
     bay_state: dict[BayId, BayState],
     patient_by_id: dict[PatientId, Patient],
     rules: CompiledRules,
+    inpatients: frozenset[PatientId],
     out: list[Violation],
 ) -> None:
     if item.bay is None:
@@ -149,13 +182,18 @@ def _check_assign_bay(
             )
 
     # Whitelist semantics: an empty acuity whitelist means the acuity may go
-    # nowhere — INCOMPATIBLE — not "anywhere".
-    allowed = rules.zone_types_for(patient.esi)
+    # nowhere — INCOMPATIBLE — not "anywhere". WHICH whitelist is the patient's
+    # care phase: an admitted patient is judged against the ward rule, everyone
+    # else against the ED compatibility rule. This is the check that refuses to
+    # put a just-triaged patient in an ICU bed, and an admitted one back in a
+    # fast-track bay.
+    stage = AWAITING_ADMISSION if item.patient in inpatients else WAITING_FOR_BAY
+    allowed = rules.zone_types_for_stage(patient.esi, stage)
     if bay.zone_type not in allowed:
         out.append(
             _v(
                 "bay_incompatible",
-                f"esi {int(patient.esi)} not allowed in {bay.zone_type.value}",
+                f"esi {int(patient.esi)} not allowed in {bay.zone_type.value} at {stage}",
                 item.bay.root,
             )
         )

@@ -17,6 +17,39 @@
         "title": "Activity",
         "type": "string"
       },
+      "AdmissionRule": {
+        "additionalProperties": false,
+        "description": "The single acuity->ward zone_type mapping for an ADMITTED patient (M4).\n\nDeliberately *not* more entries in :class:`CompatibilityRule`, which the validator\nand the placement solver both read keyed on acuity alone. The two rules answer\ndifferent questions: compatibility says where a patient may be **worked up**,\nadmission says where they may be **admitted**. Folding wards into the first would\nmake an ESI-2 eligible for a resus bay thereby eligible for an ICU bed the moment\nthey finish triage \u2014 a placement no rule could then refuse, because nothing in the\nkey distinguishes the two moments. The patient's care phase\n(:data:`~hospital.core.seam.AWAITING_ADMISSION`) selects which of the two applies.\n\nAdditive by construction: a scenario that declares no ``AdmissionRule`` admits\nnobody anywhere, which is exactly right for an ED-only floor plan and is why every\nrule set written before wards existed hashes and behaves as it did.\n\nIsolation and equipment are *not* restated here. Those constraints are properties\nof the patient and the bay, not of the phase, so :class:`CompiledRules` applies the\ncompatibility rule's ``isolation_enforced`` / ``required_equipment`` to both kinds\nof placement \u2014 one source, asked twice.",
+        "properties": {
+          "allowed_zone_types": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/components/schemas/EsiAcuity"
+                },
+                {
+                  "$ref": "#/components/schemas/ZoneType"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Allowed Zone Types",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "kind": {
+            "const": "admission",
+            "default": "admission",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "AdmissionRule",
+        "type": "object"
+      },
       "ArrivalMode": {
         "description": "How a patient reached the ED.",
         "enum": [
@@ -2248,6 +2281,7 @@
             "items": {
               "discriminator": {
                 "mapping": {
+                  "admission": "#/components/schemas/AdmissionRule",
                   "capacity": "#/components/schemas/CapacityRule",
                   "compat": "#/components/schemas/CompatibilityRule",
                   "precedence": "#/components/schemas/PrecedenceRule",
@@ -2258,6 +2292,9 @@
               "oneOf": [
                 {
                   "$ref": "#/components/schemas/CompatibilityRule"
+                },
+                {
+                  "$ref": "#/components/schemas/AdmissionRule"
                 },
                 {
                   "$ref": "#/components/schemas/CapacityRule"

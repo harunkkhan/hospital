@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final, cast
 
 from hospital.core import (
+    WAITING_FOR_BAY,
     Activity,
     ArrivalMode,
     Bay,
@@ -118,11 +119,11 @@ def patient_process(
     finally:
         world.resources.triage.release(req)
 
-    # 3 — wait for a bay (acuity-priority queue, infinite patience). The stage
-    # string is the placement convention (solver.placement.NEEDS_BAY_STAGES):
-    # a stage outside that vocabulary would be invisible to the CP-SAT backend.
+    # 3 — wait for a bay (acuity-priority queue, infinite patience). The stage is
+    # the care phase, and it is what tells every placement backend and the validator
+    # to judge this against the ED whitelist rather than the ward one.
     event_log.append(BayRequested(occurred_at=executor.now(), patient=pid))
-    wake = world.request_bay(patient, stage="waiting_for_bay")
+    wake = world.request_bay(patient, stage=WAITING_FOR_BAY)
     world.request_decision()
     granted = yield wake
     bay = world.bay(cast("BayId", granted))

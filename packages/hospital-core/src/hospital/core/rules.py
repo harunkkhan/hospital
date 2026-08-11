@@ -9,6 +9,12 @@ The ``CompatibilityRule`` is the **single source** of the acuity->zone_type /
 isolation / equipment mapping, so the placement solver and the validator cannot
 drift. ``rules_hash`` (canonical sorted-JSON sha256) stamps a plan's provenance
 to the exact rule config that judged it.
+
+Placement is judged against **one of two** whitelists, selected by the patient's
+care phase: ``CompatibilityRule`` for a patient being worked up in the ED, and
+``AdmissionRule`` for one whose disposition was ADMIT and who now needs an
+inpatient bed. :meth:`CompiledRules.zone_types_for_stage` is where that choice is
+made, once, for every enforcer.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from pydantic import Field, TypeAdapter
 
 from hospital.core.enums import Activity, EsiAcuity, ZoneType
 from hospital.core.models import FrozenModel
+from hospital.core.seam import AWAITING_ADMISSION
 
 
 class CompatibilityRule(FrozenModel):
@@ -33,6 +40,33 @@ class CompatibilityRule(FrozenModel):
     isolation_enforced: bool = True
     # A patient of this acuity requires the assigned bay to carry this equipment.
     required_equipment: frozenset[tuple[EsiAcuity, str]] = frozenset()
+
+
+class AdmissionRule(FrozenModel):
+    """The single acuity->ward zone_type mapping for an ADMITTED patient (M4).
+
+    Deliberately *not* more entries in :class:`CompatibilityRule`, which the validator
+    and the placement solver both read keyed on acuity alone. The two rules answer
+    different questions: compatibility says where a patient may be **worked up**,
+    admission says where they may be **admitted**. Folding wards into the first would
+    make an ESI-2 eligible for a resus bay thereby eligible for an ICU bed the moment
+    they finish triage — a placement no rule could then refuse, because nothing in the
+    key distinguishes the two moments. The patient's care phase
+    (:data:`~hospital.core.seam.AWAITING_ADMISSION`) selects which of the two applies.
+
+    Additive by construction: a scenario that declares no ``AdmissionRule`` admits
+    nobody anywhere, which is exactly right for an ED-only floor plan and is why every
+    rule set written before wards existed hashes and behaves as it did.
+
+    Isolation and equipment are *not* restated here. Those constraints are properties
+    of the patient and the bay, not of the phase, so :class:`CompiledRules` applies the
+    compatibility rule's ``isolation_enforced`` / ``required_equipment`` to both kinds
+    of placement — one source, asked twice.
+    """
+
+    kind: Literal["admission"] = "admission"
+    # An ESI acuity may be admitted into these (ward) zone types.
+    allowed_zone_types: frozenset[tuple[EsiAcuity, ZoneType]] = frozenset()
 
 
 class CapacityRule(FrozenModel):
@@ -60,7 +94,7 @@ class PrecedenceRule(FrozenModel):
 
 
 Rule = Annotated[
-    CompatibilityRule | CapacityRule | SkillRule | PrecedenceRule,
+    CompatibilityRule | AdmissionRule | CapacityRule | SkillRule | PrecedenceRule,
     Field(discriminator="kind"),
 ]
 
@@ -69,6 +103,7 @@ class CompiledRules(FrozenModel):
     """Indexed, frozen constraint kernel produced by :func:`compile_rules`."""
 
     allowed_zone_types: frozenset[tuple[EsiAcuity, ZoneType]] = frozenset()
+    admission_zone_types: frozenset[tuple[EsiAcuity, ZoneType]] = frozenset()
     isolation_enforced: bool = True
     required_equipment: frozenset[tuple[EsiAcuity, str]] = frozenset()
     capacities: frozenset[tuple[ZoneType, int]] = frozenset()
@@ -77,8 +112,31 @@ class CompiledRules(FrozenModel):
     rules_hash: str = ""
 
     def zone_types_for(self, acuity: EsiAcuity) -> frozenset[ZoneType]:
-        """Zone types an ``acuity`` patient may be placed in."""
+        """Zone types an ``acuity`` patient may be placed in to be worked up."""
         return frozenset(zt for (a, zt) in self.allowed_zone_types if a == acuity)
+
+    def ward_zone_types_for(self, acuity: EsiAcuity) -> frozenset[ZoneType]:
+        """Ward zone types an ``acuity`` patient may be ADMITTED into (M4).
+
+        Whitelist semantics, exactly like :meth:`zone_types_for`: empty means "may be
+        admitted nowhere", never "anywhere". An ED-only floor plan has no ward beds to
+        offer either way, so the two readings only diverge for a scenario that built a
+        ward and then forgot to say who may go in it — which should hold the patient in
+        the ED rather than silently admit them.
+        """
+        return frozenset(zt for (a, zt) in self.admission_zone_types if a == acuity)
+
+    def zone_types_for_stage(self, acuity: EsiAcuity, stage: str) -> frozenset[ZoneType]:
+        """The whitelist that judges a placement, chosen by the patient's care phase.
+
+        The one place the phase->whitelist mapping is written. Both enforcement points
+        — :func:`hospital.core.validation.validate` and the placement solver's
+        ``compat`` derivation — route through here, so they cannot drift on the
+        question of which rule applies any more than they can on what it says.
+        """
+        if stage == AWAITING_ADMISSION:
+            return self.ward_zone_types_for(acuity)
+        return self.zone_types_for(acuity)
 
     def equipment_for(self, acuity: EsiAcuity) -> frozenset[str]:
         """Equipment a bay must carry to receive an ``acuity`` patient."""
@@ -137,6 +195,7 @@ def rules_hash(rules: tuple[Rule, ...]) -> str:
 def compile_rules(rules: tuple[Rule, ...]) -> CompiledRules:
     """Compile a rule tuple into the indexed :class:`CompiledRules` kernel."""
     allowed: set[tuple[EsiAcuity, ZoneType]] = set()
+    admission: set[tuple[EsiAcuity, ZoneType]] = set()
     equipment: set[tuple[EsiAcuity, str]] = set()
     capacities: set[tuple[ZoneType, int]] = set()
     skills: set[tuple[str, frozenset[str]]] = set()
@@ -153,6 +212,8 @@ def compile_rules(rules: tuple[Rule, ...]) -> CompiledRules:
                 isolation_enforced = isolation_enforced or rule.isolation_enforced
             allowed |= set(rule.allowed_zone_types)
             equipment |= set(rule.required_equipment)
+        elif isinstance(rule, AdmissionRule):
+            admission |= set(rule.allowed_zone_types)
         elif isinstance(rule, CapacityRule):
             capacities.add((rule.zone_type, rule.max_occupancy))
         elif isinstance(rule, SkillRule):
@@ -162,6 +223,7 @@ def compile_rules(rules: tuple[Rule, ...]) -> CompiledRules:
 
     return CompiledRules(
         allowed_zone_types=frozenset(allowed),
+        admission_zone_types=frozenset(admission),
         isolation_enforced=isolation_enforced,
         required_equipment=frozenset(equipment),
         capacities=frozenset(capacities),
@@ -172,6 +234,7 @@ def compile_rules(rules: tuple[Rule, ...]) -> CompiledRules:
 
 
 __all__ = [
+    "AdmissionRule",
     "CapacityRule",
     "CompatibilityRule",
     "CompiledRules",

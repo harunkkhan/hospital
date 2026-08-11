@@ -8,6 +8,7 @@ module so scenario construction is never copy-pasted.
 from __future__ import annotations
 
 from hospital.core import (
+    AdmissionRule,
     Bay,
     BayId,
     BayState,
@@ -279,3 +280,95 @@ def decision_input(
 
 def zero() -> Duration:
     return Duration(0)
+
+
+# --------------------------------------------------------------- wards (M4 §3)
+# A two-ward building bolted onto `tiny_graph`'s hub: a scarce ICU and a roomy
+# med-surg, far enough apart on the graph that distance and preference disagree.
+# `icu-1` is BOTH the nearer bed and the wrong one for an ESI-3, which is what makes
+# it a test of the ordering rather than of either term alone.
+_WARD_NODES = (node("icu1", 0, 300), node("icu2", 0, 400), node("ms1", 0, 900))
+_WARD_EDGES = (
+    edge("gstat", "icu1", 2000),
+    edge("icu1", "icu2", 1000),
+    edge("gstat", "ms1", 20000),
+)
+
+
+def ward_layout() -> FloorLayout:
+    """`tiny_layout` plus two ICU beds and one med-surg bed, on one graph."""
+    base = tiny_layout()
+    beds = (
+        Bay(
+            id=BayId("icu-1"),
+            zone=ZoneId("z-icu"),
+            zone_type=ZoneType.ICU,
+            node=NodeId("icu1"),
+            serving_station=NodeId("gstat"),
+            isolation_capable=True,
+            equipment=frozenset({"monitor", "vent"}),
+        ),
+        Bay(
+            id=BayId("icu-2"),
+            zone=ZoneId("z-icu"),
+            zone_type=ZoneType.ICU,
+            node=NodeId("icu2"),
+            serving_station=NodeId("gstat"),
+            isolation_capable=True,
+            equipment=frozenset({"monitor", "vent"}),
+        ),
+        Bay(
+            id=BayId("ms-1"),
+            zone=ZoneId("z-ms"),
+            zone_type=ZoneType.MED_SURG,
+            node=NodeId("ms1"),
+            serving_station=NodeId("gstat"),
+            isolation_capable=True,
+            equipment=frozenset({"monitor"}),
+        ),
+    )
+    return FloorLayout(
+        graph=RouteGraph(
+            nodes=(*base.graph.nodes, *_WARD_NODES),
+            edges=(*base.graph.edges, *_WARD_EDGES),
+        ),
+        zones=(
+            *base.zones,
+            Zone(id=ZoneId("z-icu"), zone_type=ZoneType.ICU, capacity=2, floor=1),
+            Zone(id=ZoneId("z-ms"), zone_type=ZoneType.MED_SURG, capacity=1, floor=2),
+        ),
+        bays=(*base.bays, *beds),
+        stations=base.stations,
+        entrances=base.entrances,
+        imaging_nodes=base.imaging_nodes,
+        lab_nodes=base.lab_nodes,
+    )
+
+
+def ward_rules() -> tuple[Rule, ...]:
+    """`demo_rules` plus a permissive admission whitelist for every acuity."""
+    return (
+        *demo_rules(),
+        AdmissionRule(
+            allowed_zone_types=frozenset(
+                {
+                    (EsiAcuity.ESI1, ZoneType.ICU),
+                    (EsiAcuity.ESI1, ZoneType.MED_SURG),
+                    (EsiAcuity.ESI2, ZoneType.ICU),
+                    (EsiAcuity.ESI2, ZoneType.MED_SURG),
+                    (EsiAcuity.ESI3, ZoneType.ICU),
+                    (EsiAcuity.ESI3, ZoneType.MED_SURG),
+                    (EsiAcuity.ESI4, ZoneType.MED_SURG),
+                    (EsiAcuity.ESI5, ZoneType.MED_SURG),
+                }
+            )
+        ),
+    )
+
+
+def ward_compiled() -> CompiledRules:
+    return compile_rules(ward_rules())
+
+
+def all_free_ward_bays() -> tuple[BayState, ...]:
+    return (*all_free_bays(), bay_state("icu-1"), bay_state("icu-2"), bay_state("ms-1"))

@@ -9,6 +9,7 @@ import sys
 from _fixtures import (
     bay_state,
     demo_compiled,
+    demo_rules,
     patient,
     provider_task,
     staff_member,
@@ -16,6 +17,8 @@ from _fixtures import (
 )
 
 from hospital.core import (
+    AdmissionRule,
+    Bay,
     BayId,
     BayState,
     BayStatus,
@@ -34,6 +37,8 @@ from hospital.core import (
     TaskSpec,
     ValidationContext,
     Violation,
+    Zone,
+    ZoneId,
     ZoneType,
     compile_rules,
     validate,
@@ -291,6 +296,8 @@ _CAPACITY_SCRIPT = """
 from _fixtures import patient, tiny_er_layout
 
 from hospital.core import (
+    AdmissionRule,
+    Bay,
     BayId, CompiledRules, EsiAcuity, PatientId, Plan, PlanItem, ValidationContext, ZoneType,
     validate,
 )
@@ -333,3 +340,82 @@ def test_capacity_uses_minimum_across_hash_seeds() -> None:
     # the first frozenset entry (5) would miss it under some hash seeds.
     results = {_run(_CAPACITY_SCRIPT, seed) for seed in range(8)}
     assert results == {"True"}, f"effective cap was not the minimum under some seed: {results}"
+
+
+# --- M4 §3: the care phase selects which whitelist judges a placement ---
+
+
+def _ward_ctx(
+    *, inpatients: frozenset[PatientId] = frozenset(), bays: tuple[BayState, ...] = ()
+) -> ValidationContext:
+    """`tiny_er_layout` with one ICU bed bolted on, and a rule set that permits it."""
+    base = tiny_er_layout()
+    icu = Bay(
+        id=BayId("icu-1"),
+        zone=ZoneId("z-icu"),
+        zone_type=ZoneType.ICU,
+        node=base.bays[0].node,
+        serving_station=base.bays[0].serving_station,
+        isolation_capable=True,
+        equipment=frozenset({"monitor"}),
+    )
+    layout = base.model_copy(
+        update={
+            "bays": (*base.bays, icu),
+            "zones": (*base.zones, Zone(id=ZoneId("z-icu"), zone_type=ZoneType.ICU, capacity=1)),
+        }
+    )
+    rules = compile_rules(
+        (
+            *demo_rules(),
+            AdmissionRule(allowed_zone_types=frozenset({(EsiAcuity.ESI3, ZoneType.ICU)})),
+        )
+    )
+    return ValidationContext(
+        layout=layout,
+        bays=bays,
+        staff=(),
+        rules=rules,
+        patients=(patient("p3", EsiAcuity.ESI3),),
+        inpatients=inpatients,
+    )
+
+
+def test_a_patient_being_worked_up_may_not_be_placed_in_a_ward_bed() -> None:
+    """The ward whitelist is not reachable before the disposition that unlocks it.
+
+    ESI-3 is permitted in the ICU *as an admission*, and this is the same patient and
+    the same bed — only the phase differs. Judged under the ED rule, the ICU is not on
+    the list, so the placement is refused.
+    """
+    plan = Plan(items=(_assign("a", "p3", "icu-1"),))
+    assert "bay_incompatible" in _kinds(validate(plan, _ward_ctx()))
+
+
+def test_the_same_placement_is_feasible_once_the_patient_is_an_inpatient() -> None:
+    ctx = _ward_ctx(inpatients=frozenset({PatientId("p3")}))
+    plan = Plan(items=(_assign("a", "p3", "icu-1"),))
+    assert validate(plan, ctx) == ()
+
+
+def test_an_inpatient_may_not_be_placed_back_in_an_ed_bay() -> None:
+    """The wall runs both ways — an admitted patient does not re-enter the ED."""
+    ctx = _ward_ctx(inpatients=frozenset({PatientId("p3")}))
+    plan = Plan(items=(_assign("a", "p3", "bay-1"),))
+    assert "bay_incompatible" in _kinds(validate(plan, ctx))
+
+
+def test_a_housed_inpatient_keeps_their_bed_when_a_standing_plan_is_rejudged() -> None:
+    """The phase outlives the bay queue, which is what an operator override depends on.
+
+    ``api.overrides`` re-validates every standing assignment when a bay is closed. A
+    patient asleep in an ICU bed left the queue hours ago, so a phase read from the
+    queue alone would judge their bed by the ED whitelist and refuse the override —
+    the reason ``inpatients`` spans the whole care phase rather than just the wait.
+    """
+    ctx = _ward_ctx(
+        inpatients=frozenset({PatientId("p3")}),
+        bays=(bay_state("icu-1", BayStatus.OCCUPIED, "p3"),),
+    )
+    standing = Plan(items=(_assign("standing:icu-1", "p3", "icu-1"),))
+    assert validate(standing, ctx) == ()

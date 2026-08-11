@@ -83,6 +83,11 @@ def validation_context(world: World, rules: CompiledRules) -> ValidationContext:
     ``tasks``) alongside the dynamic projections — DECISIONS D8: the dynamic
     ``bays``/``staff`` alone cannot express acuity/isolation/skill checks, and
     an entity absent from the context is ALWAYS judged unknown.
+
+    ``inpatients`` is the care phase, read at apply time like every other dynamic
+    fact (M4). It decides which zone whitelist judges each placement, so a
+    solve-time snapshot would let a patient admitted since the solve be judged by
+    the ED rule.
     """
     return ValidationContext(
         layout=world.layout,
@@ -92,6 +97,7 @@ def validation_context(world: World, rules: CompiledRules) -> ValidationContext:
         patients=world.known_patients(),
         staff_members=world.roster(),
         tasks=world.live_task_specs(),
+        inpatients=world.inpatients(),
     )
 
 

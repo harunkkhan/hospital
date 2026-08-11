@@ -13,11 +13,14 @@ from typing import Any
 
 from _sim_fixtures import tiny_scenario
 
-from hospital.core import WARD_ZONE_TYPES, BayStatus, ZoneType
+from hospital.core import WARD_ZONE_TYPES, BayStatus, ZoneType, compile_rules
 from hospital.data.hospital import generate_hospital
 from hospital.data.scenario import FacilitySpec, FloorSpec, Scenario, ZoneQuota
 from hospital.sim import run_replication
-from hospital.sim.flow.ward import WARD_PREFERENCE, has_ward_beds, ward_beds
+from hospital.sim.experiment.replication import default_rules
+from hospital.sim.flow.ward import has_ward_beds, ward_beds
+from hospital.sim.policies.factory import Arm
+from hospital.solver.placement import WARD_PREFERENCE
 
 _SEED = 7
 
@@ -38,6 +41,24 @@ def _ward_floor(zone_type: ZoneType, beds: int) -> FloorSpec:
 def _with_wards(beds: int, *, hours: int = 24) -> Scenario:
     base = tiny_scenario(horizon_hours=hours, rate_per_hour=4.0)
     return base.model_copy(update={"upper_floors": (_ward_floor(ZoneType.MED_SURG, beds),)})
+
+
+def _two_wards(*, icu: int, med_surg: int, hours: int = 24) -> Scenario:
+    """A scarce ICU over a roomy med-surg — the floor plan where *which* ward matters.
+
+    A single-ward hospital cannot show the difference between the arms: every bed is
+    interchangeable, so first-available and the solver both just take one. Two wards of
+    different scarcity is the smallest building in which the choice is a choice.
+    """
+    base = tiny_scenario(horizon_hours=hours, rate_per_hour=4.0)
+    return base.model_copy(
+        update={
+            "upper_floors": (
+                _ward_floor(ZoneType.ICU, icu),
+                _ward_floor(ZoneType.MED_SURG, med_surg),
+            )
+        }
+    )
 
 
 def _events(jsonl: str) -> list[dict[str, Any]]:
@@ -225,12 +246,110 @@ def test_a_ward_bed_is_released_after_the_stay() -> None:
 
 
 def test_every_acuity_has_somewhere_to_be_admitted() -> None:
-    """A missing preference row would board that acuity forever, silently."""
+    """A missing row would board that acuity forever, silently.
+
+    Both halves matter and they fail differently. A missing *permission* row is fatal:
+    the whitelist is closed, so the validator refuses every bed and the patient holds
+    an ED bay until the horizon. A missing *preference* row only means the beds that
+    acuity may use are all ranked last — worse placement, not no placement — which is
+    why the preference is the solver's and the permission is the rule's.
+    """
     from hospital.core import EsiAcuity
 
+    rules = compile_rules(default_rules())
     for esi in EsiAcuity:
+        permitted = rules.ward_zone_types_for(esi)
+        assert permitted, f"ESI-{int(esi)} may be admitted nowhere"
+        assert permitted <= WARD_ZONE_TYPES
         assert WARD_PREFERENCE.get(esi), f"ESI-{int(esi)} has no ward preference"
-        assert set(WARD_PREFERENCE[esi]) <= WARD_ZONE_TYPES
+        assert set(WARD_PREFERENCE[esi]) <= permitted
+
+
+def test_an_admitted_patient_is_never_granted_an_ed_bay() -> None:
+    """The care phase is a wall, not a preference: the two populations cannot cross.
+
+    Every ``bay_assigned`` in a warded run is checked against the phase the patient was
+    in when it landed — their second grant is the admission — so a solver or an
+    operator that offered an admitted patient a fast-track bay would be caught here
+    rather than producing a plausible-looking run in which the ED never empties.
+    """
+    scenario = _with_wards(beds=8)
+    log = run_replication(scenario, "baseline", _SEED).event_log_jsonl
+    layout = generate_hospital(scenario.hospital())
+    ward_ids = {bay.id.root for bay in layout.bays if bay.zone_type in WARD_ZONE_TYPES}
+
+    admitted = {
+        str(e["patient"])
+        for e in _kinds(log, "disposition_decided")
+        if str(e["disposition"]) == "admit"
+    }
+    seen: dict[str, int] = {}
+    checked = 0
+    for event in _kinds(log, "bay_assigned"):
+        patient, bay = str(event["patient"]), str(event["bay"])
+        seen[patient] = seen.get(patient, 0) + 1
+        if seen[patient] == 1:
+            assert bay not in ward_ids, f"{patient} was worked up in a ward bed"
+        elif patient in admitted:
+            checked += 1
+            assert bay in ward_ids, f"admitted {patient} was granted ED bay {bay}"
+    assert checked, "no admitted patient was ever granted a bed"
+
+
+def test_the_solver_keeps_the_icu_for_the_acuity_that_needs_it() -> None:
+    """The M4 §3 claim, end to end: hospital-wide placement beats first-available.
+
+    Both arms see the identical realized week under CRN, so the difference is the
+    decision and nothing else. The baseline scans free beds in ``BayId`` order, and the
+    ICU floor sorts first — so an ESI-3 who merely *may* use an ICU bed takes one, and
+    a critical patient arriving later boards in the ED behind them. The solver ranks
+    med-surg first for that ESI-3, which costs it a longer escort and buys back the bed.
+
+    Asserted as a comparison, not as "the solver never puts an ESI-3 in the ICU": with
+    every med-surg bed full it should, and does (place-first dominates preference).
+    """
+    scenario = _two_wards(icu=2, med_surg=10)
+    icu_ids = {
+        bay.id.root
+        for bay in generate_hospital(scenario.hospital()).bays
+        if bay.zone_type is ZoneType.ICU
+    }
+
+    def icu_grants_to_low_acuity(arm: Arm) -> int:
+        log = run_replication(scenario, arm, _SEED).event_log_jsonl
+        esi = {str(e["patient"]): int(e["esi"]) for e in _kinds(log, "triage_completed")}
+        return sum(
+            1
+            for e in _kinds(log, "bay_assigned")
+            if str(e["bay"]) in icu_ids and esi.get(str(e["patient"]), 0) >= 3
+        )
+
+    baseline = icu_grants_to_low_acuity("baseline")
+    optimized = icu_grants_to_low_acuity("optimized")
+    assert baseline > 0, "the baseline never squatted an ICU bed — the fixture proves nothing"
+    assert optimized < baseline, (
+        f"the solver filled the ICU with low-acuity patients as readily as "
+        f"first-available did: {optimized} vs {baseline}"
+    )
+
+
+def test_a_ward_grant_comes_through_the_seam() -> None:
+    """The bed is a *decision*, so the log must attribute it to a decision maker.
+
+    Under the greedy claim this event was stamped by the ward module itself, which is
+    the tell that no policy chose it and no override could have. Both arms are checked
+    because the point is that the grant travels the same path either way.
+    """
+    scenario = _with_wards(beds=4)
+    layout = generate_hospital(scenario.hospital())
+    ward_ids = {bay.id.root for bay in layout.bays if bay.zone_type in WARD_ZONE_TYPES}
+
+    arms: tuple[tuple[Arm, str], ...] = (("baseline", "baseline"), ("optimized", "solver"))
+    for arm, origin in arms:
+        log = run_replication(scenario, arm, _SEED).event_log_jsonl
+        grants = [e for e in _kinds(log, "bay_assigned") if str(e["bay"]) in ward_ids]
+        assert grants, f"no ward bed was granted in the {arm} arm"
+        assert {str(e["by"]) for e in grants} == {origin}
 
 
 def test_ward_bed_lookup_is_deterministic_and_status_free() -> None:

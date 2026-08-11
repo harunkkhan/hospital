@@ -32,9 +32,15 @@ from hospital.core import (
 from hospital.solver import RoutingOracle
 
 
-def _compatible(bay: Bay, patient: Patient, rules: CompiledRules) -> bool:
-    """The one compiled-rule compatibility judgment (same kernel the validator uses)."""
-    if bay.zone_type not in rules.zone_types_for(patient.esi):
+def _compatible(bay: Bay, patient: Patient, rules: CompiledRules, stage: str) -> bool:
+    """The one compiled-rule compatibility judgment (same kernel the validator uses).
+
+    Phase-aware for the same reason the solver's is: the baseline must be competent,
+    not crippled (doc 04 nuance 4.6), and a baseline that offered a just-triaged
+    patient an ICU bed would have its plans rejected by the validator forever rather
+    than merely placing them worse.
+    """
+    if bay.zone_type not in rules.zone_types_for_stage(patient.esi, stage):
         return False
     if rules.equipment_for(patient.esi) - bay.equipment:
         return False
@@ -54,6 +60,11 @@ def _service_order(waiting: tuple[WaitingPatient, ...]) -> list[WaitingPatient]:
 @dataclass(frozen=True)
 class FirstAvailablePlacement:
     """First FREE compatible bay in fixed ``BayId`` order, per waiting patient.
+
+    Serves both care phases off the one queue: an ED placement and an admission are
+    the same greedy scan, differing only in which whitelist ``_compatible`` consults.
+    That is the honest baseline for M4 — a floor that takes the first bed that fits,
+    with no view of which ward the next ESI-1 will need.
 
     Capacity discipline: a ``CapacityRule`` can cap a zone type BELOW its
     physical bay count, and the validator counts current occupants PLUS the
@@ -90,7 +101,7 @@ class FirstAvailablePlacement:
                     b
                     for b in free
                     if b not in taken
-                    and _compatible(bay_by_id[b], w.patient, self.rules)
+                    and _compatible(bay_by_id[b], w.patient, self.rules, w.stage)
                     and within_capacity(bay_by_id[b])
                 ),
                 None,

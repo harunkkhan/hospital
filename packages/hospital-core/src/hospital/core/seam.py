@@ -15,7 +15,7 @@ cancelled and recreated (which would thrash the sim and UI).
 
 from __future__ import annotations
 
-from typing import Literal, Protocol, runtime_checkable
+from typing import Final, Literal, Protocol, runtime_checkable
 
 from pydantic import Field, model_validator
 
@@ -40,9 +40,28 @@ TaskKind = Literal[
 ]
 PlanItemKind = Literal["assign_bay", "sequence", "dispatch", "clean", "discharge", "staffing"]
 
+# The two reasons a patient is in the bay queue, and the whole of the stage
+# vocabulary. They live in ``core`` because three packages have to agree on them:
+# ``sim`` writes the stage when it enqueues, ``solver`` reads it to decide which
+# bays are even candidates, and ``core.validation`` reads it to judge the grant.
+# Through M3 the ED string was written literally in ``sim.flow.patient`` and
+# restated as a set in ``solver.placement``, with a comment on each warning that a
+# stage outside the other's vocabulary would be silently invisible. One stage
+# survived that; two would not.
+WAITING_FOR_BAY: Final[str] = "waiting_for_bay"
+AWAITING_ADMISSION: Final[str] = "awaiting_admission"
+
 
 class WaitingPatient(FrozenModel):
-    """A patient waiting at some stage, with how long they have waited."""
+    """A patient waiting at some stage, with how long they have waited.
+
+    ``stage`` is the patient's **care phase**, and it is what makes one queue serve
+    two questions: :data:`WAITING_FOR_BAY` is a patient who needs an ED bay to be
+    worked up in, :data:`AWAITING_ADMISSION` one whose workup ended in an admit and
+    who now needs an inpatient bed. They are not interchangeable — an ESI-2 eligible
+    for a resus bay is not thereby eligible for an ICU bed — so the phase selects
+    which whitelist judges the placement, in the solver and in the validator alike.
+    """
 
     patient: Patient
     waited: Duration
@@ -265,6 +284,8 @@ class ForgetfulMonitor(Protocol):
 
 
 __all__ = [
+    "AWAITING_ADMISSION",
+    "WAITING_FOR_BAY",
     "BayState",
     "DecisionInput",
     "DecisionResponse",

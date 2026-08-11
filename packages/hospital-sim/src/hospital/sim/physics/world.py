@@ -169,6 +169,7 @@ class World:
 
         self._patients: dict[PatientId, Patient] = {}
         self._patient_pos: dict[PatientId, NodeId] = {}
+        self._admitted: set[PatientId] = set()
 
         self._queue: list[_QueueEntry] = []
         self._queue_seq = 0
@@ -496,6 +497,28 @@ class World:
 
     def known_patients(self) -> tuple[Patient, ...]:
         return tuple(self._patients[k] for k in sorted(self._patients, key=lambda i: i.root))
+
+    def mark_admitted(self, pid: PatientId) -> None:
+        """Record that ``pid``'s disposition was ADMIT — they are now an inpatient (M4).
+
+        One-way, like the disposition itself: nothing in the model un-admits a patient,
+        so the flag outlives both the bay queue and the ward stay.
+        """
+        self._admitted.add(pid)
+
+    def inpatients(self) -> frozenset[PatientId]:
+        """Every patient in the inpatient care phase — the ward-whitelist population.
+
+        Deliberately **not** derived from who is queued. A patient is an inpatient from
+        the ADMIT disposition onward, whether they are still boarding in an ED bay,
+        already in a ward bed, or between the two. The queue only knows about the
+        middle of that, and the validator is asked about the ends of it too: an
+        operator closing a corridor re-validates every standing assignment, including
+        the ICU beds of patients who left the queue hours ago, and judging those
+        against the ED whitelist would refuse every such override in a hospital that
+        has wards.
+        """
+        return frozenset(self._admitted)
 
     def patient_at(self, pid: PatientId) -> NodeId:
         pos = self._patient_pos.get(pid)

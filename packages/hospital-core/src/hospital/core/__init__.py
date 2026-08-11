@@ -87,6 +87,7 @@ from hospital.core.rng import (
     sample_poisson_arrivals,
 )
 from hospital.core.rules import (
+    AdmissionRule,
     CapacityRule,
     CompatibilityRule,
     CompiledRules,
@@ -97,6 +98,8 @@ from hospital.core.rules import (
     rules_hash,
 )
 from hospital.core.seam import (
+    AWAITING_ADMISSION,
+    WAITING_FOR_BAY,
     BayState,
     DecisionInput,
     DecisionResponse,
@@ -133,13 +136,16 @@ from hospital.core.vitals import (
 )
 
 __all__ = [
+    "AWAITING_ADMISSION",
     "ED_ZONE_TYPES",
     "KPI_KEYS",
     "MICROS_PER_SEC",
     "NEWS2_PARAMETERS",
     "STAFF_FRAC_KEYS",
+    "WAITING_FOR_BAY",
     "WARD_ZONE_TYPES",
     "Activity",
+    "AdmissionRule",
     "ArrivalMode",
     "Band",
     "Bay",

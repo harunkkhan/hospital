@@ -4,9 +4,12 @@ Registered beside CP-SAT (rule 8's "two real backends"), it is also CP-SAT's
 warm-start seed and the OR-Tools-free fallback: it has **no ``ortools`` import**,
 so importing/using it never pulls OR-Tools.
 
-It reuses the *same* ``w[p,b]`` and ``compat`` derivation as CP-SAT (no second
-definition, rules 1/6): order ``P`` by ``sequencing.priority_score`` descending,
-then greedily take ``argmin_b w[p,b]`` among free / compatible / zone-open bays.
+It reads the *same* ``placement_weights`` table and ``candidates`` compat set as
+CP-SAT (no second definition, rules 1/6), so it is a different search over the one
+objective rather than a second objective: order ``P`` by
+``sequencing.priority_score`` descending, then greedily take ``argmin_b w[p,b]``
+among free / compatible / zone-open bays. Pricing each pair by its patient's care
+phase — an ED placement or an admission — therefore comes for free.
 Greedy is myopic (it can paint a later high-acuity patient into a corner), so
 ``objective_value = None`` and status ``HEURISTIC`` -- no optimality claim. Like
 every backend it self-validates before returning and never repairs.
@@ -28,13 +31,11 @@ from hospital.core import (
     PlanItem,
     ZoneType,
 )
-from hospital.solver.objective import ObjectiveConfig, assignment_coeffs
+from hospital.solver.objective import ObjectiveConfig
 from hospital.solver.placement import (
-    assignment_weight,
     candidates,
     occupied_by_zone_type,
-    residual_stays,
-    scarcity_by_zone,
+    placement_weights,
     self_validate,
     zone_remaining,
 )
@@ -62,7 +63,6 @@ class HeuristicPlacement:
         del time_cap, warm_start  # greedy is a single deterministic pass
         started_ns = time.perf_counter_ns()
         patients, bays, compat = candidates(di, rules)
-        layout = di.layout
         waited = {wp.patient.id: wp.waited for wp in di.waiting}
 
         order = sorted(
@@ -78,11 +78,13 @@ class HeuristicPlacement:
             ),
         )
 
-        stays = residual_stays(di, expected_stay)
+        # The ONE weight table, snapshotted before any placement — so the greedy order
+        # neither re-prices scarcity as it fills bays (which CP-SAT does not do either)
+        # nor prices a pair differently from the exact backend it stands in for.
+        weight = placement_weights(
+            di, patients, bays, compat, oracle, config, expected_stay=expected_stay
+        )
         remaining_by_zone = zone_remaining(di)
-        # Scarcity is snapshotted before any placement, so the greedy order does not
-        # make each successive bay look scarcer than the CP-SAT model saw it.
-        scarcity = scarcity_by_zone(di)
         remaining_by_zt: dict[ZoneType, int] = {}
         occupied_zt = occupied_by_zone_type(di)
         for bay in bays:
@@ -93,7 +95,6 @@ class HeuristicPlacement:
         taken: set[BayId] = set()
         assignments: list[tuple[PatientId, BayId]] = []
         for p in order:
-            coeffs = assignment_coeffs(config, p.esi)
             open_bays = [
                 b
                 for b in bays
@@ -104,21 +105,7 @@ class HeuristicPlacement:
             ]
             if not open_bays:
                 continue
-            best = min(
-                open_bays,
-                key=lambda b: (
-                    assignment_weight(
-                        p,
-                        b,
-                        oracle,
-                        layout,
-                        coeffs,
-                        expected_stay=stays.get(p.id),
-                        scarcity_by_zone=scarcity,
-                    ),
-                    b.id.root,
-                ),
-            )
+            best = min(open_bays, key=lambda b: (weight[(p.id, b.id)], b.id.root))
             assignments.append((p.id, best.id))
             taken.add(best.id)
             remaining_by_zone[best.zone] -= 1
