@@ -18,7 +18,26 @@ from hospital.core.enums import ArrivalMode, EsiAcuity, StaffRole, ZoneType
 from hospital.core.graph import RouteGraph
 from hospital.core.ids import BayId, NodeId, PatientId, StaffId, ZoneId
 from hospital.core.models import FrozenModel
-from hospital.core.time import SimTime
+from hospital.core.time import Duration, SimTime, minutes
+
+# Door-to-provider targets by acuity — the **soft** SLA a ``care_deadline`` encodes.
+# 🟡-tunable data, in the same family as the acuity urgency curve: these are the
+# conventional ESI door-to-provider expectations (ESI-1 immediate, then 10/30/60/120
+# minutes), stated as data so a scenario can disagree with them without anyone
+# re-deriving the acuity inversion.
+#
+# **Soft, and nothing enforces it.** Missing a deadline is not a violation the plan
+# validator can refuse — the engine cannot conjure a physician — and no lever prices it,
+# because pricing it would silently change every existing decision. It is a *measurement
+# reference*: the acuity-relative answer to "was this patient seen in time", available to
+# analysis and to an operator without either having to restate the table.
+CARE_SLA_BY_ACUITY: dict[EsiAcuity, Duration] = {
+    EsiAcuity.ESI1: minutes(0),
+    EsiAcuity.ESI2: minutes(10),
+    EsiAcuity.ESI3: minutes(30),
+    EsiAcuity.ESI4: minutes(60),
+    EsiAcuity.ESI5: minutes(120),
+}
 
 
 class WorkupNeeds(FrozenModel):
@@ -41,6 +60,23 @@ class Patient(FrozenModel):
     complaint: str
     isolation_required: bool
     workup: WorkupNeeds
+
+    @property
+    def care_deadline(self) -> SimTime:
+        """When this patient should have reached a provider — ``arrival + SLA(esi)``.
+
+        A **property, not a field**, because the spec calls it *derived* and because a
+        stored copy would be a second source of truth for something already implied by
+        two values that cannot change: the patient is frozen, so the deadline is a pure
+        function of the record. It also keeps it off every wire and out of every
+        serialized byte, so no event log, golden trace, or generated TypeScript contract
+        moves for a quantity nobody transmits.
+
+        Absolute sim-time rather than a remaining-time countdown, for the same reason
+        every other instant here is: a countdown would need a "now" to be meaningful and
+        would therefore be a different number every time it was read.
+        """
+        return self.arrival_time + CARE_SLA_BY_ACUITY[self.esi]
 
 
 class Bay(FrozenModel):
@@ -105,6 +141,7 @@ class FloorLayout(FrozenModel):
 
 
 __all__ = [
+    "CARE_SLA_BY_ACUITY",
     "Bay",
     "FloorLayout",
     "Patient",

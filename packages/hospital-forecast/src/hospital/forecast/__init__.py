@@ -55,6 +55,7 @@ from hospital.forecast.service_time import (
     fit_service_time_table,
     static_service_table,
 )
+from hospital.forecast.staffing import block_grid, role_demand
 from hospital.forecast.training import (
     GbtParams,
     TrainConfig,
@@ -91,6 +92,7 @@ __all__ = [
     "VitalsWindowFeatures",
     "WeekData",
     "WindowFeatures",
+    "block_grid",
     "bundle_from_models",
     "fit_arrival_intensity",
     "fit_deterioration_model",
@@ -102,6 +104,7 @@ __all__ = [
     "online_vitals_features",
     "patient_features",
     "retrain_loop",
+    "role_demand",
     "rolling_origin_splits",
     "static_bundle",
     "static_service_table",
