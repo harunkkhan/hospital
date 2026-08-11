@@ -1,4 +1,4 @@
-"""The closed, versioned KPI contract (30 keys).
+"""The closed, versioned KPI contract (31 keys).
 
 ``analysis.fold`` produces a :class:`KpiVector`; ``sim.experiment.scorecard`` and
 ``api.metrics`` consume it. A new KPI is a new key here (versioned), so downstream
@@ -42,7 +42,15 @@ _LOS_KEYS: Final[tuple[str, ...]] = tuple(
 # :mod:`hospital.core.cost` predicted would have to be added to this contract when money
 # finally landed — a versioned change, made here deliberately.
 #
-# `boarding_hours_total` is measured with the horizon as a CENSOR, not as a filter:
+# `deadline_breach_hours_total` is patient-hours spent waiting past `care_deadline` for a
+# provider. It is the extensive, *priceable* form of "was this patient seen in time", and it
+# is acuity-weighted by construction rather than by a separate weight: an ESI-1's deadline is
+# immediate and an ESI-5's is two hours, so the same hour of waiting breaches sooner for a
+# sicker patient. It exists because a cost model that prices staff hours and not patient
+# waiting recommends under-staffing -- measured, in the staffing loop harness, before this
+# key existed.
+#
+# Both it and `boarding_hours_total` are measured with the horizon as a CENSOR, not a filter:
 # a patient still boarding when the week ends contributes the hours they actually
 # waited. `boarding_time_s_mean` conditions on reaching a bed, which is safe only in a
 # model where everyone eventually does. Once ward capacity can run out (M4), that
@@ -52,6 +60,7 @@ EXTENSIVE_KEYS: Final[tuple[str, ...]] = (
     "staff_hours_paid",
     "bay_hours_occupied",
     "boarding_hours_total",
+    "deadline_breach_hours_total",
 )
 
 KPI_KEYS: Final[tuple[str, ...]] = (

@@ -1,6 +1,6 @@
 """``compute_kpis`` — fold one ``EventLog`` into the closed ``core.kpi.KpiVector``.
 
-Emits EXACTLY the 30 ``core.kpi.KPI_KEYS`` (doc 05 §4.1 / D8): an empty cohort
+Emits EXACTLY the 31 ``core.kpi.KPI_KEYS`` (doc 05 §4.1 / D8): an empty cohort
 (e.g. an ESI stratum with zero completed patients) is ``NaN``, never omitted,
 so ``KpiVector``'s closed contract always validates. Counts
 (``completions_per_week``, ``wip_end_of_week``) use the FULL window; every
@@ -29,6 +29,7 @@ from hospital.core import (
     OperatingWeek,
     StaffMember,
     ZeroTimeCycle,
+    care_deadline_for,
 )
 
 __all__ = ["compute_kpis"]
@@ -80,6 +81,29 @@ def compute_kpis(
     ]
     values["door_to_provider_s_mean"] = mean(provider_samples)
     values["door_to_provider_s_p90"] = percentile(provider_samples, 0.90)
+
+    # 31: deadline_breach_hours_total — patient-hours waited past `care_deadline` for a
+    # provider, the extensive and *priceable* form of "was this patient seen in time".
+    #
+    # Acuity-weighted by construction rather than by a separate weight: the deadline itself
+    # is the acuity term (immediate for ESI-1, two hours for ESI-5), so the same hour of
+    # waiting breaches sooner for a sicker patient. That is why this is the right thing to
+    # price and `door_to_provider_s_mean` is not — a mean cannot be multiplied by a rate, and
+    # an unweighted one treats an ESI-1's hour and an ESI-5's as the same loss.
+    #
+    # Censored at the window end, like `boarding_hours_total` and for the same reason: a
+    # patient still waiting when the week ends contributes the hours they actually waited.
+    # Counting only those who were eventually seen would make a gridlocked week — where the
+    # longest waits never resolve — report *less* breach than a calm one.
+    breach_s = 0.0
+    for p in c_wait:
+        if p.esi is None:
+            continue  # never triaged, so no acuity and no deadline to breach
+        deadline = care_deadline_for(p.arrival, p.esi)
+        seen = p.provider_start if p.provider_start is not None else window.end
+        if seen > deadline:
+            breach_s += clip_seconds(deadline, seen, m)
+    values["deadline_breach_hours_total"] = breach_s / 3600.0
 
     # 7-16: los_s_{mean,p90}_by_esi_{1..5} — C_los(k), right-censored WIP excluded.
     for k in (1, 2, 3, 4, 5):

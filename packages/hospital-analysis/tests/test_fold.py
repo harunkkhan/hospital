@@ -11,10 +11,13 @@ from hospital.analysis.fold import compute_kpis
 from hospital.core import (
     KPI_KEYS,
     DischargeCompleted,
+    EsiAcuity,
     EventLog,
     OperatingWeek,
     PatientArrived,
     PatientId,
+    SimTime,
+    TriageCompleted,
     hours,
 )
 from hospital.core.enums import ArrivalMode
@@ -26,7 +29,7 @@ def test_emits_exactly_kpi_keys() -> None:
     roster = tiny_roster()
     vec = compute_kpis(log, layout, roster, warmup=hours(0))
     assert set(vec.values.keys()) == set(KPI_KEYS)
-    assert len(vec.values) == 30
+    assert len(vec.values) == 31
 
 
 def test_hand_computed_values_match() -> None:
@@ -171,3 +174,36 @@ def test_boarding_hours_total_counts_a_patient_who_never_reached_a_bed() -> None
     vec = compute_kpis(build_sample_log(), tiny_layout(), tiny_roster(), warmup=hours(0))
     assert math.isnan(vec.values["boarding_time_s_mean"])
     assert vec.values["boarding_hours_total"] >= 0.0
+
+
+def test_deadline_breach_counts_hours_waited_past_the_acuity_deadline() -> None:
+    """Acuity-weighted by the deadline itself, not by a second weight.
+
+    An ESI-1 is due immediately and an ESI-5 in two hours, so the same wall-clock wait
+    breaches by different amounts — which is what makes this the priceable form of "was this
+    patient seen in time" and an unweighted mean not.
+    """
+    vec = compute_kpis(build_sample_log(), tiny_layout(), tiny_roster(), warmup=hours(0))
+    breach = vec.values["deadline_breach_hours_total"]
+    assert breach >= 0.0
+    assert not math.isnan(breach)
+
+
+def test_a_patient_never_seen_still_contributes_their_wait() -> None:
+    """Censored at the horizon, like boarding, and for the same anti-gaming reason.
+
+    Counting only patients who eventually reached a provider would make a gridlocked week —
+    where the longest waits never resolve — report *less* breach than a calm one.
+    """
+    arrival = SimTime(0)
+    log = EventLog()
+    log.append(
+        PatientArrived(occurred_at=arrival, patient=PatientId("stuck"), mode=ArrivalMode.WALK_IN)
+    )
+    log.append(TriageCompleted(occurred_at=arrival, patient=PatientId("stuck"), esi=EsiAcuity.ESI1))
+    week = OperatingWeek(start=SimTime(0), end=SimTime(hours(4).root))
+    vec = compute_kpis(log, tiny_layout(), tiny_roster(), window=week, warmup=hours(0))
+    # ESI-1 is due immediately and never seen, so the whole window is breach.
+    assert vec.values["deadline_breach_hours_total"] == 4.0
+    # ...and the conditioned mean has nothing to say about them at all.
+    assert math.isnan(vec.values["door_to_provider_s_mean"])

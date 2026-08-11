@@ -69,6 +69,15 @@ class CostRates(FrozenModel):
     # x completions_per_week — earned, so it enters the total negatively. Set to 0 to
     # price pure operating cost with no revenue side.
     completion_revenue_cents: int = Field(ge=0)
+    # x deadline_breach_hours_total — what an hour of a patient waiting past their
+    # acuity's care deadline costs. Already acuity-weighted by the deadline itself, so
+    # there is no second weight here.
+    #
+    # **Without this the model advises under-staffing**, and that was measured rather than
+    # feared: pricing staff hours and bed hours but not patient waiting made the cheapest
+    # roster in the staffing sweep the one with 53% worse door-to-provider. Set it to 0 to
+    # get the old, one-sided arithmetic back deliberately.
+    deadline_breach_hour_cents: int = Field(ge=0)
 
 
 @runtime_checkable
