@@ -17,6 +17,7 @@ from hospital.analysis.compare import (
     paired_bootstrap,
     paired_scalar_contrast,
 )
+from hospital.analysis.cost import CostBreakdown, WeeklyCost, walking_cost
 from hospital.analysis.fold import compute_kpis
 from hospital.analysis.report import ArmSummary, Metrics, build_metrics, fold_arm, write_metrics
 from hospital.analysis.utilization import (
@@ -41,6 +42,7 @@ __all__ = [
     "BottleneckReport",
     "ComparisonResult",
     "Contrast",
+    "CostBreakdown",
     "Metrics",
     "PatientWaitProfile",
     "ResourceWait",
@@ -49,6 +51,7 @@ __all__ = [
     "StageSeconds",
     "UtilizationReport",
     "WaitDecomposition",
+    "WeeklyCost",
     "build_metrics",
     "classify_staff_seconds",
     "compute_kpis",
@@ -59,5 +62,6 @@ __all__ = [
     "paired_bootstrap",
     "paired_scalar_contrast",
     "utilization_report",
+    "walking_cost",
     "write_metrics",
 ]

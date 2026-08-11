@@ -89,6 +89,11 @@ class UtilizationReport(FrozenModel):
     per_staff: tuple[StaffSecondBudget, ...]
     fractions: Mapping[str, float]  # staff_frac_* pooled over ALL staff, sums to 1.0
     util_by_role: Mapping[str, float]  # "provider_util", "nurse_util", ...
+    # The shared denominator behind every fraction above: total paid staff-seconds over
+    # the measurement window. Exposed because a *fraction* cannot be priced — turning
+    # "6% of staff time was spent walking" into money needs the hours that 6% is of
+    # (M4b). It is the one quantity that makes the whole budget extensive.
+    on_shift_s: float = 0.0
 
 
 def _service_seconds(iv: ServiceInterval, m: TimeWindow) -> float:
@@ -217,4 +222,5 @@ def utilization_report(
         per_staff=per_staff,
         fractions=fractions,
         util_by_role=util_by_role,
+        on_shift_s=on_shift_total,
     )

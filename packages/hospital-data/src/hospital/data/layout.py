@@ -396,12 +396,20 @@ def generate_floor(facility: FacilitySpec) -> FloorLayout:
         for build in builds
         for draft in build.bays
     )
-    zones = (
-        *(build.zone for build in builds),
-        Zone(id=ZoneId("triage"), zone_type=ZoneType.TRIAGE, capacity=facility.triage_rooms),
-        Zone(id=ZoneId("imaging"), zone_type=ZoneType.IMAGING, capacity=facility.imaging_suites),
-        Zone(id=ZoneId("lab"), zone_type=ZoneType.LAB, capacity=facility.lab_stations),
+    # A special zone the spec allocated nothing to is omitted rather than carried as a
+    # capacity-0 entry: a ward floor asks for no triage, and a "triage zone" with no rooms
+    # in it would show up as an emergency department upstairs. Both shipped ER scenarios
+    # allocate all three, so their zone tuples are unchanged.
+    specials_zones = tuple(
+        Zone(id=ZoneId(name), zone_type=zone_type, capacity=capacity)
+        for name, zone_type, capacity in (
+            ("triage", ZoneType.TRIAGE, facility.triage_rooms),
+            ("imaging", ZoneType.IMAGING, facility.imaging_suites),
+            ("lab", ZoneType.LAB, facility.lab_stations),
+        )
+        if capacity > 0
     )
+    zones = (*(build.zone for build in builds), *specials_zones)
 
     graph = RouteGraph(
         nodes=tuple(sorted(nodes, key=lambda n: n.id.root)),

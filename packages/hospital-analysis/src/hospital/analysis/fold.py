@@ -1,6 +1,6 @@
 """``compute_kpis`` — fold one ``EventLog`` into the closed ``core.kpi.KpiVector``.
 
-Emits EXACTLY the 27 ``core.kpi.KPI_KEYS`` (doc 05 §4.1 / D8): an empty cohort
+Emits EXACTLY the 30 ``core.kpi.KPI_KEYS`` (doc 05 §4.1 / D8): an empty cohort
 (e.g. an ESI stratum with zero completed patients) is ``NaN``, never omitted,
 so ``KpiVector``'s closed contract always validates. Counts
 (``completions_per_week``, ``wip_end_of_week``) use the FULL window; every
@@ -92,23 +92,29 @@ def compute_kpis(
     # 21-27 (and the shared numerator for #17): the ONE utilization computation.
     util = utilization_report(log, roster, window=window, warmup=warmup, index=idx)
     values["staff_minutes_walked"] = sum(b.walk_s for b in util.per_staff) / 60.0
+    # 28: the shared denominator behind every staff_frac_*, kept as hours. A fraction
+    # cannot be priced; the hours it is a fraction of can.
+    values["staff_hours_paid"] = util.on_shift_s / 3600.0
     values["provider_util"] = util.util_by_role.get("provider_util", float("nan"))
     values["nurse_util"] = util.util_by_role.get("nurse_util", float("nan"))
     values.update(util.fractions)
 
-    # 18: bay_utilization = occupied-bay-seconds / (N_bays * |M|), warmup-windowed.
+    # 18 + 29: bay_utilization = occupied-bay-seconds / (N_bays * |M|), warmup-windowed,
+    # and the same numerator kept in hours. The ratio alone cannot be priced, and it is
+    # also ambiguous once a building has floors: 60% of 76 ED bays and 60% of 150
+    # hospital bays are the same number and very different hospitals.
     n_bays = len(layout.bays)
-    if n_bays == 0:
-        values["bay_utilization"] = float("nan")
-    else:
-        occupied = 0.0
-        for cycles in idx.bays.values():
-            for cyc in cycles:
-                if cyc.bay_arrival is None:
-                    continue
-                end = cyc.clean_start if cyc.clean_start is not None else window.end
-                occupied += clip_seconds(cyc.bay_arrival, end, m)
-        values["bay_utilization"] = occupied / (n_bays * m.duration().to_seconds())
+    occupied = 0.0
+    for cycles in idx.bays.values():
+        for cyc in cycles:
+            if cyc.bay_arrival is None:
+                continue
+            end = cyc.clean_start if cyc.clean_start is not None else window.end
+            occupied += clip_seconds(cyc.bay_arrival, end, m)
+    values["bay_hours_occupied"] = occupied / 3600.0
+    values["bay_utilization"] = (
+        float("nan") if n_bays == 0 else occupied / (n_bays * m.duration().to_seconds())
+    )
 
     # 19: turnaround_time_s_mean = mean(clean_end - disposition_decided), clean_end in M.
     turnaround_samples = [
@@ -122,14 +128,34 @@ def compute_kpis(
     values["turnaround_time_s_mean"] = mean(turnaround_samples)
 
     # 20: boarding_time_s_mean = mean(exit - disposition) for ADMIT, disposition in M.
-    boarding_samples = [
-        (p.exit - p.disposition_time).to_seconds()
+    # `(decided, exit)` pairs rather than the patient records, so the non-None
+    # disposition time survives into both metrics below as a narrowed value.
+    boarded = [
+        (p.disposition_time, p.exit)
         for p in patients
         if p.disposition == DispositionKind.ADMIT
         and p.disposition_time is not None
         and m.contains(p.disposition_time)
-        and p.exit is not None
     ]
-    values["boarding_time_s_mean"] = mean(boarding_samples)
+    values["boarding_time_s_mean"] = mean(
+        [(exit_at - decided).to_seconds() for decided, exit_at in boarded if exit_at is not None]
+    )
+
+    # 30: boarding_hours_total — the same wait, CENSORED at the horizon instead of
+    # conditioned on reaching a bed, and summed rather than averaged.
+    #
+    # The mean above is the M1 metric and stays exactly as it was, but it answers a
+    # question that stopped being safe when wards gained finite capacity: it drops every
+    # patient who never got a bed. Under a full hospital those are the longest waits, so
+    # excluding them makes a gridlocked week report a *shorter* mean boarding time than a
+    # roomy one. Counting the hours a still-boarding patient has actually waited when the
+    # week ends is the version that cannot be gamed by running out of beds.
+    values["boarding_hours_total"] = (
+        sum(
+            clip_seconds(decided, exit_at if exit_at is not None else window.end, m)
+            for decided, exit_at in boarded
+        )
+        / 3600.0
+    )
 
     return KpiVector(values=values)

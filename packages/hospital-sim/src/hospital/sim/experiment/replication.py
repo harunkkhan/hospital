@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 import simpy
 
 from hospital.core import (
+    AdmissionRule,
     CompatibilityRule,
     CompiledRules,
     Duration,
@@ -59,7 +60,7 @@ from hospital.core import (
     ZoneType,
     compile_rules,
 )
-from hospital.data.layout import generate_floor
+from hospital.data.hospital import generate_hospital
 from hospital.data.scenario import Scenario, realize_staff
 from hospital.data.workload import generate_workload
 from hospital.sim.experiment.disruptions import schedule_disruptions
@@ -169,15 +170,41 @@ _DEFAULT_ESI_ZONES: dict[EsiAcuity, tuple[ZoneType, ...]] = {
     EsiAcuity.ESI5: (ZoneType.FAST_TRACK, ZoneType.GENERAL, ZoneType.OBSERVATION),
 }
 
+# Which wards each acuity may be ADMITTED into (M4). A separate table from
+# ``_DEFAULT_ESI_ZONES`` because it answers a separate question, and a permissive one:
+# these are the beds a patient *may* occupy, not the one they should get. Which of them
+# is preferable is ``solver.placement.WARD_PREFERENCE``, on the other side of the seam,
+# and it can lose to capacity — so the breadth here is what lets a full ICU board its
+# ESI-1 in surgery instead of holding them in the ED.
+#
+# MATERNITY is in the ``ZoneType`` vocabulary but in nobody's list: admission to it
+# turns on a complaint, not an acuity, and the workload model has no obstetric
+# complaint to turn on. Guessing an acuity rule for it would put general medical
+# patients in maternity beds, so a scenario that builds one must say who may use it.
+_DEFAULT_ESI_WARDS: dict[EsiAcuity, tuple[ZoneType, ...]] = {
+    EsiAcuity.ESI1: (ZoneType.ICU, ZoneType.SURGERY, ZoneType.MED_SURG),
+    EsiAcuity.ESI2: (ZoneType.ICU, ZoneType.SURGERY, ZoneType.MED_SURG),
+    EsiAcuity.ESI3: (ZoneType.MED_SURG, ZoneType.SURGERY, ZoneType.ICU),
+    EsiAcuity.ESI4: (ZoneType.MED_SURG, ZoneType.SURGERY),
+    EsiAcuity.ESI5: (ZoneType.MED_SURG,),
+}
+
+
+def _pairs(table: dict[EsiAcuity, tuple[ZoneType, ...]]) -> frozenset[tuple[EsiAcuity, ZoneType]]:
+    return frozenset((esi, zt) for esi, zone_types in table.items() for zt in zone_types)
+
 
 def default_rules() -> tuple[Rule, ...]:
-    """The fallback rule set for scenarios that carry none (judgment call, in report)."""
-    allowed = frozenset(
-        (esi, zone_type)
-        for esi, zone_types in _DEFAULT_ESI_ZONES.items()
-        for zone_type in zone_types
+    """The fallback rule set for scenarios that carry none (judgment call, in report).
+
+    The ``AdmissionRule`` is additive and inert on an ED-only floor plan — there are no
+    ward bays for it to permit — so every run that predates wards decides exactly as it
+    did, while a scenario that stacks a ward on top needs no rules of its own to use it.
+    """
+    return (
+        CompatibilityRule(allowed_zone_types=_pairs(_DEFAULT_ESI_ZONES)),
+        AdmissionRule(allowed_zone_types=_pairs(_DEFAULT_ESI_WARDS)),
     )
-    return (CompatibilityRule(allowed_zone_types=allowed),)
 
 
 def _make_tick(
@@ -275,7 +302,9 @@ def run_replication(
     """
     # 1-2: the single CRN source; randomness-free floor construction
     streams = RandomStreams(seed)
-    layout = generate_floor(scenario.facility)
+    # One code path for one floor or ten: `generate_hospital` over a scenario with no
+    # upper floors returns exactly what `generate_floor` does, ids included.
+    layout = generate_hospital(scenario.hospital())
     horizon = scenario.workload.horizon
 
     # 3-5: one clock, one log, resources, the one mutable World, physics wiring

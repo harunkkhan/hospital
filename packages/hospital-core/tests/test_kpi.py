@@ -8,15 +8,28 @@ from typing import cast
 import pytest
 from _fixtures import full_kpi_values
 
-from hospital.core import KPI_KEYS, KpiContractError, KpiVector
+from hospital.core import EXTENSIVE_KEYS, KPI_KEYS, KpiContractError, KpiVector
+from hospital.core.kpi import PROPORTION_KEYS
 
 
-def test_kpi_keys_are_the_27_unique_closed_set() -> None:
-    assert len(KPI_KEYS) == 27
-    assert len(set(KPI_KEYS)) == 27
+def test_kpi_keys_are_the_30_unique_closed_set() -> None:
+    assert len(KPI_KEYS) == 30
+    assert len(set(KPI_KEYS)) == 30
     # Spot-check representative keys, including per-ESI strata.
     for key in ("completions_per_week", "los_s_mean_by_esi_1", "los_s_p90_by_esi_5"):
         assert key in KPI_KEYS
+
+
+def test_the_extensive_keys_are_not_proportions() -> None:
+    """The M4b additions carry totals, so the [0, 1] bound must not apply to them.
+
+    Guards a real mistake in the other direction: a key named like a rate slipping into
+    PROPORTION_KEYS would cap a hospital's paid staff-hours at one.
+    """
+    assert set(EXTENSIVE_KEYS) <= set(KPI_KEYS)
+    assert not set(EXTENSIVE_KEYS) & set(PROPORTION_KEYS)
+    vec = KpiVector(values=full_kpi_values(staff_hours_paid=13_440.0, bay_hours_occupied=8_000.0))
+    assert vec.values["staff_hours_paid"] == 13_440.0
 
 
 def test_full_valid_vector_accepted() -> None:

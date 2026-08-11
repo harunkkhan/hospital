@@ -118,10 +118,10 @@ export function makeMockLayout(): FloorLayout {
   ];
 
   const zones: Zone[] = [
-    { id: "zone-triage", zone_type: "triage", capacity: 2 },
-    { id: "zone-resus", zone_type: "resus_trauma", capacity: 2 },
-    { id: "zone-general", zone_type: "general", capacity: 6 },
-    { id: "zone-fast", zone_type: "fast_track", capacity: 3 },
+    { id: "zone-triage", zone_type: "triage", capacity: 2, floor: 0 },
+    { id: "zone-resus", zone_type: "resus_trauma", capacity: 2, floor: 0 },
+    { id: "zone-general", zone_type: "general", capacity: 6, floor: 0 },
+    { id: "zone-fast", zone_type: "fast_track", capacity: 3, floor: 0 },
   ];
 
   const bay = (
@@ -165,6 +165,8 @@ export function makeMockLayout(): FloorLayout {
     entrances: ["entr-main", "entr-ambo"],
     imaging_nodes: ["node-imaging"],
     lab_nodes: ["node-lab"],
+    // Single-floor mock: nowhere to go, so no shafts.
+    elevators: [],
   };
 }
 

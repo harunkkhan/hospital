@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final, cast
 
 from hospital.core import (
+    WAITING_FOR_BAY,
     Activity,
     ArrivalMode,
     Bay,
@@ -53,6 +54,7 @@ from hospital.core import (
     TestOrdered,
     TestResulted,
 )
+from hospital.sim.flow.ward import admit_to_ward, has_ward_beds
 from hospital.sim.physics.executor import PriorityTier, TaskExecutor
 from hospital.sim.physics.service_times import (
     ServiceTimes,
@@ -117,11 +119,11 @@ def patient_process(
     finally:
         world.resources.triage.release(req)
 
-    # 3 — wait for a bay (acuity-priority queue, infinite patience). The stage
-    # string is the placement convention (solver.placement.NEEDS_BAY_STAGES):
-    # a stage outside that vocabulary would be invisible to the CP-SAT backend.
+    # 3 — wait for a bay (acuity-priority queue, infinite patience). The stage is
+    # the care phase, and it is what tells every placement backend and the validator
+    # to judge this against the ED whitelist rather than the ward one.
     event_log.append(BayRequested(occurred_at=executor.now(), patient=pid))
-    wake = world.request_bay(patient, stage="waiting_for_bay")
+    wake = world.request_bay(patient, stage=WAITING_FOR_BAY)
     world.request_decision()
     granted = yield wake
     bay = world.bay(cast("BayId", granted))
@@ -180,8 +182,25 @@ def patient_process(
     world.request_decision()
 
     # 8 — terminal path
+    if disposition is DispositionKind.ADMIT and has_ward_beds(world):
+        # The building has somewhere to admit them, so boarding is a *consequence* of
+        # ward capacity rather than a draw: `admit_to_ward` holds this bay until a bed
+        # frees, escorts them to it, and runs the inpatient stay and discharge itself.
+        yield from admit_to_ward(
+            world,
+            executor,
+            event_log,
+            patient,
+            bay,
+            streams=streams,
+            service_times=service_times,
+            transport=_transport,
+            enqueue_cleaning=_enqueue_cleaning,
+        )
+        return
     if disposition is DispositionKind.ADMIT:
-        # boarding: hold the bay until the ward accepts, then leave the floor
+        # No ward on this floor plan: the M1 abstraction stands, and an ED-only run is
+        # byte-identical to every milestone before wards existed.
         yield executor.delay(sample_boarding_delay(streams, patient), PriorityTier.COMPLETION)
     else:
         yield from _bedside_service(

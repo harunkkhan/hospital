@@ -17,6 +17,39 @@
         "title": "Activity",
         "type": "string"
       },
+      "AdmissionRule": {
+        "additionalProperties": false,
+        "description": "The single acuity->ward zone_type mapping for an ADMITTED patient (M4).\n\nDeliberately *not* more entries in :class:`CompatibilityRule`, which the validator\nand the placement solver both read keyed on acuity alone. The two rules answer\ndifferent questions: compatibility says where a patient may be **worked up**,\nadmission says where they may be **admitted**. Folding wards into the first would\nmake an ESI-2 eligible for a resus bay thereby eligible for an ICU bed the moment\nthey finish triage \u2014 a placement no rule could then refuse, because nothing in the\nkey distinguishes the two moments. The patient's care phase\n(:data:`~hospital.core.seam.AWAITING_ADMISSION`) selects which of the two applies.\n\nAdditive by construction: a scenario that declares no ``AdmissionRule`` admits\nnobody anywhere, which is exactly right for an ED-only floor plan and is why every\nrule set written before wards existed hashes and behaves as it did.\n\nIsolation and equipment are *not* restated here. Those constraints are properties\nof the patient and the bay, not of the phase, so :class:`CompiledRules` applies the\ncompatibility rule's ``isolation_enforced`` / ``required_equipment`` to both kinds\nof placement \u2014 one source, asked twice.",
+        "properties": {
+          "allowed_zone_types": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/components/schemas/EsiAcuity"
+                },
+                {
+                  "$ref": "#/components/schemas/ZoneType"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Allowed Zone Types",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "kind": {
+            "const": "admission",
+            "default": "admission",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "AdmissionRule",
+        "type": "object"
+      },
       "ArrivalMode": {
         "description": "How a patient reached the ED.",
         "enum": [
@@ -518,11 +551,44 @@
         "title": "ControlCommand",
         "type": "object"
       },
-      "CostSpec": {
+      "CostRates": {
         "additionalProperties": false,
-        "description": "DEFERRED \u2014 mirrors ``core.cost``. No dollar rates in M1.\n\nEmpty now, but ``extra=\"forbid\"`` (inherited from ``FrozenModel``) means a\nfuture stray cost key is validated the day it is added, not silently accepted.",
-        "properties": {},
-        "title": "CostSpec",
+        "description": "What a hospital pays, per unit of the thing the KPI fold measures.\n\nAll in integer minor units (cents), all required \u2014 see the module docstring on why\nthere are no defaults. Each rate names the ``KPI_KEYS`` entry it multiplies, so the\ncontract between the fold and the price is legible in one place and a KPI that is\nrenamed cannot leave a rate quietly multiplying nothing.",
+        "properties": {
+          "bay_hour_cents": {
+            "minimum": 0.0,
+            "title": "Bay Hour Cents",
+            "type": "integer"
+          },
+          "boarding_hour_cents": {
+            "minimum": 0.0,
+            "title": "Boarding Hour Cents",
+            "type": "integer"
+          },
+          "completion_revenue_cents": {
+            "minimum": 0.0,
+            "title": "Completion Revenue Cents",
+            "type": "integer"
+          },
+          "staff_hour_cents": {
+            "minimum": 0.0,
+            "title": "Staff Hour Cents",
+            "type": "integer"
+          },
+          "wip_carry_cents": {
+            "minimum": 0.0,
+            "title": "Wip Carry Cents",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "staff_hour_cents",
+          "bay_hour_cents",
+          "boarding_hour_cents",
+          "wip_carry_cents",
+          "completion_revenue_cents"
+        ],
+        "title": "CostRates",
         "type": "object"
       },
       "DeteriorationDetected": {
@@ -796,6 +862,32 @@
         "description": "A signed span in microseconds (may be zero; a delta of two instants).",
         "title": "Duration",
         "type": "integer"
+      },
+      "ElevatorSpec": {
+        "additionalProperties": false,
+        "description": "The shafts joining a scenario's floors. Ignored when there is only one.",
+        "properties": {
+          "dwell_seconds": {
+            "default": 20.0,
+            "minimum": 0.0,
+            "title": "Dwell Seconds",
+            "type": "number"
+          },
+          "seconds_per_floor": {
+            "default": 12.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Seconds Per Floor",
+            "type": "number"
+          },
+          "shafts": {
+            "default": 2,
+            "minimum": 1.0,
+            "title": "Shafts",
+            "type": "integer"
+          }
+        },
+        "title": "ElevatorSpec",
+        "type": "object"
       },
       "EmergencyRaised": {
         "additionalProperties": false,
@@ -1097,13 +1189,21 @@
       },
       "FloorLayout": {
         "additionalProperties": false,
-        "description": "The static floor: route graph plus zones/bays/stations/entrances.",
+        "description": "The static built environment: route graph plus zones/bays/stations/entrances.\n\nNamed for the single ER floor it described through M3, and still exactly that for an\nED-only scenario. A multi-floor hospital is the *same* type with a graph that spans\nfloors, joined by ``elevators`` \u2014 which is why nothing downstream had to change to\ngain vertical movement: an elevator is an edge whose ``seconds`` greatly exceed its\ndistance, and :class:`~hospital.core.graph.RouteEdge` was built to allow that.\n\n``elevators`` lists the boarding node on each floor. Empty for a single floor: there\nis nowhere to go.",
         "properties": {
           "bays": {
             "items": {
               "$ref": "#/components/schemas/Bay"
             },
             "title": "Bays",
+            "type": "array"
+          },
+          "elevators": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "title": "Elevators",
             "type": "array"
           },
           "entrances": {
@@ -1155,6 +1255,26 @@
           "lab_nodes"
         ],
         "title": "FloorLayout",
+        "type": "object"
+      },
+      "FloorSpec": {
+        "additionalProperties": false,
+        "description": "One floor: a name, and the geometry spec that fills it.",
+        "properties": {
+          "facility": {
+            "$ref": "#/components/schemas/FacilitySpec"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "facility"
+        ],
+        "title": "FloorSpec",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2161,7 +2281,7 @@
           "cost": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/CostSpec"
+                "$ref": "#/components/schemas/CostRates"
               },
               {
                 "type": "null"
@@ -2172,6 +2292,14 @@
             "$ref": "#/components/schemas/DisruptionSpec",
             "default": {
               "events": []
+            }
+          },
+          "elevators": {
+            "$ref": "#/components/schemas/ElevatorSpec",
+            "default": {
+              "dwell_seconds": 20.0,
+              "seconds_per_floor": 12.0,
+              "shafts": 2
             }
           },
           "facility": {
@@ -2186,6 +2314,7 @@
             "items": {
               "discriminator": {
                 "mapping": {
+                  "admission": "#/components/schemas/AdmissionRule",
                   "capacity": "#/components/schemas/CapacityRule",
                   "compat": "#/components/schemas/CompatibilityRule",
                   "precedence": "#/components/schemas/PrecedenceRule",
@@ -2196,6 +2325,9 @@
               "oneOf": [
                 {
                   "$ref": "#/components/schemas/CompatibilityRule"
+                },
+                {
+                  "$ref": "#/components/schemas/AdmissionRule"
                 },
                 {
                   "$ref": "#/components/schemas/CapacityRule"
@@ -2217,6 +2349,14 @@
           },
           "staffing": {
             "$ref": "#/components/schemas/StaffingSpec"
+          },
+          "upper_floors": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FloorSpec"
+            },
+            "title": "Upper Floors",
+            "type": "array"
           },
           "workload": {
             "$ref": "#/components/schemas/WorkloadSpec"
@@ -3065,10 +3205,16 @@
       },
       "Zone": {
         "additionalProperties": false,
-        "description": "A care zone with a static capacity.",
+        "description": "A care zone with a static capacity, on a floor.\n\n``floor`` defaults to ``0`` so a single-floor ER scenario \u2014 every scenario before the\nmulti-floor hospital \u2014 describes itself exactly as it did before. It is an index into\nthe hospital's floors, not a storey number: routing never reads it, because vertical\nmovement is edges in the graph like any other movement. It is here so a *decision*\ncan be about a floor (is this ward upstairs from the ED?) without re-deriving that\nfrom node ids.",
         "properties": {
           "capacity": {
             "title": "Capacity",
+            "type": "integer"
+          },
+          "floor": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Floor",
             "type": "integer"
           },
           "id": {
@@ -3131,7 +3277,7 @@
         "type": "object"
       },
       "ZoneType": {
-        "description": "Functional type of a care zone.",
+        "description": "Functional type of a care zone.\n\nThe first block is the emergency department, which is the whole of M1-M3. The\n``WARD_ZONE_TYPES`` block below arrives with the multi-floor hospital: a boarded ED\npatient is admitted *into* one of those, so they are placement targets rather than\nstops in an ED workup. Adding a member is a contract change \u2014 rules, the placement\nvalidator, and any scenario naming zone types all read this vocabulary.",
         "enum": [
           "triage",
           "general",
@@ -3139,7 +3285,11 @@
           "fast_track",
           "observation",
           "imaging",
-          "lab"
+          "lab",
+          "icu",
+          "surgery",
+          "med_surg",
+          "maternity"
         ],
         "title": "ZoneType",
         "type": "string"

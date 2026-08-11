@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from hospital.core import (
+    MICROS_PER_SEC,
     Activity,
     DispositionKind,
     Duration,
@@ -104,6 +105,18 @@ _DISPOSITION_MIX: Final[dict[EsiAcuity, dict[DispositionKind, float]]] = {
 
 _BOARDING_MEAN_S: Final[float] = 7_200.0
 _BOARDING_CV: Final[float] = 0.5
+
+# Inpatient length of stay once a bed is occupied, by the acuity that got them admitted.
+# Days, not hours: a ward bed turns over on a completely different timescale from an ED
+# bay, which is exactly why a handful of beds can block an ED all week.
+_WARD_STAY_MEAN_S: Final[Mapping[EsiAcuity, float]] = {
+    EsiAcuity.ESI1: 4.0 * 86_400.0,
+    EsiAcuity.ESI2: 3.0 * 86_400.0,
+    EsiAcuity.ESI3: 2.0 * 86_400.0,
+    EsiAcuity.ESI4: 1.5 * 86_400.0,
+    EsiAcuity.ESI5: 1.0 * 86_400.0,
+}
+_WARD_STAY_CV: Final[float] = 0.7
 
 
 @dataclass(frozen=True)
@@ -187,16 +200,47 @@ def sample_disposition(streams: RandomStreams, patient: Patient) -> DispositionK
     return sample_categorical(g, ordered)
 
 
+def sample_ward_stay(streams: RandomStreams, patient: Patient) -> Duration:
+    """How long an admitted patient occupies their inpatient bed.
+
+    World randomness, content-addressed on the patient like every other draw here, so the
+    same patient stays the same length under both arms of a comparison.
+    """
+    g = streams.substream("world", "ward_stay", str(patient.id))
+    return sample_lognormal(g, _WARD_STAY_MEAN_S[patient.esi], _WARD_STAY_CV)
+
+
 def sample_boarding_delay(streams: RandomStreams, patient: Patient) -> Duration:
     """How long an admitted patient boards (holds the bay) before leaving the floor."""
     g = streams.substream("world", "boarding", str(patient.id))
     return sample_lognormal(g, _BOARDING_MEAN_S, _BOARDING_CV)
 
 
+def admit_probability(esi: EsiAcuity) -> float:
+    """P(disposition = ADMIT) for an ``esi`` patient — the demand side of bed capacity."""
+    return _DISPOSITION_MIX[esi][DispositionKind.ADMIT]
+
+
+def mean_ward_stay(esi: EsiAcuity) -> Duration:
+    """The mean inpatient stay for an ``esi`` patient — the supply side of bed capacity.
+
+    Public alongside :func:`admit_probability` because sizing a ward is a real question
+    to ask of the model and not only of a run: the two together turn a week of arrivals
+    into the bed-days it implies, which is how ``scenarios/hospital.yaml`` was sized and
+    how the test that pins its operating point checks it is still true. Reading the
+    private tables from outside would make that arithmetic silently wrong the day either
+    distribution moves.
+    """
+    return Duration(round(_WARD_STAY_MEAN_S[esi] * MICROS_PER_SEC))
+
+
 __all__ = [
     "ServiceTable",
     "ServiceTimes",
+    "admit_probability",
     "default_service_table",
+    "mean_ward_stay",
     "sample_boarding_delay",
     "sample_disposition",
+    "sample_ward_stay",
 ]

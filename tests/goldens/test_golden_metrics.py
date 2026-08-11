@@ -16,6 +16,16 @@ The pins assert the HONEST M1 story, trade included:
   significantly WORSE (negative diff), and so is ESI-3 mean LOS. These pins
   are deliberate — the golden asserts the real numbers, never a fake win.
 * Throughput is demand-limited at this operating point: completions flat (ns).
+
+Re-baselined once, at M4b, when ``KPI_KEYS`` grew from 27 to 30. Only the interval
+bounds moved: ``paired_bootstrap`` corrects across the whole KPI family, so three more
+keys means each is tested at ``alpha/30`` instead of ``alpha/27`` and every exploratory
+CI widens slightly. Every ``diff_mean`` is byte-identical — the runs, seeds, and CRN
+draws did not change, and measuring more things cannot move an estimate — and **no
+significance verdict flipped**. That the milestone survived is by construction rather
+than luck: ``weighted_objective_total`` is a pre-registered primary endpoint tested at
+the full alpha *outside* the multiplicity family (see ``analysis.compare``), which is
+exactly what lets the exploratory family grow without putting the G1 claim at risk.
 """
 
 from __future__ import annotations
@@ -37,14 +47,14 @@ _EXPECTED_CONTRASTS: dict[str, dict[str, float | bool]] = {
     },
     "door_to_provider_s_mean": {
         "diff_mean": -175.3940930754121,
-        "ci_lo": -241.1904833604466,
-        "ci_hi": -113.57734980786567,
+        "ci_lo": -241.29276109288745,
+        "ci_hi": -113.41138486078536,
         "significant": True,
     },
     "staff_minutes_walked": {
         "diff_mean": 109.84885813000001,
-        "ci_lo": 64.51001675354179,
-        "ci_hi": 149.0043047587777,
+        "ci_lo": 64.28099293587515,
+        "ci_hi": 149.45663335284553,
         "significant": True,
     },
     "completions_per_week": {
@@ -55,32 +65,32 @@ _EXPECTED_CONTRASTS: dict[str, dict[str, float | bool]] = {
     },
     "los_s_mean_by_esi_1": {
         "diff_mean": 848.553831845413,
-        "ci_lo": 419.1310189790879,
-        "ci_hi": 1402.8858580370331,
+        "ci_lo": 416.8503219445996,
+        "ci_hi": 1409.8690259214611,
         "significant": True,
     },
     "los_s_mean_by_esi_2": {
         "diff_mean": 826.3164328646739,
-        "ci_lo": 520.000249158824,
-        "ci_hi": 1203.8241054814002,
+        "ci_lo": 518.3023666114325,
+        "ci_hi": 1207.1921968466932,
         "significant": True,
     },
     "los_s_mean_by_esi_3": {
         "diff_mean": -386.81699092937487,
-        "ci_lo": -562.568034102977,
-        "ci_hi": -225.43050539956266,
+        "ci_lo": -564.2406099047945,
+        "ci_hi": -225.1550057469606,
         "significant": True,
     },
     "los_s_mean_by_esi_4": {
         "diff_mean": -128.6644707584579,
-        "ci_lo": -499.78006304558124,
-        "ci_hi": 414.4674551888207,
+        "ci_lo": -499.9060913698322,
+        "ci_hi": 415.43325919144195,
         "significant": False,
     },
     "los_s_mean_by_esi_5": {
         "diff_mean": -732.6016454713905,
-        "ci_lo": -2056.811245931604,
-        "ci_hi": 569.4197596815125,
+        "ci_lo": -2065.8584776486405,
+        "ci_hi": 593.3824787160917,
         "significant": False,
     },
 }

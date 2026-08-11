@@ -24,6 +24,7 @@ import yaml
 from pydantic import Field, field_serializer, field_validator, model_validator
 
 from hospital.core import (
+    CostRates,
     Duration,
     EsiAcuity,
     FloorLayout,
@@ -109,6 +110,45 @@ class FacilitySpec(FrozenModel):
         if sum(q.bays for q in self.zones) < 1:
             raise ValueError("facility.zones must allocate at least one bay in total")
         return self
+
+
+class FloorSpec(FrozenModel):
+    """One floor: a name, and the geometry spec that fills it."""
+
+    name: str = Field(min_length=1)
+    facility: FacilitySpec
+
+
+class HospitalSpec(FrozenModel):
+    """A stack of floors and the elevators joining them.
+
+    ``floors[0]`` is the ground floor and the only one with entrances: ambulances and
+    walk-ins arrive at the emergency department, and everything above is reached through
+    the shafts.
+    """
+
+    floors: tuple[FloorSpec, ...] = Field(min_length=1)
+    elevator_shafts: int = Field(default=2, ge=1)
+    # Time for the car to move one floor, and the fixed cost of a boarding/exit cycle.
+    # `dwell` is charged once per shaft edge traversed, which is what makes a two-floor
+    # trip cheaper than two one-floor trips through a lobby.
+    seconds_per_floor: float = Field(default=12.0, gt=0.0, allow_inf_nan=False)
+    dwell_seconds: float = Field(default=20.0, ge=0.0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _floor_names_are_unique(self) -> HospitalSpec:
+        names = [floor.name for floor in self.floors]
+        if len(names) != len(set(names)):
+            raise ValueError("hospital.floors have duplicate names")
+        return self
+
+
+class ElevatorSpec(FrozenModel):
+    """The shafts joining a scenario's floors. Ignored when there is only one."""
+
+    shafts: int = Field(default=2, ge=1)
+    seconds_per_floor: float = Field(default=12.0, gt=0.0, allow_inf_nan=False)
+    dwell_seconds: float = Field(default=20.0, ge=0.0, allow_inf_nan=False)
 
 
 class WorkupProfile(FrozenModel):
@@ -221,12 +261,12 @@ class DisruptionSpec(FrozenModel):
     events: tuple[DisruptionEvent, ...] = ()
 
 
-class CostSpec(FrozenModel):
-    """DEFERRED — mirrors ``core.cost``. No dollar rates in M1.
-
-    Empty now, but ``extra="forbid"`` (inherited from ``FrozenModel``) means a
-    future stray cost key is validated the day it is added, not silently accepted.
-    """
+# The rate vocabulary is ``core.CostRates``, not a spec type mirroring it here (M4b).
+# Same reasoning as ``rules: tuple[Rule, ...]``: the frozen value lives in the lowest
+# package that needs it and the scenario simply holds one, so there is no second
+# definition to drift. The M1 placeholder ``CostSpec`` was empty precisely so that
+# whatever landed later could be the real thing rather than a translation of it.
+CostSpec = CostRates
 
 
 class Scenario(FrozenModel):
@@ -239,7 +279,24 @@ class Scenario(FrozenModel):
     staffing: StaffingSpec
     disruptions: DisruptionSpec = DisruptionSpec()
     rules: tuple[Rule, ...] = ()
-    cost: CostSpec | None = None
+    # Dollar rates, or None to report time only — which every committed scenario does.
+    # `core.CostRates` has no default rates on purpose (see its module docstring): what
+    # an hour of nursing costs is a fact about a hospital, not about a simulator.
+    cost: CostRates | None = None
+    # The floors above the emergency department. Empty is the ED-only hospital every
+    # scenario described before M4 — `facility` is the ground floor either way, so the
+    # building is never stated twice.
+    upper_floors: tuple[FloorSpec, ...] = ()
+    elevators: ElevatorSpec = ElevatorSpec()
+
+    def hospital(self) -> HospitalSpec:
+        """The whole building: the ED on the ground, ``upper_floors`` above it."""
+        return HospitalSpec(
+            floors=(FloorSpec(name="ground", facility=self.facility), *self.upper_floors),
+            elevator_shafts=self.elevators.shafts,
+            seconds_per_floor=self.elevators.seconds_per_floor,
+            dwell_seconds=self.elevators.dwell_seconds,
+        )
 
 
 def load_scenario(path: str | Path) -> Scenario:

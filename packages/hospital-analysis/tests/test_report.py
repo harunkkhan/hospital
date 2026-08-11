@@ -12,9 +12,16 @@ from hospital.analysis.compare import (
     paired_bootstrap,
     paired_scalar_contrast,
 )
+from hospital.analysis.cost import WeeklyCost
 from hospital.analysis.fold import compute_kpis
 from hospital.analysis.report import build_metrics, fold_arm, write_metrics
-from hospital.core import KPI_KEYS, EsiAcuity, EventLog, hours
+from hospital.core import (
+    KPI_KEYS,
+    CostRates,
+    EsiAcuity,
+    EventLog,
+    hours,
+)
 
 
 def test_fold_arm_and_build_metrics_round_trip(tmp_path: Path) -> None:
@@ -124,3 +131,43 @@ def test_acuity_weighted_headline_only_when_weights_passed(tmp_path: Path) -> No
         "s", 1, baseline, optimized, comparison, acuity_weights={EsiAcuity.ESI3: 2.0}
     )
     assert "acuity_weighted_time_saved_s" in metrics_weighted.headline
+
+
+def test_cost_headline_only_when_rates_are_supplied() -> None:
+    """Money is opt-in: no rates, no dollar figures anywhere in the report.
+
+    The default matters more than the feature. Every committed scenario reports time
+    only, and a report that volunteered a plausible-looking cost from built-in rates
+    would be quoted as though the simulator knew what nursing costs.
+    """
+    layout, roster = tiny_layout(), tiny_roster()
+    logs = [build_sample_log()]
+    arm = fold_arm(logs, layout, roster, warmup=hours(0))
+    raw = [compute_kpis(log, layout, roster, warmup=hours(0)) for log in logs]
+    comparison = paired_bootstrap(raw, raw, n_boot=50, seed=1)
+
+    priced_keys = {
+        "weekly_cost_cents_baseline",
+        "weekly_cost_cents_optimized",
+        "weekly_cost_saved_cents",
+    }
+    untimed = build_metrics("s", 1, arm, arm, comparison)
+    assert not priced_keys & set(untimed.headline)
+
+    rates = CostRates(
+        staff_hour_cents=6_000,
+        bay_hour_cents=1_000,
+        boarding_hour_cents=5_000,
+        wip_carry_cents=20_000,
+        completion_revenue_cents=100_000,
+    )
+    priced = build_metrics("s", 1, arm, arm, comparison, cost=WeeklyCost(rates=rates))
+    assert priced_keys <= set(priced.headline)
+    # Identical arms, so the saving is exactly zero rather than merely small.
+    assert priced.headline["weekly_cost_saved_cents"] == 0.0
+    assert (
+        priced.headline["weekly_cost_cents_baseline"]
+        == priced.headline["weekly_cost_cents_optimized"]
+    )
+    # ...and the totals are real numbers, not a silently-zeroed placeholder.
+    assert priced.headline["weekly_cost_cents_baseline"] != 0.0

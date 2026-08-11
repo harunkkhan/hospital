@@ -47,7 +47,12 @@ export type ZoneType =
   | "fast_track"
   | "observation"
   | "imaging"
-  | "lab";
+  | "lab"
+  // Inpatient wards (M4). An ED-only scenario never allocates these.
+  | "icu"
+  | "surgery"
+  | "med_surg"
+  | "maternity";
 
 export type BayStatus = "free" | "occupied" | "cleaning" | "closed";
 
@@ -97,6 +102,12 @@ export interface Zone {
   id: ZoneId;
   zone_type: ZoneType;
   capacity: number;
+  /**
+   * Index into the hospital's floors, 0 for the ground floor. Always present on the
+   * wire (pydantic serializes its default), so it is required here even though the
+   * backend field is optional on construction.
+   */
+  floor: number;
 }
 
 export interface Bay {
@@ -117,6 +128,12 @@ export interface FloorLayout {
   entrances: readonly NodeId[];
   imaging_nodes: readonly NodeId[];
   lab_nodes: readonly NodeId[];
+  /**
+   * Elevator boarding nodes, one per shaft per floor. Empty for a single-floor
+   * scenario. Vertical movement is ordinary graph edges, so a renderer needs this
+   * only to draw the shafts — never to route.
+   */
+  elevators: readonly NodeId[];
 }
 
 // ---------------------------------------------------------------------------

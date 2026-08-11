@@ -87,7 +87,9 @@
       },
       "kpis": {
         "values": {
+          "bay_hours_occupied": 3481.984142947501,
           "bay_utilization": 0.31816375575178185,
+          "boarding_hours_total": 429.2875329989444,
           "boarding_time_s_mean": 7213.911526161866,
           "completions_per_week": 901.5,
           "door_to_provider_s_mean": 1037.926182211828,
@@ -111,6 +113,7 @@
           "staff_frac_documentation": 0.035478204071430194,
           "staff_frac_idle": 0.6609243622791621,
           "staff_frac_walk": 0.0134753409695443,
+          "staff_hours_paid": 2448.0,
           "staff_minutes_walked": 1979.2580816066668,
           "turnaround_time_s_mean": 3316.587961978074,
           "wip_end_of_week": 40.6
@@ -125,6 +128,7 @@
           "staff_frac_idle": 0.6609243622791621,
           "staff_frac_walk": 0.0134753409695443
         },
+        "on_shift_s": 8812800.0,
         "per_staff": [
           {
             "cleaning_s": 288274.8406296,
@@ -663,7 +667,9 @@
       },
       "kpis": {
         "values": {
+          "bay_hours_occupied": 3467.179956188999,
           "bay_utilization": 0.31681103400849764,
+          "boarding_hours_total": 430.75335791925,
           "boarding_time_s_mean": 7229.120640487813,
           "completions_per_week": 901.6,
           "door_to_provider_s_mean": 1213.32027528724,
@@ -687,6 +693,7 @@
           "staff_frac_documentation": 0.0354588085409518,
           "staff_frac_idle": 0.6614974199329271,
           "staff_frac_walk": 0.012727459310162493,
+          "staff_hours_paid": 2448.0,
           "staff_minutes_walked": 1869.4092234766667,
           "turnaround_time_s_mean": 3334.932716485723,
           "wip_end_of_week": 40.5
@@ -701,6 +708,7 @@
           "staff_frac_idle": 0.6614974199329271,
           "staff_frac_walk": 0.012727459310162493
         },
+        "on_shift_s": 8812800.0,
         "per_staff": [
           {
             "cleaning_s": 285918.13847909996,
@@ -1154,22 +1162,44 @@
     }
   },
   "contrasts": {
+    "bay_hours_occupied": {
+      "alpha_adjusted": 0.0016666666666666668,
+      "baseline_mean": 3481.984142947501,
+      "ci_hi": 40.37187201045086,
+      "ci_lo": -10.664617457137155,
+      "diff_mean": 14.804186758502237,
+      "key": "bay_hours_occupied",
+      "n_pairs": 10,
+      "optimized_mean": 3467.179956188999,
+      "significant": false
+    },
     "bay_utilization": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 0.31816375575178185,
-      "ci_hi": 0.003666041504541176,
-      "ci_lo": -0.0009689535599806387,
+      "ci_hi": 0.0036889502933525904,
+      "ci_lo": -0.0009744716243729294,
       "diff_mean": 0.0013527217432841882,
       "key": "bay_utilization",
       "n_pairs": 10,
       "optimized_mean": 0.31681103400849764,
       "significant": false
     },
+    "boarding_hours_total": {
+      "alpha_adjusted": 0.0016666666666666668,
+      "baseline_mean": 429.2875329989444,
+      "ci_hi": 0.6803876276004023,
+      "ci_lo": -3.6125122277587876,
+      "diff_mean": -1.4658249203055504,
+      "key": "boarding_hours_total",
+      "n_pairs": 10,
+      "optimized_mean": 430.75335791925,
+      "significant": false
+    },
     "boarding_time_s_mean": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 7213.911526161866,
-      "ci_hi": 2.644375867401396,
-      "ci_lo": -60.09080744980987,
+      "ci_hi": 2.734534861476716,
+      "ci_lo": -60.261901699301234,
       "diff_mean": -15.209114325947212,
       "key": "boarding_time_s_mean",
       "n_pairs": 10,
@@ -1177,7 +1207,7 @@
       "significant": false
     },
     "completions_per_week": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 901.5,
       "ci_hi": 1.7,
       "ci_lo": -1.9,
@@ -1188,10 +1218,10 @@
       "significant": false
     },
     "door_to_provider_s_mean": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 1037.926182211828,
-      "ci_hi": -113.57734980786567,
-      "ci_lo": -241.1904833604466,
+      "ci_hi": -113.41138486078536,
+      "ci_lo": -241.29276109288745,
       "diff_mean": -175.3940930754121,
       "key": "door_to_provider_s_mean",
       "n_pairs": 10,
@@ -1199,10 +1229,10 @@
       "significant": true
     },
     "door_to_provider_s_p90": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 2453.32843818,
-      "ci_hi": 201.67324951383299,
-      "ci_lo": -516.8210389033335,
+      "ci_hi": 202.09288100819944,
+      "ci_lo": -518.5234556068751,
       "diff_mean": -92.22188971000041,
       "key": "door_to_provider_s_p90",
       "n_pairs": 10,
@@ -1210,7 +1240,7 @@
       "significant": false
     },
     "door_to_triage_s_mean": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 18.67914562123876,
       "ci_hi": 0.0,
       "ci_lo": 0.0,
@@ -1221,7 +1251,7 @@
       "significant": false
     },
     "door_to_triage_s_p90": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 103.500012,
       "ci_hi": 0.0,
       "ci_lo": 0.0,
@@ -1232,10 +1262,10 @@
       "significant": false
     },
     "los_s_mean_by_esi_1": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 18862.100248880502,
-      "ci_hi": 1402.8858580370331,
-      "ci_lo": 419.1310189790879,
+      "ci_hi": 1409.8690259214611,
+      "ci_lo": 416.8503219445996,
       "diff_mean": 848.553831845413,
       "key": "los_s_mean_by_esi_1",
       "n_pairs": 10,
@@ -1243,10 +1273,10 @@
       "significant": true
     },
     "los_s_mean_by_esi_2": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 14536.794333203836,
-      "ci_hi": 1203.8241054814002,
-      "ci_lo": 520.000249158824,
+      "ci_hi": 1207.1921968466932,
+      "ci_lo": 518.3023666114325,
       "diff_mean": 826.3164328646739,
       "key": "los_s_mean_by_esi_2",
       "n_pairs": 10,
@@ -1254,10 +1284,10 @@
       "significant": true
     },
     "los_s_mean_by_esi_3": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 13370.359333857175,
-      "ci_hi": -225.43050539956266,
-      "ci_lo": -562.568034102977,
+      "ci_hi": -225.1550057469606,
+      "ci_lo": -564.2406099047945,
       "diff_mean": -386.81699092937487,
       "key": "los_s_mean_by_esi_3",
       "n_pairs": 10,
@@ -1265,10 +1295,10 @@
       "significant": true
     },
     "los_s_mean_by_esi_4": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 20280.947331370688,
-      "ci_hi": 414.4674551888207,
-      "ci_lo": -499.78006304558124,
+      "ci_hi": 415.43325919144195,
+      "ci_lo": -499.9060913698322,
       "diff_mean": -128.6644707584579,
       "key": "los_s_mean_by_esi_4",
       "n_pairs": 10,
@@ -1276,10 +1306,10 @@
       "significant": false
     },
     "los_s_mean_by_esi_5": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 20164.369699230945,
-      "ci_hi": 569.4197596815125,
-      "ci_lo": -2056.811245931604,
+      "ci_hi": 593.3824787160917,
+      "ci_lo": -2065.8584776486405,
       "diff_mean": -732.6016454713905,
       "key": "los_s_mean_by_esi_5",
       "n_pairs": 10,
@@ -1287,10 +1317,10 @@
       "significant": false
     },
     "los_s_p90_by_esi_1": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 29261.782329039997,
-      "ci_hi": 3202.5997191630004,
-      "ci_lo": 318.0828819512487,
+      "ci_hi": 3212.6167823879446,
+      "ci_lo": 309.0580036379737,
       "diff_mean": 1327.598106469999,
       "key": "los_s_p90_by_esi_1",
       "n_pairs": 10,
@@ -1298,10 +1328,10 @@
       "significant": true
     },
     "los_s_p90_by_esi_2": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 25754.610999000004,
-      "ci_hi": 1959.9173951214173,
-      "ci_lo": 511.107411977411,
+      "ci_hi": 1963.9556082759987,
+      "ci_lo": 508.05311514456844,
       "diff_mean": 1201.0525001199992,
       "key": "los_s_p90_by_esi_2",
       "n_pairs": 10,
@@ -1309,10 +1339,10 @@
       "significant": true
     },
     "los_s_p90_by_esi_3": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 29131.60012015,
-      "ci_hi": 43.84697221000279,
-      "ci_lo": -1218.4457790987533,
+      "ci_hi": 51.80731821332168,
+      "ci_lo": -1219.512021758203,
       "diff_mean": -533.9466351699997,
       "key": "los_s_p90_by_esi_3",
       "n_pairs": 10,
@@ -1320,10 +1350,10 @@
       "significant": false
     },
     "los_s_p90_by_esi_4": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 57491.70552230002,
-      "ci_hi": 4052.7600306171903,
-      "ci_lo": -1052.8681336968152,
+      "ci_hi": 4096.575662684768,
+      "ci_lo": -1063.6298266849287,
       "diff_mean": 534.181878020017,
       "key": "los_s_p90_by_esi_4",
       "n_pairs": 10,
@@ -1331,10 +1361,10 @@
       "significant": false
     },
     "los_s_p90_by_esi_5": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 59360.33387789001,
-      "ci_hi": 742.6404511142478,
-      "ci_lo": -14310.152887296184,
+      "ci_hi": 747.5990897949193,
+      "ci_lo": -14346.857239235009,
       "diff_mean": -4207.003481969999,
       "key": "los_s_p90_by_esi_5",
       "n_pairs": 10,
@@ -1342,10 +1372,10 @@
       "significant": false
     },
     "nurse_util": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 0.37226264288497574,
-      "ci_hi": 0.0005310244180670919,
-      "ci_lo": -0.0011955465064886288,
+      "ci_hi": 0.0005534064194479959,
+      "ci_lo": -0.0012026764106598687,
       "diff_mean": -0.0004756156073081774,
       "key": "nurse_util",
       "n_pairs": 10,
@@ -1353,10 +1383,10 @@
       "significant": false
     },
     "provider_util": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 0.6415657777089764,
-      "ci_hi": 0.0012073237518079542,
-      "ci_lo": -0.001150447969999562,
+      "ci_hi": 0.0012412031920547588,
+      "ci_lo": -0.0011590330019386422,
       "diff_mean": -7.905790007713964e-05,
       "key": "provider_util",
       "n_pairs": 10,
@@ -1364,10 +1394,10 @@
       "significant": false
     },
     "staff_frac_cleaning": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 0.06481365402988834,
-      "ci_hi": 3.3971540756161885e-05,
-      "ci_lo": -0.00026096652893102935,
+      "ci_hi": 3.511537699559841e-05,
+      "ci_lo": -0.0002614196039079839,
       "diff_mean": -6.906702071985821e-05,
       "key": "staff_frac_cleaning",
       "n_pairs": 10,
@@ -1375,10 +1405,10 @@
       "significant": false
     },
     "staff_frac_direct_care": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 0.22530843864997502,
-      "ci_hi": 0.00010170623016289294,
-      "ci_lo": -0.00031992487149107854,
+      "ci_hi": 0.00010387552169223587,
+      "ci_lo": -0.0003202968787425589,
       "diff_mean": -0.00012515251537534856,
       "key": "staff_frac_direct_care",
       "n_pairs": 10,
@@ -1386,10 +1416,10 @@
       "significant": false
     },
     "staff_frac_documentation": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 0.035478204071430194,
-      "ci_hi": 0.0001326833913048841,
-      "ci_lo": -6.414528456790318e-05,
+      "ci_hi": 0.0001333225776980942,
+      "ci_lo": -6.461740507038097e-05,
       "diff_mean": 1.9395530478395067e-05,
       "key": "staff_frac_documentation",
       "n_pairs": 10,
@@ -1397,10 +1427,10 @@
       "significant": false
     },
     "staff_frac_idle": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 0.6609243622791621,
-      "ci_hi": -0.00017912663009913153,
-      "ci_lo": -0.0009559021210773351,
+      "ci_hi": -0.00017726448550266815,
+      "ci_lo": -0.0009571024385660625,
       "diff_mean": -0.0005730576537649968,
       "key": "staff_frac_idle",
       "n_pairs": 10,
@@ -1408,21 +1438,32 @@
       "significant": true
     },
     "staff_frac_walk": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 0.0134753409695443,
-      "ci_hi": 0.0010144628591964727,
-      "ci_lo": 0.00043920218377955974,
+      "ci_hi": 0.0010175424384044499,
+      "ci_lo": 0.00043764292576167703,
       "diff_mean": 0.0007478816593818081,
       "key": "staff_frac_walk",
       "n_pairs": 10,
       "optimized_mean": 0.012727459310162493,
       "significant": true
     },
+    "staff_hours_paid": {
+      "alpha_adjusted": 0.0016666666666666668,
+      "baseline_mean": 2448.0,
+      "ci_hi": 0.0,
+      "ci_lo": 0.0,
+      "diff_mean": 0.0,
+      "key": "staff_hours_paid",
+      "n_pairs": 10,
+      "optimized_mean": 2448.0,
+      "significant": false
+    },
     "staff_minutes_walked": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 1979.2580816066668,
-      "ci_hi": 149.0043047587777,
-      "ci_lo": 64.51001675354179,
+      "ci_hi": 149.45663335284553,
+      "ci_lo": 64.28099293587515,
       "diff_mean": 109.84885813000001,
       "key": "staff_minutes_walked",
       "n_pairs": 10,
@@ -1430,10 +1471,10 @@
       "significant": true
     },
     "turnaround_time_s_mean": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 3316.587961978074,
-      "ci_hi": 1.9361543047801688,
-      "ci_lo": -44.29927408783003,
+      "ci_hi": 2.210974252285899,
+      "ci_lo": -44.61843205107273,
       "diff_mean": -18.344754507649895,
       "key": "turnaround_time_s_mean",
       "n_pairs": 10,
@@ -1452,7 +1493,7 @@
       "significant": true
     },
     "wip_end_of_week": {
-      "alpha_adjusted": 0.001851851851851852,
+      "alpha_adjusted": 0.0016666666666666668,
       "baseline_mean": 40.6,
       "ci_hi": 1.9,
       "ci_lo": -1.7,

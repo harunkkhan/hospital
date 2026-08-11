@@ -8,7 +8,7 @@ contract legible and the import-linter contracts meaningful.
 
 from __future__ import annotations
 
-from hospital.core.cost import CostModel, Money
+from hospital.core.cost import CostModel, CostRates, Money
 from hospital.core.entities import (
     Bay,
     FloorLayout,
@@ -18,6 +18,8 @@ from hospital.core.entities import (
     Zone,
 )
 from hospital.core.enums import (
+    ED_ZONE_TYPES,
+    WARD_ZONE_TYPES,
     Activity,
     ArrivalMode,
     BayStatus,
@@ -76,7 +78,7 @@ from hospital.core.ids import (
     TypedId,
     ZoneId,
 )
-from hospital.core.kpi import KPI_KEYS, STAFF_FRAC_KEYS, KpiVector
+from hospital.core.kpi import EXTENSIVE_KEYS, KPI_KEYS, STAFF_FRAC_KEYS, KpiVector
 from hospital.core.models import FrozenModel
 from hospital.core.rng import (
     RandomStreams,
@@ -85,6 +87,7 @@ from hospital.core.rng import (
     sample_poisson_arrivals,
 )
 from hospital.core.rules import (
+    AdmissionRule,
     CapacityRule,
     CompatibilityRule,
     CompiledRules,
@@ -95,6 +98,8 @@ from hospital.core.rules import (
     rules_hash,
 )
 from hospital.core.seam import (
+    AWAITING_ADMISSION,
+    WAITING_FOR_BAY,
     BayState,
     DecisionInput,
     DecisionResponse,
@@ -131,11 +136,17 @@ from hospital.core.vitals import (
 )
 
 __all__ = [
+    "AWAITING_ADMISSION",
+    "ED_ZONE_TYPES",
+    "EXTENSIVE_KEYS",
     "KPI_KEYS",
     "MICROS_PER_SEC",
     "NEWS2_PARAMETERS",
     "STAFF_FRAC_KEYS",
+    "WAITING_FOR_BAY",
+    "WARD_ZONE_TYPES",
     "Activity",
+    "AdmissionRule",
     "ArrivalMode",
     "Band",
     "Bay",
@@ -150,6 +161,7 @@ __all__ = [
     "CompatibilityRule",
     "CompiledRules",
     "CostModel",
+    "CostRates",
     "DecisionInput",
     "DecisionResponse",
     "DeteriorationDetected",

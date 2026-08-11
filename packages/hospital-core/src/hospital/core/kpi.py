@@ -1,4 +1,4 @@
-"""The closed, versioned KPI contract (27 keys).
+"""The closed, versioned KPI contract (30 keys).
 
 ``analysis.fold`` produces a :class:`KpiVector`; ``sim.experiment.scorecard`` and
 ``api.metrics`` consume it. A new KPI is a new key here (versioned), so downstream
@@ -35,6 +35,25 @@ _LOS_KEYS: Final[tuple[str, ...]] = tuple(
     f"los_s_{stat}_by_esi_{k}" for stat in ("mean", "p90") for k in (1, 2, 3, 4, 5)
 )
 
+# The extensive quantities (M4b). Every other resource KPI here is a *fraction* or a
+# *mean*, and neither can be turned into money: "6% of staff time was spent walking" and
+# "boarding averaged two hours" do not say how many hours or how many patients. These
+# three carry the totals, which is what a cost model needs and what
+# :mod:`hospital.core.cost` predicted would have to be added to this contract when money
+# finally landed — a versioned change, made here deliberately.
+#
+# `boarding_hours_total` is measured with the horizon as a CENSOR, not as a filter:
+# a patient still boarding when the week ends contributes the hours they actually
+# waited. `boarding_time_s_mean` conditions on reaching a bed, which is safe only in a
+# model where everyone eventually does. Once ward capacity can run out (M4), that
+# conditioning selects for the lucky and reports a full hospital as calmer than a
+# half-empty one -- the exact inversion the ward tests were written to avoid.
+EXTENSIVE_KEYS: Final[tuple[str, ...]] = (
+    "staff_hours_paid",
+    "bay_hours_occupied",
+    "boarding_hours_total",
+)
+
 KPI_KEYS: Final[tuple[str, ...]] = (
     "completions_per_week",
     "wip_end_of_week",
@@ -54,6 +73,7 @@ KPI_KEYS: Final[tuple[str, ...]] = (
     "staff_frac_cleaning",
     "staff_frac_documentation",
     "staff_frac_idle",
+    *EXTENSIVE_KEYS,
 )
 
 STAFF_FRAC_KEYS: Final[tuple[str, ...]] = (
@@ -126,4 +146,4 @@ class KpiVector(FrozenModel):
         return self
 
 
-__all__ = ["KPI_KEYS", "STAFF_FRAC_KEYS", "KpiVector"]
+__all__ = ["EXTENSIVE_KEYS", "KPI_KEYS", "STAFF_FRAC_KEYS", "KpiVector"]
