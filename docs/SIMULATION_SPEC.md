@@ -59,10 +59,13 @@ above; deterministic baseline-vs-optimized comparison with confidence intervals.
   accepted; there is **no "left without being seen"** — patients have infinite
   patience. Throughput is a consequence of good operations, never of turning
   people away.
-- **No dollar/cost model yet.** Cost translation is deferred until analytics are
-  observable (M4b); v1 optimizes and reports *time*, not money.
-- **No other floors and no elevators.** Single ER floor; vertical movement and
-  inter-floor transport arrive in M4.
+- **No dollar/cost model in v1.** *Shipped in M4b.* Cost translation waited until
+  the analytics were observable; a scenario now states `CostRates` and gets a
+  priced weekly report, and a scenario that states none reports *time* exactly as
+  v1 did. There are deliberately **no default rates** — what an hour of nursing
+  costs is a fact about a hospital in a market, not about a simulator.
+- **No other floors and no elevators in v1.** *Shipped in M4.* A hospital is the
+  same `FloorLayout` with a graph that spans floors, joined by elevator edges.
 - **No clinical decision-making.** We model *operations*, not diagnosis or
   treatment choice. Acuity, complaint, and workup needs are inputs, not outputs.
 
@@ -96,16 +99,25 @@ classes of wiring bugs impossible before the simulation ever runs.
   `complaint` category, `isolation_required`, and a `WorkupNeeds` bundle
   (labs?, imaging kind?, procedure count, expected provider visits). A derived
   `care_deadline` encodes a soft SLA by acuity.
-- **Bay / Zone** — a treatment space with a `zone_type ∈ {triage, general,
-  resus_trauma, fast_track, observation, imaging, lab}`, a `node_id` locating it
+- **Bay / Zone** — a treatment space with a `zone_type`, a `node_id` locating it
   on the floor graph, a `status ∈ {free, occupied, cleaning, closed}`,
   `capabilities` (equipment, isolation-capable), and a `serving_station` (the
-  nurse station that covers it).
+  nurse station that covers it). The zone vocabulary is two blocks: the
+  emergency department (`triage, general, resus_trauma, fast_track, observation,
+  imaging, lab`) and, from M4, the inpatient wards (`icu, surgery, med_surg,
+  maternity`). A `Zone` also carries the `floor` it sits on — an index into the
+  building, not a storey number, and never read by routing, which sees only
+  edges. It is there so a *decision* can be about a floor without re-deriving
+  that from node ids.
 - **StaffMember** — a `role ∈ {physician, nurse, tech, porter, housekeeping}`, a
   `home_station`, a set of `skills`, and an `on_shift` flag driven by the
   schedule. Staff are **movable agents with graph positions**, not counters —
   their travel is the thing the simulator measures.
-- **FloorLayout** — the floor graph plus the bay/zone/station inventory.
+- **FloorLayout** — the built environment: the route graph plus the
+  bay/zone/station inventory. Named for the single ER floor it described through
+  M3, and still exactly that for an ED-only scenario; a multi-floor hospital is
+  the *same* type with a graph that spans floors, plus the `elevators` boarding
+  nodes joining them.
 
 ---
 
@@ -119,6 +131,13 @@ classes of wiring bugs impossible before the simulation ever runs.
   which means cross-floor traversals take tens of seconds to minutes. **Movement
   is a first-order cost even on one floor** — which is precisely why placement
   and routing can move the metrics.
+- **Vertical movement is just an edge (M4).** An elevator is a `RouteEdge` whose
+  `seconds` greatly exceed its `distance`, which the graph was built to allow.
+  Nothing downstream needed changing to gain floors: the routing oracle already
+  minimizes seconds over whatever graph it is handed, so placement, dispatch,
+  and physics see one building. Shafts are the *only* vertical path, and the
+  generator proves it by cutting every shaft edge and requiring an upstairs bed
+  to become unreachable.
 - **Pathfinding** is deterministic shortest-path with stable tie-breaks on
   `(seconds, distance, node_id)`. It supports live rerouting around
   `blocked_edges` and `closed_nodes` — a corridor cordoned off, a zone locked
@@ -150,10 +169,24 @@ transition emits a typed event to the append-only log (§8).
    patient's `WorkupNeeds`.
 7. **Disposition** — `discharge`, `admit`, or `transfer`.
 8. **Discharge process** — documentation/paperwork time, then the patient
-   leaves (a *completion*). An `admit` becomes **boarding**: the patient waits,
-   then leaves the modeled floor in v1, with boarding time recorded.
+   leaves (a *completion*). An `admit` becomes **boarding**, and what happens
+   next depends on whether the building has an upstairs:
+   - *ED-only floor plan* — the patient waits a sampled boarding delay and then
+     leaves the modeled floor, with boarding time recorded (the v1 behaviour).
+   - *Hospital with inpatient beds (M4)* — the patient **keeps holding their ED
+     bay** until the decision layer grants them a ward bed, is escorted upstairs
+     over the same graph, and occupies that bed for an inpatient stay of days
+     before it returns to the pool. Boarding is then a *consequence* of ward
+     capacity rather than a draw, which is the whole point: a two-hour mean
+     drawn from a distribution cannot get worse when the ICU fills. The presence
+     of a ward bed **is** the switch — there is no flag.
 9. **Bay turnaround** — a housekeeping cleaning task; on completion the bay
    returns to `free`.
+
+Both the ED bay in step 4 and the ward bed in step 8 are granted through the
+*same* decision seam and the same `assign_bay` decision. What separates them is
+the patient's **care phase**, which selects which whitelist judges the placement:
+an ESI-2 eligible for a resus bay is not thereby eligible for an ICU bed.
 
 ### Resources and agents
 
@@ -208,6 +241,12 @@ distinct decision the decision layer makes and the physics layer executes.
   free bays to minimize expected downstream travel — the walking implied by a
   patient's future provider/nurse visits and transports — weighted by acuity
   urgency, subject to zone/isolation/equipment compatibility and capacity.
+  Since M4 this is **hospital-wide**: the same lever, in the same solve, also
+  assigns admitted patients to inpatient beds. A ward bed is priced differently
+  because it costs differently — the escort upstairs is one trip, but the bed is
+  held for *days*, so ward preference and scarcity dominate where travel would.
+  Deciding both phases together is the point: the ED bay a boarding patient is
+  blocking and the ward bed that would free it are the same decision.
 - **Sequencing / triage prioritization.** Choose who is seen next as providers
   free up, using an acuity-weighted priority with **anti-starvation** so low
   acuity patients are eventually served (consistent with "never turn away").
@@ -254,7 +293,12 @@ From the event log, analysis produces the report and (M2) live indicators.
   door-to-provider times (mean + percentiles, overall and **by acuity**);
   length-of-stay (exit − arrival, by acuity, right-censored WIP excluded);
   `staff_minutes_walked`; `bay_utilization` (warmup-windowed); `turnaround_time`;
-  `boarding_time` for admits; and `wip_end_of_week`.
+  `boarding_time` for admits; and `wip_end_of_week`. M4b adds the **extensive**
+  counterparts — `staff_hours_paid`, `bay_hours_occupied`, `boarding_hours_total`
+  — because a fraction and a mean cannot be turned into money: "6% of staff time
+  was spent walking" does not say how many hours. `boarding_hours_total` censors
+  at the horizon rather than conditioning on reaching a bed, so a hospital that
+  runs out of beds cannot report a *shorter* mean boarding time than a roomy one.
 - **Wait decomposition** — split each patient's stay into stages (door→triage,
   triage→bay, bay→provider, workup wait, disposition→discharge) so it is visible
   *where the time actually goes*, including time lost to turnaround, discharge,
@@ -324,7 +368,11 @@ A browser application over an HTTP API lets a human watch and steer a live run:
 - **M3 — Vitals, forecasting, emergency response.** Synthetic vitals, the
   statistical and ML forecasts, the retraining loop, and emergency dispatch on
   deterioration.
-- **M4 — Scale and cost.** Additional floor types as configurations,
-  elevators/stairs and inter-floor transport and ED boarding, hospital-wide
-  placement — then the deferred cost/money layer translating saved time and
-  utilization into dollars.
+- **M4 — Scale and cost. ✅** Additional floor types as configurations
+  (`scenarios/hospital.yaml` stacks ICU, surgery, and med-surg on the reference
+  ED), elevators and inter-floor transport, ED boarding as a consequence of ward
+  capacity, and hospital-wide placement — then the deferred cost/money layer
+  translating saved time and utilization into dollars. Stairs were deliberately
+  *not* modelled: they are a second vertical route with different physics (no
+  dwell, no capacity, refused by non-ambulatory patients), and modelling one
+  route honestly beats modelling two badly.

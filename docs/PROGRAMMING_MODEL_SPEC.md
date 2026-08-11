@@ -106,9 +106,15 @@ byte-identical; perturbing one substream key leaves every other draw unchanged.
 
 There is exactly **one** place a plan is judged, and it never mutates anything.
 
-- **Declarative constraint rules.** Compatibility, isolation, capacity, skill,
-  and precedence constraints are a frozen, discriminated **rule vocabulary**
-  compiled into a validator kernel — not scattered `if` statements.
+- **Declarative constraint rules.** Compatibility, admission, isolation,
+  capacity, skill, and precedence constraints are a frozen, discriminated **rule
+  vocabulary** compiled into a validator kernel — not scattered `if` statements.
+  Compatibility and admission are separate kinds on purpose: the first says where
+  a patient may be *worked up*, the second where they may be *admitted*, and the
+  patient's care phase selects which applies. Folding wards into the first would
+  make an ESI-2 eligible for a resus bay thereby eligible for an ICU bed the
+  moment they finish triage — a placement no rule could then refuse, because
+  nothing in the key distinguishes the two moments.
 - **`validate(plan, context) -> tuple[Violation, ...]`.** Returns the (possibly
   empty) list of violations. `Violation` is a union — `UnknownEntity`,
   `BayIncompatible`, `CapacityExceeded`, `IsolationViolated`, `StaffLacksSkill`,
@@ -325,4 +331,4 @@ Each step ends green before the next begins:
    **← M2.**
 9. **`hospital-forecast`** — features, models, retraining loop, emergency
    dispatch. **← M3.**
-10. **Scale to more floors**, then the **cost/money layer**. **← M4.**
+10. **Scale to more floors**, then the **cost/money layer**. **← M4. ✅**
