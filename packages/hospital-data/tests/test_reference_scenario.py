@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hospital.core import RandomStreams
+import pytest
+
+from hospital.core import WARD_ZONE_TYPES, LayoutError, RandomStreams, RouteGraph
+from hospital.data.hospital import generate_hospital
 from hospital.data.layout import generate_floor
 from hospital.data.scenario import dump_scenario, load_arm, load_scenario
 from hospital.data.workload import generate_workload
@@ -87,3 +90,57 @@ def test_baseline_and_surge_arms_share_the_identical_base_week() -> None:
     assert base_by_id.keys() == surge_base_by_id.keys()
     assert all(base_by_id[pid] == surge_base_by_id[pid] for pid in base_by_id)
     assert len(surge_arrivals) > len(base_arrivals)
+
+
+def test_hospital_yaml_is_the_reference_floor_in_a_building(tmp_path: Path) -> None:
+    """The committed M4 operating point: same ED, same week, floors above it.
+
+    Held to the same discipline as ``er_floor_stressed`` — exactly one thing differs
+    from the reference, so the two are CRN-comparable and any measured difference is
+    the building rather than the demand. Here that one thing is ``upper_floors``:
+    seed, facility, workload, and staffing are identical, which is what lets an ED-only
+    run and a hospital run of the same week be set beside each other at all.
+    """
+    src = _SCENARIOS / "hospital.yaml"
+    scenario = load_scenario(src)
+    assert scenario.name == "hospital"
+
+    reference = load_scenario(_SCENARIOS / "er_floor.yaml")
+    assert scenario.seed == reference.seed
+    assert scenario.facility == reference.facility  # the ED half is untouched
+    assert scenario.workload == reference.workload
+    assert scenario.staffing == reference.staffing
+    assert not reference.upper_floors
+    assert [f.name for f in scenario.upper_floors] == ["icu", "surgery", "med_surg"]
+
+    dump_scenario(scenario, out := tmp_path / "hospital.yaml")
+    assert out.read_text() == src.read_text()
+    assert load_scenario(out) == scenario
+
+
+def test_hospital_yaml_builds_one_connected_building_reachable_by_elevator() -> None:
+    """Every inpatient bed is reachable from the ED entrance, and only via a shaft.
+
+    ``generate_hospital`` already refuses a disconnected stack, so the reachability
+    half would pass on a building with a stray inter-floor corridor too. Cutting the
+    shafts and requiring an upstairs bed to become unreachable is what proves the
+    elevators are the only vertical path in the *committed* scenario, not merely in
+    the generator's unit tests.
+    """
+    scenario = load_scenario(_SCENARIOS / "hospital.yaml")
+    layout = generate_hospital(scenario.hospital())
+    ward_bays = [bay for bay in layout.bays if bay.zone_type in WARD_ZONE_TYPES]
+    assert len(ward_bays) == 10 + 16 + 48
+    assert layout.elevators
+
+    entrance = layout.entrances[0]
+    for bay in ward_bays:
+        assert layout.graph.dijkstra(entrance, bay.node).total.root > 0
+
+    shafts = set(layout.elevators)
+    severed = RouteGraph(
+        nodes=layout.graph.nodes,
+        edges=tuple(e for e in layout.graph.edges if not (e.a in shafts and e.b in shafts)),
+    )
+    with pytest.raises(LayoutError):
+        severed.dijkstra(entrance, ward_bays[-1].node)

@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from hospital.core import (
+    MICROS_PER_SEC,
     Activity,
     DispositionKind,
     Duration,
@@ -215,10 +216,30 @@ def sample_boarding_delay(streams: RandomStreams, patient: Patient) -> Duration:
     return sample_lognormal(g, _BOARDING_MEAN_S, _BOARDING_CV)
 
 
+def admit_probability(esi: EsiAcuity) -> float:
+    """P(disposition = ADMIT) for an ``esi`` patient — the demand side of bed capacity."""
+    return _DISPOSITION_MIX[esi][DispositionKind.ADMIT]
+
+
+def mean_ward_stay(esi: EsiAcuity) -> Duration:
+    """The mean inpatient stay for an ``esi`` patient — the supply side of bed capacity.
+
+    Public alongside :func:`admit_probability` because sizing a ward is a real question
+    to ask of the model and not only of a run: the two together turn a week of arrivals
+    into the bed-days it implies, which is how ``scenarios/hospital.yaml`` was sized and
+    how the test that pins its operating point checks it is still true. Reading the
+    private tables from outside would make that arithmetic silently wrong the day either
+    distribution moves.
+    """
+    return Duration(round(_WARD_STAY_MEAN_S[esi] * MICROS_PER_SEC))
+
+
 __all__ = [
     "ServiceTable",
     "ServiceTimes",
+    "admit_probability",
     "default_service_table",
+    "mean_ward_stay",
     "sample_boarding_delay",
     "sample_disposition",
     "sample_ward_stay",

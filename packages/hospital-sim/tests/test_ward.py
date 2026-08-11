@@ -9,20 +9,30 @@ that claim; the rest guard the mechanics it rests on.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from _sim_fixtures import tiny_scenario
 
-from hospital.core import WARD_ZONE_TYPES, BayStatus, ZoneType, compile_rules
+from hospital.core import (
+    WARD_ZONE_TYPES,
+    BayStatus,
+    RandomStreams,
+    ZoneType,
+    compile_rules,
+)
 from hospital.data.hospital import generate_hospital
-from hospital.data.scenario import FacilitySpec, FloorSpec, Scenario, ZoneQuota
+from hospital.data.scenario import FacilitySpec, FloorSpec, Scenario, ZoneQuota, load_scenario
+from hospital.data.workload import generate_workload
 from hospital.sim import run_replication
 from hospital.sim.experiment.replication import default_rules
 from hospital.sim.flow.ward import has_ward_beds, ward_beds
+from hospital.sim.physics.service_times import admit_probability, mean_ward_stay
 from hospital.sim.policies.factory import Arm
 from hospital.solver.placement import WARD_PREFERENCE
 
 _SEED = 7
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _ward_floor(zone_type: ZoneType, beds: int) -> FloorSpec:
@@ -367,3 +377,36 @@ def test_ward_bed_lookup_is_deterministic_and_status_free() -> None:
     assert list(beds) == sorted(beds, key=lambda b: b.root)
     assert has_ward_beds(world)  # type: ignore[arg-type]
     assert BayStatus.FREE  # the lookup never consults status; this is a static list
+
+
+def test_the_committed_hospital_is_tight_but_not_gridlocked() -> None:
+    """`scenarios/hospital.yaml`'s bed count is an operating point; this pins which one.
+
+    Sized against that scenario's own realized week rather than guessed. Its arrivals
+    admit enough patients that their sampled ward stays need ~90 beds to run at full
+    occupancy, and the committed 74 leaves the wards genuinely scarce. Size to ~90 and
+    boarding vanishes, so the building stops demonstrating the mechanism M4 exists for;
+    drop to ~56 and the ED gridlocks (measured: 19h mean boarding, 15% fewer weekly
+    completions), which is a stressed variant rather than a reference.
+
+    The assertion couples the scenario to the *sim's* ward-stay model, which is why it
+    lives here and not beside the other scenario tests: change either side enough to
+    move this ratio and the reference hospital has been silently re-sited.
+    """
+    scenario = load_scenario(_REPO_ROOT / "scenarios" / "hospital.yaml")
+    beds = sum(
+        quota.bays
+        for floor in scenario.upper_floors
+        for quota in floor.facility.zones
+        if quota.zone_type in WARD_ZONE_TYPES
+    )
+    arrivals = generate_workload(
+        scenario.workload, RandomStreams(scenario.seed), disruptions=scenario.disruptions
+    )
+    bed_days = sum(
+        admit_probability(a.patient.esi) * mean_ward_stay(a.patient.esi).root / 1e6 / 86_400.0
+        for a in arrivals
+    )
+    horizon_days = scenario.workload.horizon.end.root / 1e6 / 86_400.0
+    needed = bed_days / horizon_days
+    assert 0.7 <= beds / needed <= 0.9, f"{beds} beds against {needed:.0f} for full occupancy"
