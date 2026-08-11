@@ -114,6 +114,7 @@ staffing:
     physician: 3
     porter: 1
     tech: 3
+  shift_aware: false
 upper_floors: []
 workload:
   ambulance_fraction: 0.15

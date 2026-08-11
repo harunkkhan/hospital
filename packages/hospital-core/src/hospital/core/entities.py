@@ -18,7 +18,7 @@ from hospital.core.enums import ArrivalMode, EsiAcuity, StaffRole, ZoneType
 from hospital.core.graph import RouteGraph
 from hospital.core.ids import BayId, NodeId, PatientId, StaffId, ZoneId
 from hospital.core.models import FrozenModel
-from hospital.core.time import Duration, SimTime, minutes
+from hospital.core.time import Duration, SimTime, TimeWindow, minutes
 
 # Door-to-provider targets by acuity — the **soft** SLA a ``care_deadline`` encodes.
 # 🟡-tunable data, in the same family as the acuity urgency curve: these are the
@@ -109,12 +109,48 @@ class Zone(FrozenModel):
 
 
 class StaffMember(FrozenModel):
-    """A static staff descriptor (role, home station, skills)."""
+    """A static staff descriptor (role, home station, skills, and a shift schedule).
+
+    ``shifts`` is the schedule §3.3's "``on_shift`` flag driven by the schedule" refers
+    to — the *flag* is derived from it by :meth:`on_shift`, for the same reason
+    ``care_deadline`` is derived: a stored boolean would need re-writing at every shift
+    boundary and would be a second source of truth for something the windows already say.
+
+    **Empty means always on duty, and that is the pre-existing behaviour.** Through M4 the
+    engine realized one static roster for the whole horizon — shift blocks were collapsed
+    to their per-role maximum, so a scenario declaring 07:00-19:00 cover ran that headcount
+    at 03:00 too. That is what ``()`` reproduces exactly, so every scenario and golden
+    written before shift-awareness is byte-identical. A scenario opts in by asking
+    ``realize_staff`` for shift-aware staff, which fills this in.
+    """
 
     id: StaffId
     role: StaffRole
     home_station: NodeId
     skills: frozenset[str]
+    shifts: tuple[TimeWindow, ...] = ()
+
+    def on_shift(self, t: SimTime) -> bool:
+        """Whether this member is rostered at ``t`` — always true with no schedule."""
+        return not self.shifts or any(shift.contains(t) for shift in self.shifts)
+
+    def on_duty_until(self, t: SimTime) -> SimTime | None:
+        """When the shift covering ``t`` ends, or ``None`` when off duty or unscheduled."""
+        for shift in self.shifts:
+            if shift.contains(t):
+                return shift.end
+        return None
+
+    def next_shift_start(self, t: SimTime) -> SimTime | None:
+        """The start of the earliest shift beginning at or after ``t``, if any.
+
+        What an off-duty member is "busy until": the engine projects unavailability as a
+        ``busy_until``, the same channel a staff-absence disruption uses, so every existing
+        dispatch path skips an off-shift member without knowing shifts exist. ``None`` means
+        they have no further shift in the horizon and are unavailable for the rest of it.
+        """
+        upcoming = [shift.start for shift in self.shifts if shift.start >= t]
+        return min(upcoming) if upcoming else None
 
 
 class FloorLayout(FrozenModel):

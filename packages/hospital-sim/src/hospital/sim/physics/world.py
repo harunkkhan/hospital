@@ -97,6 +97,11 @@ _MAX_TICKS_PER_INSTANT: Final[int] = 200
 # baseline arm) every entry is unranked and the native acuity-tier FIFO holds.
 _UNRANKED: Final[int] = 2**31
 
+# Past the end of any horizon this model runs. Used as "unavailable for the rest of the
+# run" when a shift-scheduled staff member has no further shift, so off-shift and absent
+# share one `busy_until` channel instead of needing a separate terminal state.
+_FOREVER: Final[SimTime] = SimTime(2**62)
+
 
 def _callbacks(ev: simpy.Event) -> list[Callable[[simpy.Event], None]]:
     """``Event.callbacks`` with a concrete type (simpy's alias is TypeVar-unknown)."""
@@ -752,13 +757,43 @@ class World:
             for b in self.layout.bays
         )
 
+    def unavailable_until(self, s: StaffId) -> SimTime | None:
+        """When ``s`` becomes available again — ``None`` if they are available now.
+
+        The ONE place unavailability is decided, and it folds the two reasons for it into
+        the single channel every dispatch path already understands. A staff-absence
+        disruption sets an explicit ``absent_until``; being off shift is the other reason,
+        and it resolves to the start of their next shift (or the far future when they have
+        none left, since "no more shifts" means unavailable for the rest of the horizon).
+        The later of the two wins: someone off shift *and* off sick is not back at the
+        earlier of the two instants.
+
+        Reusing ``busy_until`` rather than adding an ``on_shift`` field to ``StaffState``
+        is what let shift-awareness land without touching a single policy: the baseline's
+        nearest-idle filter and the solver's dispatch matching both already skip anyone
+        whose ``busy_until`` is in the future.
+        """
+        absent = self._absent_until.get(s)
+        member = self._staff.get(s)
+        if member is None or not member.shifts:
+            return absent
+        now = self.now()
+        if member.on_shift(now):
+            return absent
+        resumes = member.next_shift_start(now)
+        if resumes is None:
+            # No further shift this horizon. `_FOREVER` is past any week's end, so they
+            # stay unavailable without the caller needing a separate "gone" state.
+            resumes = _FOREVER
+        return max(resumes, absent) if absent is not None else resumes
+
     def snapshot_staff(self) -> tuple[StaffState, ...]:
-        """Immutable apply-time staff states (absence surfaces as ``busy_until``)."""
+        """Immutable apply-time staff states (absence and off-shift both as ``busy_until``)."""
         return tuple(
             StaffState(
                 staff=s,
                 at=self._staff_pos[s],
-                busy_until=self._absent_until.get(s),
+                busy_until=self.unavailable_until(s),
                 current_task=self._staff_task.get(s),
             )
             for s in self._staff

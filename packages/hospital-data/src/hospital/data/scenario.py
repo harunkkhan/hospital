@@ -227,10 +227,31 @@ class ShiftBlock(FrozenModel):
 
 
 class StaffingSpec(FrozenModel):
-    """Static staffing input: explicit shift blocks plus a default coverage level."""
+    """Static staffing input: explicit shift blocks plus a default coverage level.
+
+    ``shift_aware`` decides whether the blocks are a *schedule* or merely a headcount.
+
+    **False (the default, and every scenario written before it existed).** Blocks are
+    collapsed to their per-role maximum and that roster is on duty for the whole horizon.
+    A scenario declaring 07:00-19:00 cover therefore runs its day headcount at 03:00 too —
+    a documented v1 simplification ("you set staffing; we measure"), and the reason
+    ``utilization`` could define on-shift seconds as the whole measurement window.
+
+    **True.** Each member is rostered only for the blocks that schedule them, and is
+    unavailable outside them. This is what makes §3.3's "``on_shift`` flag driven by the
+    schedule" real, and it is what a *solved* roster needs to mean anything: the covering
+    MIP's whole output is a headcount that varies across the day, and collapsing it to its
+    peak throws away the shaping it was computed for.
+
+    Opt-in rather than a fix, because the two are genuinely different scenarios rather than
+    a right and a wrong one — and because flipping the default would leave the committed
+    reference ED with **no staff at all** overnight (its blocks cover 84 of the week's 168
+    hours), which is a re-siting of every scenario, not a bug fix.
+    """
 
     blocks: tuple[ShiftBlock, ...] = ()
     default_counts: Mapping[StaffRole, _HeadCount] = {}
+    shift_aware: bool = False
 
     @field_validator("default_counts", mode="after")
     @classmethod
@@ -394,9 +415,40 @@ def realize_staff(
                     role=role,
                     home_station=NodeId(stations[k % len(stations)].root),
                     skills=skills,
+                    shifts=_shifts_for(spec, role, k, window) if spec.shift_aware else (),
                 )
             )
     return tuple(staff)
+
+
+def _shifts_for(
+    spec: StaffingSpec, role: StaffRole, k: int, window: TimeWindow
+) -> tuple[TimeWindow, ...]:
+    """Which blocks the ``k``-th member of ``role`` is rostered for (shift-aware mode).
+
+    Member ``k`` works every block that schedules **more than ``k``** of their role. If
+    Monday asks for 14 nurses and Tuesday for 10, nurses 0-9 work both days and nurses
+    10-13 work only Monday — which is the honest reading of a per-block headcount, and
+    falls out of the same ``k`` that already names them.
+
+    Identities are therefore *unchanged* by the mode: ``staff_nurse_007`` is the same
+    person with or without ``shift_aware``, and only their schedule differs. Reusing them
+    across blocks rather than minting a fresh member per (block, k) also keeps the roster
+    small — 14 nurses with seven shifts each, not 98 nurses with one — which keeps the
+    dispatch matching the size it was and lets a nurse stay where they finished yesterday.
+
+    Windows are clipped to ``window``: a block that runs past the horizon does not roster
+    anybody beyond it, and a block entirely outside contributes nothing.
+    """
+    out: list[TimeWindow] = []
+    for block in spec.blocks:
+        if block.role_counts.get(role, 0) <= k:
+            continue
+        start = max(block.window.start, window.start)
+        end = min(block.window.end, window.end)
+        if start < end:
+            out.append(TimeWindow(start=start, end=end))
+    return tuple(sorted(out, key=lambda w: (w.start.root, w.end.root)))
 
 
 __all__ = [

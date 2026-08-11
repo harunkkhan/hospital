@@ -114,6 +114,7 @@ staffing:
     physician: 3
     porter: 1
     tech: 3
+  shift_aware: false
 upper_floors:
 - facility:
     aspect_ratio: 1.55

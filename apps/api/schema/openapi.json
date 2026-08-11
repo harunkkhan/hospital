@@ -2720,7 +2720,7 @@
       },
       "StaffingSpec": {
         "additionalProperties": false,
-        "description": "Static staffing input: explicit shift blocks plus a default coverage level.",
+        "description": "Static staffing input: explicit shift blocks plus a default coverage level.\n\n``shift_aware`` decides whether the blocks are a *schedule* or merely a headcount.\n\n**False (the default, and every scenario written before it existed).** Blocks are\ncollapsed to their per-role maximum and that roster is on duty for the whole horizon.\nA scenario declaring 07:00-19:00 cover therefore runs its day headcount at 03:00 too \u2014\na documented v1 simplification (\"you set staffing; we measure\"), and the reason\n``utilization`` could define on-shift seconds as the whole measurement window.\n\n**True.** Each member is rostered only for the blocks that schedule them, and is\nunavailable outside them. This is what makes \u00a73.3's \"``on_shift`` flag driven by the\nschedule\" real, and it is what a *solved* roster needs to mean anything: the covering\nMIP's whole output is a headcount that varies across the day, and collapsing it to its\npeak throws away the shaping it was computed for.\n\nOpt-in rather than a fix, because the two are genuinely different scenarios rather than\na right and a wrong one \u2014 and because flipping the default would leave the committed\nreference ED with **no staff at all** overnight (its blocks cover 84 of the week's 168\nhours), which is a re-siting of every scenario, not a bug fix.",
         "properties": {
           "blocks": {
             "default": [],
@@ -2739,6 +2739,11 @@
             },
             "title": "Default Counts",
             "type": "object"
+          },
+          "shift_aware": {
+            "default": false,
+            "title": "Shift Aware",
+            "type": "boolean"
           }
         },
         "title": "StaffingSpec",
