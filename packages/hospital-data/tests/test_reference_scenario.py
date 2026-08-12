@@ -244,3 +244,85 @@ def test_shifts_are_clipped_to_the_run_window() -> None:
     )
     member = realize_staff(spec, layout, window)[0]
     assert member.shifts == (TimeWindow(start=SimTime(0), end=SimTime(hours(10).root)),)
+
+
+def test_er_floor_shifts_is_the_reference_floor_on_a_real_rota(tmp_path: Path) -> None:
+    """The committed shift-aware operating point — same ED, same week, a real schedule.
+
+    Held to the discipline every variant here follows: exactly one thing differs from the
+    reference. Seed, facility, and workload are identical, so this and ``er_floor`` are the
+    same realized week and any difference between them is the rota.
+    """
+    src = _SCENARIOS / "er_floor_shifts.yaml"
+    scenario = load_scenario(src)
+    assert scenario.name == "er_floor_shifts"
+
+    reference = load_scenario(_SCENARIOS / "er_floor.yaml")
+    assert scenario.seed == reference.seed
+    assert scenario.facility == reference.facility
+    assert scenario.workload == reference.workload
+    assert scenario.staffing != reference.staffing
+    assert scenario.staffing.shift_aware and not reference.staffing.shift_aware
+
+    dump_scenario(scenario, out := tmp_path / "er_floor_shifts.yaml")
+    assert out.read_text() == src.read_text()
+
+
+def test_the_rota_covers_every_hour_of_the_week() -> None:
+    """A shift-aware scenario with a gap runs an ED with literally nobody in it.
+
+    This is the failure the mode makes possible and the collapsing one could not: under
+    ``shift_aware`` an uncovered hour is not quietly back-filled by the per-role maximum,
+    it is an empty department. The reference rota therefore has to be checked hour by hour
+    rather than trusted to look plausible.
+    """
+    scenario = load_scenario(_SCENARIOS / "er_floor_shifts.yaml")
+    layout = generate_hospital(scenario.hospital())
+    horizon = scenario.workload.horizon
+    roster = realize_staff(
+        scenario.staffing, layout, TimeWindow(start=horizon.start, end=horizon.end)
+    )
+    span_h = (horizon.end.root - horizon.start.root) // hours(1).root
+    for hour in range(span_h):
+        instant = SimTime(horizon.start.root + hours(hour).root)
+        on_duty = [m for m in roster if m.on_shift(instant)]
+        assert on_duty, f"hour {hour} has nobody on duty"
+        roles = {m.role for m in on_duty}
+        assert StaffRole.NURSE in roles and StaffRole.PHYSICIAN in roles, (
+            f"hour {hour} has no {'nurse' if StaffRole.NURSE not in roles else 'physician'}"
+        )
+
+
+def test_the_rota_is_thinner_at_night_than_by_day() -> None:
+    """The whole point of a schedule: it tracks demand instead of paying for the peak.
+
+    Nights average 2.4 arrivals an hour against 6.8 by day in this workload, so a rota that
+    staffed them alike would be the flat roster wearing a schedule.
+    """
+    scenario = load_scenario(_SCENARIOS / "er_floor_shifts.yaml")
+    layout = generate_hospital(scenario.hospital())
+    horizon = scenario.workload.horizon
+    roster = realize_staff(
+        scenario.staffing, layout, TimeWindow(start=horizon.start, end=horizon.end)
+    )
+
+    def on_duty(hour: int) -> int:
+        return sum(1 for m in roster if m.on_shift(SimTime(hours(hour).root)))
+
+    assert on_duty(3) < on_duty(9)
+    assert on_duty(3) < on_duty(18)
+
+
+def test_the_rota_staffs_nobody_the_model_never_gives_work() -> None:
+    """Techs are omitted on purpose, and this forces the decision to be revisited.
+
+    No flow in ``sim`` creates a task requiring a ``TECH`` — measured at 0.00 role-minutes
+    per patient — so the six that ``er_floor`` staffs are paid to be idle. Writing them into
+    a new rota would be knowingly committing waste. If imaging (or anything else) ever
+    becomes tech-operated, this test fails and the rota has to add them back rather than
+    silently under-staffing the new work.
+    """
+    scenario = load_scenario(_SCENARIOS / "er_floor_shifts.yaml")
+    rostered = {role for block in scenario.staffing.blocks for role in block.role_counts}
+    assert StaffRole.TECH not in rostered
+    assert {StaffRole.NURSE, StaffRole.PHYSICIAN} <= rostered
