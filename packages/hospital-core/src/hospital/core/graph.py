@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import heapq
 
+from pydantic import Field
+
 from hospital.core.errors import LayoutError
 from hospital.core.ids import NodeId
 from hospital.core.models import FrozenModel
@@ -40,12 +42,25 @@ from hospital.core.units import Distance
 
 
 class RouteNode(FrozenModel):
-    """A graph vertex. ``x_cm``/``y_cm`` are viz-only, never used in routing."""
+    """A graph vertex. ``x_cm``/``y_cm`` are viz-only, never used in routing.
+
+    ``floor`` is viz-only too, and for a specific reason: in a real building the floors
+    share a footprint, so ``x_cm``/``y_cm`` **overlap between them** and a renderer that
+    projected the whole graph at once would draw four wards on top of each other. Floors
+    are not separated by moving them apart in the domain — that would be a lie about the
+    geometry — they are separated by the renderer choosing one, and this is what lets it.
+
+    Routing never reads it, exactly as with :attr:`Zone.floor`: vertical movement is an
+    edge whose ``seconds`` say what the trip costs, not a coordinate. It exists so that a
+    consumer asking "which storey is this?" does not have to parse the node id, which is
+    the one place that information was previously encoded.
+    """
 
     id: NodeId
     label: str
     x_cm: int
     y_cm: int
+    floor: int = Field(default=0, ge=0)
 
 
 class RouteEdge(FrozenModel):

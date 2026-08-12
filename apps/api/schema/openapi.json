@@ -2125,8 +2125,14 @@
       },
       "RouteNode": {
         "additionalProperties": false,
-        "description": "A graph vertex. ``x_cm``/``y_cm`` are viz-only, never used in routing.",
+        "description": "A graph vertex. ``x_cm``/``y_cm`` are viz-only, never used in routing.\n\n``floor`` is viz-only too, and for a specific reason: in a real building the floors\nshare a footprint, so ``x_cm``/``y_cm`` **overlap between them** and a renderer that\nprojected the whole graph at once would draw four wards on top of each other. Floors\nare not separated by moving them apart in the domain \u2014 that would be a lie about the\ngeometry \u2014 they are separated by the renderer choosing one, and this is what lets it.\n\nRouting never reads it, exactly as with :attr:`Zone.floor`: vertical movement is an\nedge whose ``seconds`` say what the trip costs, not a coordinate. It exists so that a\nconsumer asking \"which storey is this?\" does not have to parse the node id, which is\nthe one place that information was previously encoded.",
         "properties": {
+          "floor": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Floor",
+            "type": "integer"
+          },
           "id": {
             "$ref": "#/components/schemas/NodeId"
           },

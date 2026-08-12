@@ -26,6 +26,7 @@ import {
   STAFF_DOT_COLOR,
   STAFF_DOT_RING,
 } from "./colors";
+import { floorLabel, floorsOf, sliceToFloor } from "./floors";
 import { deadReckonSimUs, indexNodes, kinematicPosition } from "./interpolate";
 import { makeProjection } from "./projection";
 
@@ -50,6 +51,13 @@ export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMap
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState<Size>({ width: 800, height: 520 });
+  const [floor, setFloor] = useState(0);
+
+  // A building's floors share a footprint, so their coordinates overlap and projecting the
+  // whole graph would stack every ward on the ED. Everything below renders ONE storey; a
+  // single-floor scenario slices to itself, so an ED-only run is unchanged.
+  const floors = useMemo(() => floorsOf(layout), [layout]);
+  const visible = useMemo(() => sliceToFloor(layout, floor), [layout, floor]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -67,18 +75,18 @@ export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMap
   }, []);
 
   const projection = useMemo(
-    () => makeProjection(layout.graph.nodes, size.width, size.height),
-    [layout, size],
+    () => makeProjection(visible.graph.nodes, size.width, size.height),
+    [visible, size],
   );
-  const nodeIndex = useMemo(() => indexNodes(layout.graph.nodes), [layout]);
+  const nodeIndex = useMemo(() => indexNodes(visible.graph.nodes), [visible]);
   const edgeUs = useMemo(() => {
     const map = new Map<string, number>();
-    for (const e of layout.graph.edges) {
+    for (const e of visible.graph.edges) {
       map.set(`${e.a}>${e.b}`, e.seconds);
       map.set(`${e.b}>${e.a}`, e.seconds);
     }
     return map;
-  }, [layout]);
+  }, [visible]);
 
   // Latest world + its wall arrival time + whether it is the live head,
   // readable from the rAF loop without retriggering React renders.
@@ -168,7 +176,7 @@ export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMap
   }, [size, projection, nodeIndex, edgeUs]);
 
   const zoneLabel = (zoneId: string): { x: number; y: number; text: string } | null => {
-    const members = layout.bays.filter((b) => b.zone === zoneId);
+    const members = visible.bays.filter((b) => b.zone === zoneId);
     if (members.length === 0) {
       return null;
     }
@@ -182,7 +190,7 @@ export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMap
       sx += node.x_cm;
       sy += node.y_cm;
     }
-    const zone = layout.zones.find((z) => z.id === zoneId);
+    const zone = visible.zones.find((z) => z.id === zoneId);
     return {
       x: projection.toX(sx / members.length),
       y: projection.toY(sy / members.length) - (BAY_H_CM * projection.scale) / 2 - 16,
@@ -195,9 +203,42 @@ export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMap
 
   return (
     <div ref={containerRef} style={{ position: "absolute", inset: 0 }}>
+      {/* Storey picker. Absent for a single-floor ED, so the console a reader already
+          knows is untouched until there is genuinely somewhere else to look. */}
+      {floors.length > 1 && (
+        <div
+          role="group"
+          aria-label="Floor"
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            zIndex: 1,
+            display: "flex",
+            gap: 4,
+          }}
+        >
+          {floors.map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setFloor(f)}
+              aria-pressed={f === floor}
+              style={{
+                padding: "2px 8px",
+                fontSize: 12,
+                cursor: "pointer",
+                fontWeight: f === floor ? 700 : 400,
+              }}
+            >
+              {floorLabel(f)}
+            </button>
+          ))}
+        </div>
+      )}
       <svg width={size.width} height={size.height} role="img" aria-label="ER floor map">
         {/* corridor edges */}
-        {layout.graph.edges.map((e) => {
+        {visible.graph.edges.map((e) => {
           const a = nodeIndex.get(e.a);
           const b = nodeIndex.get(e.b);
           if (a === undefined || b === undefined) {
@@ -217,7 +258,7 @@ export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMap
           );
         })}
         {/* stations / entrances / service nodes */}
-        {[...layout.stations, ...layout.entrances, ...layout.imaging_nodes, ...layout.lab_nodes].map(
+        {[...visible.stations, ...visible.entrances, ...visible.imaging_nodes, ...visible.lab_nodes].map(
           (id) => {
             const node = nodeIndex.get(id);
             if (node === undefined) {
@@ -236,7 +277,7 @@ export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMap
           },
         )}
         {/* zone labels */}
-        {layout.zones.map((zone) => {
+        {visible.zones.map((zone) => {
           const label = zoneLabel(zone.id);
           if (label === null) {
             return null;
@@ -257,7 +298,7 @@ export function FloorMap2D({ layout, world, selected, onSelect, live }: FloorMap
           );
         })}
         {/* bays, colored by live status; click to select for overrides */}
-        {layout.bays.map((bay) => {
+        {visible.bays.map((bay) => {
           const node = nodeIndex.get(bay.node);
           if (node === undefined) {
             return null;
