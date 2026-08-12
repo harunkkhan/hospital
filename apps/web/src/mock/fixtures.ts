@@ -38,8 +38,8 @@ export const COMPLAINTS: readonly string[] = [
   "back pain",
 ];
 
-function node(id: string, label: string, x: number, y: number): RouteNode {
-  return { id, label, x_cm: x, y_cm: y };
+function node(id: string, label: string, x: number, y: number, floor = 0): RouteNode {
+  return { id, label, x_cm: x, y_cm: y, floor };
 }
 
 function edge(a: string, b: string, coords: Map<string, RouteNode>): RouteEdge {

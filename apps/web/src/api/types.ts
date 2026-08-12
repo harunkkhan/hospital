@@ -81,6 +81,13 @@ export interface RouteNode {
   /** Viz/interpolation only — NEVER pathfinding (edge `seconds` is authority). */
   x_cm: number;
   y_cm: number;
+  /**
+   * Which storey this node sits on, 0 for the ground floor. Viz-only, like the
+   * coordinates — and necessary because floors of a real building SHARE a footprint, so
+   * `x_cm`/`y_cm` overlap between them. Projecting the whole graph at once draws every
+   * ward on top of the ED; `sliceToFloor` uses this to render one storey at a time.
+   */
+  floor: number;
 }
 
 export interface RouteEdge {

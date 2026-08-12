@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,16 @@ from hospital.data.scenario import FacilitySpec, ZoneQuota, load_scenario
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SQFT_TO_CM2 = 929.0304
-_GOLDEN_ER_FLOOR_GRAPH_SHA256 = "3859dacaa4511d6496ea7794a4d891c242d9c7e31ce10994719a74d8865d76ec"
+_GOLDEN_ER_FLOOR_GRAPH_SHA256 = "55471c97946a260edfe8fce783349422ba2b13c5e6fd4327f9c2c804d7a35c0d"
+
+# The hash this golden held until `RouteNode` gained its viz-only `floor`. Kept, and still
+# asserted below against the graph with that field projected out, because the two together
+# say something the new hash alone cannot: the *geometry* did not move, only its
+# serialization grew a key. A re-baseline that could not show that would be indistinguishable
+# from a generator change nobody noticed.
+_PRE_FLOOR_ER_FLOOR_GRAPH_SHA256 = (
+    "3859dacaa4511d6496ea7794a4d891c242d9c7e31ce10994719a74d8865d76ec"
+)
 
 
 def _graph_hash(facility: FacilitySpec) -> str:
@@ -38,6 +48,25 @@ def test_generate_floor_is_deterministic() -> None:
 def test_reference_er_floor_graph_matches_golden_hash() -> None:
     scenario = load_scenario(_REPO_ROOT / "scenarios" / "er_floor.yaml")
     assert _graph_hash(scenario.facility) == _GOLDEN_ER_FLOOR_GRAPH_SHA256
+
+
+def test_the_floor_field_changed_the_serialization_and_not_the_geometry() -> None:
+    """Justifies the one re-baseline this golden has had.
+
+    ``RouteNode.floor`` is viz-only and defaults to 0, so adding it moved the hash without
+    moving a single coordinate. Projecting the field back out must reproduce the pre-M4b
+    digest exactly — which is the difference between "we added a key" and "the floor
+    generator quietly changed", two things a bare new constant cannot tell apart.
+    """
+    scenario = load_scenario(_REPO_ROOT / "scenarios" / "er_floor.yaml")
+    graph = generate_floor(scenario.facility).graph
+    assert {node.floor for node in graph.nodes} == {0}, "a single floor is all floor 0"
+
+    dumped = graph.model_dump(mode="json")
+    for node in dumped["nodes"]:
+        node.pop("floor")
+    legacy = hashlib.sha256(json.dumps(dumped, separators=(",", ":")).encode("utf-8")).hexdigest()
+    assert legacy == _PRE_FLOOR_ER_FLOOR_GRAPH_SHA256
 
 
 def test_reference_er_floor_area_within_tolerance() -> None:
