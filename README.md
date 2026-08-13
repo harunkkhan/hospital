@@ -30,12 +30,10 @@ apps/     sim-runner CLI, FastAPI operator API, React console
 ## Status
 
 All four milestones are built: **M1** headless engine, **M2** operator console, **M3**
-forecasting/ML with emergency dispatch, **M4** multi-floor scale and the cost layer. Every
-operational lever in [`SIMULATION_SPEC.md`](docs/SIMULATION_SPEC.md) §7 is implemented,
-including staff scheduling, which is solved from the arrival forecast rather than supplied.
+forecasting/ML with emergency dispatch, **M4** multi-floor scale and the cost layer. Staff
+scheduling — the last lever that was an input — is now solved from the arrival forecast.
 
-Two things a reader should know before quoting a number, both recorded where the evidence is
-rather than only here:
+The project is **not finished**, and the gaps are specific rather than a general disclaimer:
 
 - **M1 meets two of its three acceptance criteria.** The committed golden shows OPTIMIZED
   beating BASELINE on acuity-weighted time and staff-minutes walked; weekly completions is
@@ -46,6 +44,17 @@ rather than only here:
   care deadlines by ~38 more patient-hours a week than the naive baseline, significantly, and
   that contrast is pinned in the same golden. The spec's remedy for such a trade is that it
   stays visible, not that the objective be re-weighted to erase it.
+- **One half of a §7 lever is inert.** "Schedule documentation into low-load windows so
+  paperwork does not steal capacity during peaks" has its mechanism — `FloorLoad.is_peak` at a
+  0.8 threshold — but every production caller passes the neutral `FloorLoad()` default, whose
+  0.0 utilization can never cross it. Documentation is therefore always in the promoted band,
+  for discharge and for dispatch's priority-augmented urgency alike. It is closable within the
+  seam's rules: `StaffState` already carries `busy_until`/`current_task`, so instantaneous
+  utilization is derivable from the projection rather than being a hidden field.
+- **Two roles/inputs the model carries but never exercises.** No flow creates a task requiring
+  a `TECH`, so the six that `er_floor.yaml` staffs are paid to be idle (measured at 0.00
+  role-minutes per patient); and `WorkupNeeds.procedures` is sampled per patient and never
+  simulated, which is consistent with §5's workup loop but leaves the field dangling.
 
 ## Development
 
