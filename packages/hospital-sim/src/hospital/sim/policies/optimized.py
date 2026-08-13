@@ -271,9 +271,7 @@ def make_optimized_policies(
         sequencing=SolverSequencing(objective=objective),
         dispatch=SolverDispatch(objective=objective, rules=rules, roster=roster),
         turnaround=SolverTurnaround(oracle=oracle, objective=objective, rules=rules, roster=roster),
-        discharge=SolverDischarge(
-            oracle=oracle, objective=objective, rules=rules, roster=roster
-        ),
+        discharge=SolverDischarge(oracle=oracle, objective=objective, rules=rules, roster=roster),
         staffing=InputStaffing(),
         origin="solver",
     )
