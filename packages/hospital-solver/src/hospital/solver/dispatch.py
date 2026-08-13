@@ -173,9 +173,13 @@ def priority_urgencies(
       completes it when capacity is idle — never a hard ban). Off-peak it
       keeps its natural acuity urgency (promoted band).
 
-    Tasks not named keep ``_task_urgency``'s default. ``load`` defaults to the
-    neutral ``FloorLoad()`` — the same v1 stand-in the discharge lever gets
-    (``DecisionInput`` carries no utilization signal).
+    Tasks not named keep ``_task_urgency``'s default. ``load`` should come from
+    ``discharge.floor_load``, which measures it from the staff states the projection
+    already carries; omitting it falls back to the neutral ``FloorLoad()``, whose 0.0
+    utilization can never cross the threshold. That fallback was what every caller passed
+    from M1 until the measured version existed, which is why this gate had never fired.
+    It is kept as a default only so a caller with no roster to hand can still ask for
+    urgencies without silently being told the floor is saturated.
     """
     gate = load if load is not None else FloorLoad()
     static_bays = {b.id: b for b in di.layout.bays}
