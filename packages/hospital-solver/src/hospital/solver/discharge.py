@@ -37,6 +37,8 @@ from hospital.core import (
     DecisionInput,
     PatientId,
     PlanItem,
+    StaffMember,
+    StaffRole,
     TaskSpec,
 )
 from hospital.core.models import FrozenModel
@@ -53,7 +55,14 @@ _DOC_DEMOTE_BAND = 1_000_000
 
 
 class FloorLoad(FrozenModel):
-    """Current provider/nurse utilization (fractions in ``[0, 1]``) — the gate input."""
+    """Current provider/nurse utilization (fractions in ``[0, 1]``) — the gate input.
+
+    The defaults are ``0.0``, which is *no load* and therefore never peak. That is a neutral
+    stand-in, not a measurement, and every production caller passed it from M1 until
+    :func:`floor_load` existed — so the documentation gate was permanently open and §7's
+    "schedule documentation into low-load windows" never once fired. Construct this from
+    :func:`floor_load` unless you specifically want the neutral value.
+    """
 
     provider_utilization: float = 0.0
     nurse_utilization: float = 0.0
@@ -61,6 +70,57 @@ class FloorLoad(FrozenModel):
     def is_peak(self, threshold: float = DEFAULT_LOAD_THRESHOLD) -> bool:
         """Whether either pool is above the documentation-gate threshold."""
         return self.provider_utilization > threshold or self.nurse_utilization > threshold
+
+
+def floor_load(di: DecisionInput, staff_members: tuple[StaffMember, ...]) -> FloorLoad:
+    """Instantaneous provider/nurse utilization, read from the seam projection.
+
+    The gate this feeds is "are we at peak *right now*", so the quantity is instantaneous —
+    the fraction of the available pool currently on a task — not the time-averaged
+    ``provider_util`` the KPI fold reports. Averaged over a week the reference floor sits at
+    0.64 and 0.37 and would never trip a 0.8 threshold; the busy minutes that the gate exists
+    for are exactly what an average smooths away.
+
+    **No hidden fields, and no new ones.** ``StaffState`` already carries ``current_task`` and
+    ``busy_until``, so who is working right now is in the projection a policy is handed. The
+    note this replaces claimed ``DecisionInput`` "carries no utilization signal"; it carries
+    the two facts utilization is computed from, which is not the same thing.
+
+    The denominator is the *available* pool, and separating it from the busy count is what
+    makes the number mean anything now that staff go off shift:
+
+    * ``current_task is not None`` — working, and counts in both numerator and denominator;
+    * ``busy_until`` in the future with no task — unavailable for another reason (off shift, or
+      absent through a disruption), and counts in **neither**. Counting an off-duty nurse as
+      busy would read a quiet night as a peak and demote the documentation that the night is
+      the right time to do;
+    * otherwise — idle and available, denominator only.
+
+    An empty pool yields ``0.0`` rather than ``1.0``. With nobody on duty there is no capacity
+    to protect and dispatch cannot assign the work either way, so the gate is moot; reporting
+    saturation would demote documentation on the grounds that nobody is there to be disturbed.
+    """
+    by_id = {member.id: member for member in staff_members}
+    busy: dict[StaffRole, int] = {}
+    available: dict[StaffRole, int] = {}
+    for state in di.staff:
+        member = by_id.get(state.staff)
+        if member is None:
+            continue  # not on this roster; the validator judges membership, not this
+        if state.current_task is not None:
+            busy[member.role] = busy.get(member.role, 0) + 1
+            available[member.role] = available.get(member.role, 0) + 1
+        elif state.busy_until is None or state.busy_until <= di.now:
+            available[member.role] = available.get(member.role, 0) + 1
+
+    def fraction(role: StaffRole) -> float:
+        pool = available.get(role, 0)
+        return busy.get(role, 0) / pool if pool > 0 else 0.0
+
+    return FloorLoad(
+        provider_utilization=fraction(StaffRole.PHYSICIAN),
+        nurse_utilization=fraction(StaffRole.NURSE),
+    )
 
 
 def prioritize_discharge(
@@ -124,4 +184,4 @@ def prioritize_discharge(
     return tuple(items)
 
 
-__all__ = ["DEFAULT_LOAD_THRESHOLD", "FloorLoad", "prioritize_discharge"]
+__all__ = ["DEFAULT_LOAD_THRESHOLD", "FloorLoad", "floor_load", "prioritize_discharge"]

@@ -70,7 +70,7 @@ from hospital.solver import (
     priority_urgencies,
     stamp,
 )
-from hospital.solver.discharge import FloorLoad
+from hospital.solver.discharge import floor_load
 from hospital.solver.sequencing import DEFAULT_STARVATION_RATE
 from hospital.solver.sequencing import sequence as score_sequence
 
@@ -195,7 +195,9 @@ class SolverDispatch:
     def dispatch(self, di: DecisionInput, oracle: RoutingOracle) -> tuple[PlanItem, ...]:
         if not di.pending_tasks:
             return ()
-        overrides = priority_urgencies(di, config=self.objective, rules=self.rules)
+        overrides = priority_urgencies(
+            di, config=self.objective, rules=self.rules, load=floor_load(di, self.roster)
+        )
         return assign_staff(
             di,
             oracle,
@@ -225,17 +227,27 @@ class SolverTurnaround:
 
 @dataclass(frozen=True)
 class SolverDischarge:
-    """``DischargePolicy`` — discharge expedite + documentation load gate."""
+    """``DischargePolicy`` — discharge expedite + documentation load gate.
+
+    Holds the roster because the load gate needs a denominator: utilization is busy staff over
+    *available* staff, and ``DecisionInput.staff`` gives the states while the roster gives the
+    roles. Same reason ``SolverDispatch`` and ``SolverTurnaround`` already hold it.
+    """
 
     oracle: RoutingOracle
     objective: ObjectiveConfig
     rules: CompiledRules
+    roster: tuple[StaffMember, ...] = ()
 
     def discharge(self, di: DecisionInput) -> tuple[PlanItem, ...]:
         if not any(t.kind in ("discharge", "documentation") for t in di.pending_tasks):
             return ()
         return prioritize_discharge(
-            di, self.oracle, config=self.objective, load=FloorLoad(), rules=self.rules
+            di,
+            self.oracle,
+            config=self.objective,
+            load=floor_load(di, self.roster),
+            rules=self.rules,
         )
 
 
@@ -259,7 +271,9 @@ def make_optimized_policies(
         sequencing=SolverSequencing(objective=objective),
         dispatch=SolverDispatch(objective=objective, rules=rules, roster=roster),
         turnaround=SolverTurnaround(oracle=oracle, objective=objective, rules=rules, roster=roster),
-        discharge=SolverDischarge(oracle=oracle, objective=objective, rules=rules),
+        discharge=SolverDischarge(
+            oracle=oracle, objective=objective, rules=rules, roster=roster
+        ),
         staffing=InputStaffing(),
         origin="solver",
     )
