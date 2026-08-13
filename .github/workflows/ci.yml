@@ -71,6 +71,14 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: bun run --cwd apps/web tsc --noEmit
 
+      # Named separately from `Test` even though `bun test` also runs it: the four frontend
+      # gates are enumerated in PROGRAMMING_MODEL_SPEC §9, and a red step called "Contract
+      # drift" says what broke where a red step called "Test" does not. tsc cannot cover
+      # this — a server field the browser does not yet reference typechecks perfectly.
+      - name: Contract drift (TypeScript <-> pydantic)
+        if: steps.detect.outputs.present == 'true'
+        run: bun test apps/web/tests/contract-drift.test.ts
+
       - name: Test
         if: steps.detect.outputs.present == 'true'
         run: bun test
