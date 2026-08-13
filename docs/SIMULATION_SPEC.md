@@ -363,6 +363,15 @@ A browser application over an HTTP API lets a human watch and steer a live run:
   which OPTIMIZED beats BASELINE on acuity-weighted time, staff-minutes walked,
   and weekly completions with significant confidence intervals, committed as a
   golden result.
+  > **Status: two of three.** The committed golden delivers acuity-weighted time
+  > and staff-minutes walked; weekly completions is flat and non-significant,
+  > because the reference floor is demand-limited (`bay_utilization` ~0.21) and no
+  > decision can add a completion there. On a bay-constrained variant the criterion
+  > does come alive (~15 more completions a week, significant) but the other two
+  > then lose significance to queueing variance — so the three measures pull toward
+  > different operating points. The golden has deliberately *not* been re-sited to
+  > make the test pass; see `tests/goldens/test_golden_metrics.py` for the
+  > measurement and the reasoning.
 - **M2 — Operator console.** The API and browser app: live run streaming,
   playback, validated overrides, and the compare view.
 - **M3 — Vitals, forecasting, emergency response.** Synthetic vitals, the

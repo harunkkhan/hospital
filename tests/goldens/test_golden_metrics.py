@@ -23,6 +23,29 @@ The pins assert the HONEST M1 story, trade included:
   It is also now *priced*, so the trade shows up in money and not only in seconds.
 * Throughput is demand-limited at this operating point: completions flat (ns).
 
+**One of M1's three stated acceptance criteria is not met, and that is recorded here rather
+than engineered around.** Section 12 accepts M1 "when a reference run produces metrics.json
+in which OPTIMIZED beats BASELINE on acuity-weighted time, staff-minutes walked, *and weekly
+completions* with significant confidence intervals". This golden delivers the first two and
+not the third: ``completions_per_week`` is flat and non-significant.
+
+The reason is the operating point, not the policy. This floor runs at ``bay_utilization``
+~0.21 — 76 bays against six arrivals an hour — so throughput is limited by demand and no
+placement or dispatch decision can add a completion. ``er_floor_stressed`` stresses
+*staffing*, not beds, which is why it does not change that.
+
+Measured, so the claim is not hand-waving: on a bay-constrained variant of the same week (22
+bays, ``bay_utilization`` ~0.75) the criterion *does* come alive — the optimized arm completes
+about 15 more patients a week than the baseline, significantly, with end-of-week WIP falling
+by the same 15. But at six paired reps the *other* two criteria go non-significant there: on a
+congested floor the travel saving and the objective gain are swamped by queueing variance.
+
+So no committed scenario satisfies all three at once, and moving this golden to a congested
+floor would trade two passes for one. It has not been moved. Choosing an operating point until
+an acceptance test goes green is selecting the evidence, which is the same failure as a fake
+win — and this file's whole purpose is to refuse that. The gap is a property of the criterion
+(the three measures pull toward different floors), not a defect the golden should hide.
+
 Re-baselined twice: at M4b, when ``KPI_KEYS`` grew 27 -> 30, and again when
 ``deadline_breach_hours_total`` made it 31. Both times **only the interval bounds moved.**
 ``paired_bootstrap`` corrects across the whole KPI family, so each extra key tightens the
