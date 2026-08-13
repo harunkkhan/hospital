@@ -260,8 +260,15 @@ distinct decision the decision layer makes and the physics layer executes.
   and schedule documentation into low-load windows so paperwork does not steal
   capacity during peaks.
 - **Staff scheduling.** Choose staffing per role per shift-block to cover demand
-  at minimum staff-hours. In v1 this is a **tunable scenario input** (you set
-  staffing; the simulator measures); later it is solved from the demand forecast.
+  at minimum staff-hours. A **tunable scenario input** through M4 (you set
+  staffing; the simulator measures) and now *also solved* from the demand
+  forecast: `forecast.staffing` turns the fitted arrival intensity into per-role
+  demand, and `solver.scheduling.solve_coverage` covers it with the cheapest
+  roster. Both paths meet at the same `kind="staffing"` contract, so a solved
+  roster is scheduled exactly like a supplied one. Measured against a
+  hand-written three-shift rota it costs ~5% more staff-hours and returns ~14%
+  better door-to-provider — better service at comparable cost, not a saving;
+  `tests/test_staffing_loop.py` carries the numbers and the caveats.
 
 The BASELINE arm makes the same *kinds* of decisions with simple reactive rules
 (first-available bay, nearest-idle dispatch, FIFO-within-acuity, no lookahead).
