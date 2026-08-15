@@ -1,11 +1,10 @@
 /**
  * The style packs: two design directions over one geometry derivation.
  *
- * A pack is DATA ONLY — colours, opacities, whether walls are hairlines or solids, whether
- * the scene is lit. Nothing in `scene.ts` knows which pack it is drawing, so a third
- * direction is a new entry in this table rather than a fork of the builders. That seam is
- * the whole point of keeping the type: the prototype carried four packs and dropping two of
- * them cost one array entry each.
+ * A pack is DATA ONLY — colours and opacities. Nothing in `scene.ts` knows which pack it is
+ * drawing, so a third direction is a new entry in this table rather than a fork of the
+ * builders. That seam is the whole point of keeping the type: the prototype carried four
+ * packs and dropping two of them cost one array entry each.
  *
  * **Blueprint** is the default and the look this view is tuned for: hairline ink on
  * near-white, structure over surface, so the corridor grid survives every zoom. **Clinical
@@ -45,19 +44,12 @@ export interface StylePack {
   readonly inkSoft: string;
   readonly label: string;
   /**
-   * Lit packs use `MeshStandardMaterial` and a key light; unlit ones are flat basic
-   * material, which is what keeps a line drawing a line drawing.
+   * Both shipped packs draw walls as hairlines on an unlit scene. The prototype also carried
+   * a solid-poché mode and a lit massing mode; neither survived the cut, and the fields that
+   * drove them are gone with them rather than sitting here as branches nothing takes.
    */
-  readonly lit: boolean;
-  readonly wall: {
-    readonly mode: "line" | "solid";
-    readonly fillOp: number;
-    readonly edgeOp: number;
-    /** Poché thickness, cm. Ignored in line mode. */
-    readonly thickness: number;
-    readonly color?: string;
-  };
-  readonly room: { readonly fillOp: number; readonly edgeOp: number };
+  readonly wall: { readonly edgeOp: number };
+  readonly room: { readonly fillOp: number };
   readonly slabOp: number;
   readonly gridOp: number;
   readonly statusOp: number;
@@ -85,9 +77,8 @@ const BLUEPRINT: StylePack = {
   inkStrong: "#161616",
   inkSoft: "#b3b8bf",
   label: "#4d4d4d",
-  lit: false,
-  wall: { mode: "line", fillOp: 0, edgeOp: 0.72, thickness: 14 },
-  room: { fillOp: 0.5, edgeOp: 0.5 },
+  wall: { edgeOp: 0.72 },
+  room: { fillOp: 0.5 },
   slabOp: 0.85,
   gridOp: 0.1,
   statusOp: 0.3,
@@ -125,9 +116,8 @@ const CLINICAL_DARK: StylePack = {
   inkStrong: "#98968f",
   inkSoft: "#2f2f2d",
   label: LABEL_COLOR,
-  lit: false,
-  wall: { mode: "line", fillOp: 0, edgeOp: 0.7, thickness: 14 },
-  room: { fillOp: 0.9, edgeOp: 0.55 },
+  wall: { edgeOp: 0.7 },
+  room: { fillOp: 0.9 },
   slabOp: 0.95,
   gridOp: 0.07,
   statusOp: 0.42,
