@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
 import type { FloorLayout } from "../api/types";
+import type { SelectedEntity } from "../state/runStore";
 import type { WorldView } from "../state/streamReducer";
 import {
   CAMERA_PRESETS,
@@ -44,9 +45,14 @@ const STOREY_M = HEIGHTS.perimeter * SCALE;
 interface FloorMap3DProps {
   layout: FloorLayout;
   world: WorldView;
+  selected: SelectedEntity | null;
+  onSelect: (selected: SelectedEntity | null) => void;
   /** True only for the live head; a scrubbed buffered view must not extrapolate. */
   live: boolean;
 }
+
+/** A pointer that travelled further than this between down and up was a drag, not a click. */
+const CLICK_SLOP_PX = 4;
 
 interface Stage {
   renderer: THREE.WebGLRenderer;
@@ -58,7 +64,7 @@ interface Stage {
   box: FloorBox;
 }
 
-export function FloorMap3D({ layout, world, live }: FloorMap3DProps) {
+export function FloorMap3D({ layout, world, selected, onSelect, live }: FloorMap3DProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<Stage | null>(null);
@@ -214,17 +220,27 @@ export function FloorMap3D({ layout, world, live }: FloorMap3DProps) {
     stageRef.current?.floor?.paintBays((bay) => world.bays[bay]?.status ?? "free");
   }, [world.bays, style]);
 
+  // Declared after the rebuild effect so a style swap re-cages the selected bay on the new
+  // floor in the same commit, without the selection having to survive inside the builder.
+  useEffect(() => {
+    stageRef.current?.floor?.setSelectedBay(
+      selected !== null && selected.type === "bay" ? selected.id : null,
+    );
+  }, [selected, style, arch]);
+
   // --- pointer controls ------------------------------------------------------------------
-  const dragRef = useRef<{ x: number; y: number; pan: boolean } | null>(null);
+  const dragRef = useRef<{ x: number; y: number; pan: boolean; travel: number } | null>(null);
+  const pickerRef = useRef(new THREE.Raycaster());
 
   const onPointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>): void => {
     event.currentTarget.setPointerCapture(event.pointerId);
     // Shift-drag or right-drag pans; plain drag orbits.
-    dragRef.current = { x: event.clientX, y: event.clientY, pan: event.shiftKey || event.button === 2 };
-  }, []);
-
-  const endDrag = useCallback((): void => {
-    dragRef.current = null;
+    dragRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      pan: event.shiftKey || event.button === 2,
+      travel: 0,
+    };
   }, []);
 
   const onPointerMove = useCallback((event: React.PointerEvent<HTMLCanvasElement>): void => {
@@ -237,6 +253,7 @@ export function FloorMap3D({ layout, world, live }: FloorMap3DProps) {
     const dy = event.clientY - drag.y;
     drag.x = event.clientX;
     drag.y = event.clientY;
+    drag.travel += Math.abs(dx) + Math.abs(dy);
     stage.orbit = drag.pan
       ? { ...stage.orbit, target: panTarget(stage.orbit, dx, dy) }
       : {
@@ -244,6 +261,50 @@ export function FloorMap3D({ layout, world, live }: FloorMap3DProps) {
           azimuth: stage.orbit.azimuth - dx * 0.005,
           elevation: clampElevation(stage.orbit.elevation + dy * 0.005),
         };
+  }, []);
+
+  /**
+   * Selection parity with the 2D map: a bay click feeds `OverridePanel` the same
+   * `{ type: "bay", id }`, clicking the selected bay again clears it, and so does clicking
+   * empty floor. The pick target is the status wash — one `InstancedMesh` for all 76 bays,
+   * so `instanceId` names the bay directly and there is nothing per-bay to raycast against.
+   */
+  const onPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>): void => {
+      const drag = dragRef.current;
+      dragRef.current = null;
+      const stage = stageRef.current;
+      if (drag === null || stage === null || stage.floor === null) {
+        return;
+      }
+      if (drag.travel > CLICK_SLOP_PX || drag.pan) {
+        return; // the operator was moving the camera, not choosing a bay
+      }
+      const bounds = event.currentTarget.getBoundingClientRect();
+      if (bounds.width === 0 || bounds.height === 0) {
+        return;
+      }
+      pickerRef.current.setFromCamera(
+        new THREE.Vector2(
+          ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+          -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
+        ),
+        stage.camera,
+      );
+      const hit = pickerRef.current.intersectObject(stage.floor.bayMesh, false)[0];
+      const id = hit?.instanceId === undefined ? undefined : stage.floor.bayOrder[hit.instanceId];
+      if (id === undefined) {
+        onSelect(null);
+        return;
+      }
+      const already = selected !== null && selected.type === "bay" && selected.id === id;
+      onSelect(already ? null : { type: "bay", id });
+    },
+    [onSelect, selected],
+  );
+
+  const onPointerCancel = useCallback((): void => {
+    dragRef.current = null;
   }, []);
 
   // The wheel listener has to be non-passive to suppress page scroll, which React's own
@@ -270,8 +331,8 @@ export function FloorMap3D({ layout, world, live }: FloorMap3DProps) {
         ref={canvasRef}
         className="floor3d-canvas"
         onPointerDown={onPointerDown}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
         onPointerMove={onPointerMove}
         onContextMenu={(event) => event.preventDefault()}
       />

@@ -70,6 +70,8 @@ export interface FloorScene {
   readonly bayOrder: readonly BayId[];
   /** Repaint the wash from the live world. Cheap; safe to call every frame. */
   paintBays(statusOf: (bay: BayId) => BayStatus): void;
+  /** Cage the selected bay, or clear the selection with `null`. */
+  setSelectedBay(bay: BayId | null): void;
   dispose(): void;
 }
 
@@ -525,6 +527,40 @@ export function buildFloorScene(
   };
   paintBays(() => "free");
 
+  // The selection is a cage around the whole room rather than a brighter floor: status
+  // already owns the floor colour, and an operator has to be able to see what is selected
+  // from any of the four camera presets, including from inside the corridor. Depth testing is
+  // off so the cage is never buried by the bed standing in it.
+  const selectionBox = new THREE.BoxGeometry(1, 1, 1);
+  const selectionGeometry = track(new THREE.EdgesGeometry(selectionBox));
+  selectionBox.dispose();
+  const selection = new THREE.LineSegments(
+    selectionGeometry,
+    track(
+      new THREE.LineBasicMaterial({
+        color: style.selection,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+      }),
+    ),
+  );
+  selection.renderOrder = 45;
+  selection.visible = false;
+  root.add(selection);
+
+  const bayRects = new Map<BayId, Rect>(arch.bays.map((bay) => [bay.id, bay.rect]));
+  const setSelectedBay = (bay: BayId | null): void => {
+    const r = bay === null ? undefined : bayRects.get(bay);
+    if (r === undefined) {
+      selection.visible = false;
+      return;
+    }
+    selection.visible = true;
+    selection.position.set(centerX(r) * S, (HEIGHTS.partition * S) / 2, centerY(r) * S);
+    selection.scale.set(rectWidth(r) * S, HEIGHTS.partition * S, rectHeight(r) * S);
+  };
+
   // =========================================================================
   // 6. Labels — signage, sized in SCREEN space
   // =========================================================================
@@ -638,6 +674,7 @@ export function buildFloorScene(
     bayMesh,
     bayOrder,
     paintBays,
+    setSelectedBay,
     dispose() {
       for (const item of disposables) {
         item.dispose();
