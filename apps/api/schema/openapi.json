@@ -2394,7 +2394,7 @@
       },
       "ScenarioInline": {
         "additionalProperties": false,
-        "description": "A stored base scenario plus slider overrides.\n\nA key is either one of the console's named knobs (``api.sliders.SLIDER_KEYS``\n\u2014 e.g. ``\"workload.arrival_rate_multiplier\"``, which is *relative* and so\ncould never be a leaf value) or a literal dotted path into the ``Scenario``\ndocument (e.g. ``\"workload.base_rate_per_hour\"``, whose value replaces the\naddressed leaf). Both compile through ``api.sliders.compile_overrides`` into\nan overlay ``data.scenario.apply_overlay`` validates.",
+        "description": "A stored base scenario plus slider overrides.\n\nA key is either one of the console's named knobs (``api.sliders.SLIDER_KEYS``\n\u2014 e.g. ``\"workload.arrival_rate_multiplier\"``, which is *relative* and so\ncould never be a leaf value) or a literal dotted path into the ``Scenario``\ndocument (e.g. ``\"workload.base_rate_per_hour\"``, whose value replaces the\naddressed leaf). Both compile through ``api.sliders.compile_overrides`` into\nan overlay ``data.scenario.apply_overlay`` validates.\n\n``GET /scenarios/{id}/sliders`` publishes the knob vocabulary \u2014 names, groups,\nranges, units, and what each is worth in that base \u2014 so a client never has to\nguess either the keys or where the scenario currently sits on them.",
         "properties": {
           "base": {
             "title": "Base",

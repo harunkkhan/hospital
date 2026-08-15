@@ -94,12 +94,13 @@ def _derive(client: TestClient, overrides: dict[str, float]) -> Scenario:
 
 
 def test_console_slider_keys_reach_the_fields_they_name(tmp_path: Path) -> None:
-    """Every key ``ScenarioControls`` offers must land on a real ``Scenario`` field.
+    """A named knob must land on a real ``Scenario`` field, over the wire.
 
-    None of the five is a literal path, so before the slider vocabulary existed
+    None of these is a literal path, so before the slider vocabulary existed
     ``extra="forbid"`` rejected all of them — the whole panel could only 422.
     Asserted one slider at a time, on the *effect* rather than the overlay, so a
-    key that validates but changes nothing still fails.
+    key that validates but changes nothing still fails. (The vocabulary itself is
+    exercised knob by knob in ``test_sliders``; this is the ``/scenarios`` path.)
     """
     base = api_scenario()
     with TestClient(make_app(tmp_path)) as client:
