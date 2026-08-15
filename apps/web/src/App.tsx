@@ -149,6 +149,9 @@ export function App() {
           loadCatalogue={loadCatalogue}
           onRerun={start}
           onSaveScenario={(req) => api.createScenario(req)}
+          runId={run}
+          metrics={liveWorld.kpiPreview ?? metrics.data}
+          simTime={liveWorld.simTime}
         />
       </aside>
 

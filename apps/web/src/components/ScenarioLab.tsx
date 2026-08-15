@@ -31,6 +31,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type {
   Arm,
+  KpiVector,
   RunRequest,
   ScenarioCreated,
   ScenarioCreateRequest,
@@ -39,6 +40,7 @@ import type {
   SliderGroup,
   SliderSpec,
 } from "../api/types";
+import { KpiDeltaView, type RunReading } from "./KpiDeltaView";
 
 const GROUP_ORDER: readonly SliderGroup[] = ["demand", "staffing", "capacity"];
 
@@ -83,6 +85,10 @@ export interface ScenarioLabProps {
   loadCatalogue: (base: string) => Promise<SliderCatalogue>;
   onRerun: (req: RunRequest) => void;
   onSaveScenario: (req: ScenarioCreateRequest) => Promise<ScenarioCreated>;
+  /** The live run's id and reading — snapshotted on Run to become the "before". */
+  runId: string | null;
+  metrics: KpiVector | null;
+  simTime: number;
 }
 
 export function ScenarioLab({
@@ -91,6 +97,9 @@ export function ScenarioLab({
   loadCatalogue,
   onRerun,
   onSaveScenario,
+  runId,
+  metrics,
+  simTime,
 }: ScenarioLabProps) {
   const [base, setBase] = useState("");
   const [seed, setSeed] = useState(currentSeed);
@@ -100,6 +109,11 @@ export function ScenarioLab({
   const [catalogueError, setCatalogueError] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, number>>({});
   const [savedId, setSavedId] = useState<string | null>(null);
+  // The run being left, captured at the moment Run is pressed. Held here rather
+  // than refetched because it is gone the instant the session is replaced — the
+  // API keeps no history, and this is the only place that reading still exists.
+  const [previous, setPrevious] = useState<RunReading | null>(null);
+  const [changes, setChanges] = useState<readonly string[]>([]);
 
   useEffect(() => {
     if (base === "" && scenarios !== null && scenarios.length > 0) {
@@ -151,6 +165,21 @@ export function ScenarioLab({
     if (base === "") {
       return;
     }
+    // Snapshot what we are leaving BEFORE the session is replaced, together with
+    // the knob moves that separate the two runs — the delta is only readable as
+    // "this changed, and here is what it did".
+    setPrevious(
+      runId === null || metrics === null
+        ? null
+        : { run: runId, metrics, simTime, seed: currentSeed },
+    );
+    setChanges(
+      moved.map(
+        (knob) =>
+          `${knob.label} ${formatKnobValue(knob, knob.value)} → ` +
+          `${formatKnobValue(knob, values[knob.key] ?? knob.value)}`,
+      ),
+    );
     onRerun({
       scenario: moved.length > 0 ? { base, overrides } : { id: base },
       seed,
@@ -286,9 +315,17 @@ export function ScenarioLab({
         </span>
       </div>
 
-      {savedId !== null && (
-        <div className="small muted">saved as {savedId}</div>
-      )}
+      <KpiDeltaView
+        previous={previous}
+        current={
+          runId === null || metrics === null
+            ? null
+            : { run: runId, metrics, simTime, seed: currentSeed }
+        }
+        changes={changes}
+      />
+
+      {savedId !== null && <div className="small muted">saved as {savedId}</div>}
       <div className="small muted">
         A run replaces the live session — parameters are generation-time inputs, so
         nothing here edits the run in flight. The seed is held so a slider sweep is

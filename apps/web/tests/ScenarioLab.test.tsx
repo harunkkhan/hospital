@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import type { RunRequest, ScenarioSummary, SliderCatalogue } from "../src/api/types";
+import type {
+  KpiVector,
+  RunRequest,
+  ScenarioSummary,
+  SliderCatalogue,
+} from "../src/api/types";
 import { ScenarioLab } from "../src/components/ScenarioLab";
 
 const SCENARIOS: ScenarioSummary[] = [
@@ -58,22 +63,45 @@ function catalogueFor(scenario: string): SliderCatalogue {
   };
 }
 
-function setup(): { runs: RunRequest[]; loads: string[] } {
+interface Reading {
+  runId: string | null;
+  metrics: KpiVector | null;
+  simTime: number;
+}
+
+const NO_RUN: Reading = { runId: null, metrics: null, simTime: 0 };
+
+function kpis(values: Record<string, number>): KpiVector {
+  return { values };
+}
+
+function setup(reading: Reading = NO_RUN): {
+  runs: RunRequest[];
+  loads: string[];
+  show: (next: Reading) => void;
+} {
   const runs: RunRequest[] = [];
   const loads: string[] = [];
-  render(
+  // One stable identity: the catalogue effect keys on the base, and a fresh
+  // function per render would reload (and reset) the panel on every rerender.
+  const loadCatalogue = (base: string): Promise<SliderCatalogue> => {
+    loads.push(base);
+    return Promise.resolve(catalogueFor(base));
+  };
+  const view = (next: Reading) => (
     <ScenarioLab
       scenarios={SCENARIOS}
       currentSeed={42}
-      loadCatalogue={(base) => {
-        loads.push(base);
-        return Promise.resolve(catalogueFor(base));
-      }}
+      loadCatalogue={loadCatalogue}
       onRerun={(req) => runs.push(req)}
       onSaveScenario={() => Promise.resolve({ id: "scn-01" })}
-    />,
+      runId={next.runId}
+      metrics={next.metrics}
+      simTime={next.simTime}
+    />
   );
-  return { runs, loads };
+  const { rerender } = render(view(reading));
+  return { runs, loads, show: (next) => rerender(view(next)) };
 }
 
 async function nurseSlider(): Promise<HTMLInputElement> {
@@ -126,6 +154,9 @@ describe("ScenarioLab renders from the catalogue", () => {
         loadCatalogue={() => Promise.reject(new Error("no backend"))}
         onRerun={() => undefined}
         onSaveScenario={() => Promise.resolve({ id: "scn-01" })}
+        runId={null}
+        metrics={null}
+        simTime={0}
       />,
     );
     const alert = await screen.findByRole("alert");
@@ -210,5 +241,50 @@ describe("ScenarioLab reset", () => {
     expect(screen.getAllByText("= base").length).toBe(4);
     expect(screen.getByRole("status").textContent).toBe("at base");
     expect(reset.disabled).toBe(true);
+  });
+});
+
+const HOUR = 3600 * 1_000_000;
+
+describe("ScenarioLab shows what the move did", () => {
+  test("after a re-run it contrasts the run left behind with the one now live", async () => {
+    const { show } = setup({
+      runId: "run-1",
+      metrics: kpis({ completions_per_week: 100, boarding_time_s_mean: 1200 }),
+      simTime: 24 * HOUR,
+    });
+    fireEvent.change(await nurseSlider(), { target: { value: "6" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    // Before the replacement lands there is nothing to contrast — and the panel
+    // says so rather than differencing a run against itself.
+    expect(screen.getByLabelText("Run delta").textContent).toContain("waiting for the new run");
+
+    show({
+      runId: "run-2",
+      metrics: kpis({ completions_per_week: 130, boarding_time_s_mean: 900 }),
+      simTime: 25 * HOUR,
+    });
+
+    const delta = screen.getByLabelText("Run delta");
+    // What moved, and what it did to the numbers.
+    expect(delta.textContent).toContain("Nurses 3 → 6");
+    expect(delta.textContent).toContain("run-1");
+    expect(delta.textContent).toContain("run-2");
+    expect(delta.textContent).toContain("100 —> 130"); // completions, before -> after
+    expect(delta.textContent).toContain("+5.0m"); // boarding fell by 300s
+    expect(delta.textContent).toContain("better");
+    // ...labelled for exactly what it is.
+    expect(delta.textContent).toContain("Single-seed point delta");
+    expect(delta.textContent).toContain("no confidence bound");
+  });
+
+  test("with no live reading to snapshot, the delta stays absent rather than invented", async () => {
+    const { show } = setup();
+    fireEvent.change(await nurseSlider(), { target: { value: "6" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    show({ runId: "run-2", metrics: kpis({ completions_per_week: 130 }), simTime: HOUR });
+
+    expect(screen.getByLabelText("Run delta").textContent).toContain("Move a knob and Run");
   });
 });
