@@ -25,6 +25,7 @@ import { useRunManager } from "./hooks/useRunManager";
 import { useStream } from "./hooks/useStream";
 import { createMockApi } from "./mock/mockApi";
 import { FloorMap2D } from "./render/FloorMap2D";
+import { FloorMap3D } from "./render3d/FloorMap3D";
 import type { SelectedEntity } from "./state/runStore";
 
 const DEFAULT_RUN: RunRequest = {
@@ -45,6 +46,9 @@ export function App() {
   const { handle, layout, error: bootError, start } = useRunManager(api, DEFAULT_RUN);
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [scrubIndex, setScrubIndex] = useState<number | null>(null);
+  // The 3D floor is the default view; the flat map stays one click away for anyone whose
+  // browser has no WebGL, and as the reference for what the route graph literally says.
+  const [floorView, setFloorView] = useState<"2d" | "3d">("3d");
 
   const run = handle?.run ?? null;
 
@@ -104,19 +108,32 @@ export function App() {
         {scrubIndex !== null && (
           <span className="badge warn">viewing buffered frame {formatSimTime(scrubbedWorld.simTime)}</span>
         )}
+        <button className="badge" onClick={() => setFloorView(floorView === "3d" ? "2d" : "3d")}>
+          {floorView === "3d" ? "3D floor" : "2D map"}
+        </button>
         <span className="spacer" />
         {bootError !== null && <span className="badge err">{bootError}</span>}
       </header>
 
       <main className="map-pane">
         {layout !== null ? (
-          <FloorMap2D
-            layout={layout}
-            world={scrubbedWorld}
-            selected={selected}
-            onSelect={setSelected}
-            live={scrubIndex === null}
-          />
+          floorView === "3d" ? (
+            <FloorMap3D
+              layout={layout}
+              world={scrubbedWorld}
+              selected={selected}
+              onSelect={setSelected}
+              live={scrubIndex === null}
+            />
+          ) : (
+            <FloorMap2D
+              layout={layout}
+              world={scrubbedWorld}
+              selected={selected}
+              onSelect={setSelected}
+              live={scrubIndex === null}
+            />
+          )
         ) : (
           <div style={{ padding: 20 }} className="muted">
             {bootError ?? "starting run…"}
