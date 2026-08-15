@@ -1,21 +1,36 @@
-"""The Scenario Lab's vocabulary: every knob compiles to the field it names.
+"""The Scenario Lab's vocabulary: every knob compiles to (and reads back from)
+the field it names.
 
-Judged by the *effect* on the derived ``Scenario``, never by the overlay the
-alias wrote: a key that validates but changes nothing is exactly the failure a
-schema-shaped assertion misses. A headcount is therefore judged through
+**Compile** is judged by the *effect* on the derived ``Scenario``, never by the
+overlay the alias wrote: a key that validates but changes nothing is exactly the
+failure a schema-shaped assertion misses. A headcount is therefore judged through
 ``realize_staff`` — the committed ``er_floor`` schedules 14 nurses in its blocks
 and carries 7 in its defaults, so the spec a slider writes and the roster a run
 realizes are genuinely different questions.
+
+**Read** is judged the same way and for the same reason: the catalogue's value
+for a knob has to be what the base really has, or the panel opens half a floor
+away from the scenario it claims to describe and the operator's first drag is a
+blind edit.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from _api_fixtures import api_facility, api_scenario, api_staffing, api_workload
+from _api_fixtures import (
+    DEFAULT_SCENARIO_ID,
+    api_facility,
+    api_scenario,
+    api_staffing,
+    api_workload,
+    make_app,
+)
+from fastapi.testclient import TestClient
 
-from hospital.api.sliders import compile_overrides
+from hospital.api.sliders import SLIDER_KEYS, catalogue, compile_overrides
 from hospital.core import SimTime, StaffRole, TimeWindow, ZoneType, hours
 from hospital.data.layout import generate_floor
 from hospital.data.scenario import (
@@ -26,6 +41,14 @@ from hospital.data.scenario import (
     ZoneQuota,
     realize_staff,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def _reads(base: Scenario) -> dict[str, float]:
+    """The catalogue's value for every published knob, keyed by knob key."""
+    return {knob.key: knob.value for knob in catalogue(base)}
 
 
 def _roster(scenario: Scenario) -> Counter[StaffRole]:
@@ -282,3 +305,192 @@ def test_a_floor_may_not_be_emptied_of_bays() -> None:
                 "facility.fast_track_bays": 0,
             },
         )
+
+
+# --------------------------------------------------------------------- read: the inverse
+def test_the_catalogue_covers_every_alias() -> None:
+    """Nothing translated is left unpublished — the panel's list IS this one."""
+    published = set(_reads(api_scenario()))
+    assert set(SLIDER_KEYS) <= published
+    # ...and the knobs that need no alias are published too, from their literal paths.
+    assert {
+        "facility.imaging_suites",
+        "facility.lab_stations",
+        "facility.triage_rooms",
+    } <= published
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("workload.ambulance_share", 0.75),
+        ("workload.isolation_share", 0.3),
+        ("staffing.physician_count", 5),
+        ("staffing.nurse_count", 9),
+        ("staffing.tech_count", 4),
+        ("staffing.porter_count", 2),
+        ("staffing.housekeeping_count", 6),
+        ("facility.general_bays", 7),
+        ("facility.observation_bays", 4),
+        ("facility.resus_bays", 3),
+        ("facility.fast_track_bays", 2),
+        ("facility.triage_rooms", 5),
+        ("facility.imaging_suites", 4),
+        ("facility.lab_stations", 3),
+    ],
+)
+def test_every_knob_reads_back_the_value_it_was_set_to(key: str, value: float) -> None:
+    """``read`` is a true inverse of ``compile``, for translated and literal knobs alike."""
+    derived = compile_overrides(_shift_scenario(), {key: value})
+    assert _reads(derived)[key] == pytest.approx(value)
+
+
+def test_the_relative_knob_always_reads_one() -> None:
+    """A multiplier has no stored value: the scaling is already inside
+    ``base_rate_per_hour``. Against ANY scenario — base or derived — the honest
+    reading is "nothing scaled yet", which is what the panel needs to open on."""
+    base = api_scenario()
+    assert _reads(base)["workload.arrival_rate_multiplier"] == 1.0
+    doubled = compile_overrides(base, {"workload.arrival_rate_multiplier": 2.0})
+    assert _reads(doubled)["workload.arrival_rate_multiplier"] == 1.0
+    assert doubled.workload.base_rate_per_hour == base.workload.base_rate_per_hour * 2.0
+
+
+def test_headcounts_read_the_roster_the_engine_will_build_not_the_defaults() -> None:
+    """``er_floor``'s exact trap: blocks schedule 14 nurses, defaults carry 7."""
+    base = _shift_scenario()
+    reads = _reads(base)
+    realized = _roster(base)
+    for role in StaffRole:
+        assert reads[f"staffing.{role.value}_count"] == float(realized[role])
+    # The specific number a defaults-reader would have reported instead.
+    assert reads["staffing.nurse_count"] == 14.0
+    assert base.staffing.default_counts[StaffRole.NURSE] == 7
+
+
+def test_writing_a_knob_back_at_its_own_value_changes_nothing_observable() -> None:
+    """A knob at rest is a no-op — the property behind the panel's "= base" mark.
+
+    Scoped honestly: the fractions and the zone tuple come back byte-identical,
+    and the headcounts come back identical *as realized*. A headcount alias also
+    rewrites ``default_counts`` and flattens per-shift variation by design, so a
+    document-level fixed point is not on offer for those and claiming one here
+    would be the lie. (It is also why the panel submits only the knobs that
+    actually moved.)
+    """
+    base = _repeated_zone_scenario()
+    reads = _reads(base)
+    facility_and_workload = [key for key in reads if key.startswith(("facility.", "workload."))]
+    assert compile_overrides(base, {key: reads[key] for key in facility_and_workload}) == base
+
+    shifted = _shift_scenario()
+    staffed = compile_overrides(
+        shifted,
+        {key: value for key, value in _reads(shifted).items() if key.startswith("staffing.")},
+    )
+    assert _roster(staffed) == _roster(shifted)
+
+
+# ------------------------------------------------------------------------- the endpoint
+def test_catalogue_endpoint_publishes_grouped_knobs_read_against_the_base(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path, {DEFAULT_SCENARIO_ID: _shift_scenario()})) as client:
+        response = client.get(f"/scenarios/{DEFAULT_SCENARIO_ID}/sliders")
+        assert response.status_code == 200, response.text
+        body: dict[str, Any] = response.json()
+        assert body["scenario"] == DEFAULT_SCENARIO_ID
+
+        knobs: list[dict[str, Any]] = body["knobs"]
+        by_key = {knob["key"]: knob for knob in knobs}
+        assert set(by_key) == set(_reads(_shift_scenario()))
+        assert {knob["group"] for knob in knobs} == {"demand", "staffing", "capacity"}
+        # The two roles that gate bed turnaround are supply, not clinical staffing.
+        assert by_key["staffing.housekeeping_count"]["group"] == "capacity"
+        assert by_key["staffing.porter_count"]["group"] == "capacity"
+
+        for knob in knobs:
+            assert knob["label"] != ""
+            assert knob["unit"] != ""
+            assert knob["step"] > 0
+            assert knob["min"] < knob["max"]
+        # ...and the values are the base's own, not a published default.
+        assert by_key["staffing.nurse_count"]["value"] == 14.0
+        assert by_key["workload.arrival_rate_multiplier"]["value"] == 1.0
+
+
+def test_catalogue_endpoint_404s_for_an_unknown_base(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        assert client.get("/scenarios/nope/sliders").status_code == 404
+
+
+def test_catalogue_tracks_a_derived_scenario(tmp_path: Path) -> None:
+    """Re-read against the variant a ``POST /scenarios`` produced, it shows where
+    that variant now sits — the catalogue is derived, never stored."""
+    with TestClient(make_app(tmp_path)) as client:
+        created = client.post(
+            "/scenarios",
+            json={"base": DEFAULT_SCENARIO_ID, "overrides": {"facility.fast_track_bays": 9}},
+        )
+        assert created.status_code == 201, created.text
+        derived_id = created.json()["id"]
+        knobs: list[dict[str, Any]] = client.get(f"/scenarios/{derived_id}/sliders").json()["knobs"]
+        by_key = {knob["key"]: knob for knob in knobs}
+        assert by_key["facility.fast_track_bays"]["value"] == 9.0
+
+
+def test_a_value_outside_a_published_range_is_still_the_data_layers_call(tmp_path: Path) -> None:
+    """The catalogue's min/max are affordances: nothing re-checks them server-side,
+    so a value past a range is accepted or refused purely on ``data``'s terms."""
+    with TestClient(make_app(tmp_path)) as client:
+        knobs: list[dict[str, Any]] = client.get(
+            f"/scenarios/{DEFAULT_SCENARIO_ID}/sliders"
+        ).json()["knobs"]
+        ceiling = next(k for k in knobs if k["key"] == "facility.general_bays")["max"]
+
+        past_the_range = client.post(
+            "/scenarios",
+            json={
+                "base": DEFAULT_SCENARIO_ID,
+                "overrides": {"facility.general_bays": ceiling + 10},
+            },
+        )
+        assert past_the_range.status_code == 201, past_the_range.text
+
+        # ...whereas a value the MODEL rejects is a 422, from the model.
+        refused = client.post(
+            "/scenarios",
+            json={"base": DEFAULT_SCENARIO_ID, "overrides": {"workload.isolation_share": 1.4}},
+        )
+        assert refused.status_code == 422
+
+
+def test_the_lab_launches_a_run_from_every_knob_at_once(tmp_path: Path) -> None:
+    """The console's own re-run path: inline sliders straight into ``POST /runs``."""
+    with TestClient(make_app(tmp_path)) as client:
+        response = client.post(
+            "/runs",
+            json={
+                "scenario": {
+                    "base": DEFAULT_SCENARIO_ID,
+                    "overrides": {
+                        "workload.arrival_rate_multiplier": 1.5,
+                        "workload.ambulance_share": 0.4,
+                        "workload.isolation_share": 0.2,
+                        "staffing.physician_count": 3,
+                        "staffing.nurse_count": 4,
+                        "staffing.tech_count": 2,
+                        "staffing.porter_count": 2,
+                        "staffing.housekeeping_count": 2,
+                        "facility.general_bays": 4,
+                        "facility.observation_bays": 2,
+                        "facility.resus_bays": 2,
+                        "facility.fast_track_bays": 2,
+                        "facility.triage_rooms": 2,
+                        "facility.imaging_suites": 2,
+                        "facility.lab_stations": 2,
+                    },
+                },
+                "seed": 11,
+                "arm": "optimized",
+            },
+        )
+        assert response.status_code == 201, response.text
