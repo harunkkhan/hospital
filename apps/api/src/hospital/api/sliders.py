@@ -1,14 +1,14 @@
 """The console's slider vocabulary -> real ``Scenario`` edits (doc 07 §3.7/§7.5).
 
-``ScenarioControls`` posts five named knobs (``apps/web`` ``SUGGESTED_KEYS``)::
+The console posts named knobs::
 
-    workload.arrival_rate_multiplier   staffing.nurse_count
-    workload.ambulance_share           staffing.physician_count
-                                       facility.fast_track_bays
+    workload.arrival_rate_multiplier   staffing.physician_count  staffing.porter_count
+    workload.ambulance_share           staffing.nurse_count      staffing.housekeeping_count
+    facility.fast_track_bays           staffing.tech_count
 
 Not one of them is a literal path into the ``Scenario`` document. One is
 *relative* (a multiplier over the base rate, so it cannot be a leaf value at
-all); one is a plain rename; two address a headcount that lives in **both**
+all); one is a plain rename; five address a headcount that lives in **both**
 ``staffing.blocks`` and ``staffing.default_counts``; one addresses a single entry
 of the ``facility.zones`` tuple. Handed to ``apply_overlay`` verbatim they are
 unknown fields, and ``extra="forbid"`` turns every slider the console has into a
@@ -47,8 +47,16 @@ if TYPE_CHECKING:
 _ALIAS_TARGETS: Mapping[str, tuple[str, ...]] = {
     "workload.arrival_rate_multiplier": ("workload.base_rate_per_hour",),
     "workload.ambulance_share": ("workload.ambulance_fraction",),
-    "staffing.nurse_count": ("staffing.blocks", "staffing.default_counts"),
-    "staffing.physician_count": ("staffing.blocks", "staffing.default_counts"),
+    **{
+        f"staffing.{role.value}_count": ("staffing.blocks", "staffing.default_counts")
+        # Every role, from the core vocabulary rather than a list restated here:
+        # a headcount knob is exactly "a role ``realize_staff`` can put on the
+        # floor", so adding a role to ``core.StaffRole`` should not need an edit
+        # in the console's translation layer to become adjustable. The two
+        # non-clinical roles matter most: housekeeping turns bays over and
+        # porters move people, which is what actually gates bed availability.
+        for role in StaffRole
+    },
     "facility.fast_track_bays": ("facility.zones",),
 }
 
@@ -137,8 +145,7 @@ def _fast_track_bays(base: Scenario, value: float) -> dict[str, object]:
 _ALIASES: Mapping[str, Callable[[Scenario, float], dict[str, object]]] = {
     "workload.arrival_rate_multiplier": _arrival_rate_multiplier,
     "workload.ambulance_share": _ambulance_share,
-    "staffing.nurse_count": _headcount(StaffRole.NURSE),
-    "staffing.physician_count": _headcount(StaffRole.PHYSICIAN),
+    **{f"staffing.{role.value}_count": _headcount(role) for role in StaffRole},
     "facility.fast_track_bays": _fast_track_bays,
 }
 
