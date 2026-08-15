@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
 import type { FloorLayout } from "../api/types";
+import type { WorldView } from "../state/streamReducer";
 import {
   CAMERA_PRESETS,
   DEFAULT_PRESET,
@@ -33,6 +34,7 @@ import {
 } from "./camera";
 import { deriveFloor } from "./derive";
 import { HEIGHTS, SCALE, rectHeight, rectWidth } from "./geometry";
+import { buildLiveLayer, type LiveLayer } from "./live";
 import { buildFloorScene, type FloorScene } from "./scene";
 import { DEFAULT_STYLE_ID, STYLE_PACKS, stylePackById } from "./styles";
 
@@ -41,6 +43,9 @@ const STOREY_M = HEIGHTS.perimeter * SCALE;
 
 interface FloorMap3DProps {
   layout: FloorLayout;
+  world: WorldView;
+  /** True only for the live head; a scrubbed buffered view must not extrapolate. */
+  live: boolean;
 }
 
 interface Stage {
@@ -49,10 +54,11 @@ interface Stage {
   camera: THREE.PerspectiveCamera;
   orbit: Orbit;
   floor: FloorScene | null;
+  people: LiveLayer | null;
   box: FloorBox;
 }
 
-export function FloorMap3D({ layout }: FloorMap3DProps) {
+export function FloorMap3D({ layout, world, live }: FloorMap3DProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<Stage | null>(null);
@@ -67,6 +73,17 @@ export function FloorMap3D({ layout }: FloorMap3DProps) {
 
   const arch = useMemo(() => deriveFloor(layout), [layout]);
   const style = useMemo(() => stylePackById(styleId), [styleId]);
+
+  // The latest world, its wall-clock arrival time and whether it is the live head — read from
+  // the animation loop without dragging React into every frame.
+  const frameRef = useRef<{ world: WorldView; wallMs: number; live: boolean }>({
+    world,
+    wallMs: performance.now(),
+    live,
+  });
+  useEffect(() => {
+    frameRef.current = { world, wallMs: performance.now(), live };
+  }, [world, live]);
 
   const aspectOf = useCallback((): number => {
     const canvas = canvasRef.current;
@@ -111,6 +128,7 @@ export function FloorMap3D({ layout }: FloorMap3DProps) {
       camera: new THREE.PerspectiveCamera(VFOV_DEG, 1, 0.5, 4000),
       orbit: { azimuth: 0, elevation: 0.6, distance: 120, target: [0, 1, 0] },
       floor: null,
+      people: null,
       box: { halfWidth: 1, halfDepth: 1, height: STOREY_M },
     };
     stageRef.current = stage;
@@ -131,6 +149,10 @@ export function FloorMap3D({ layout }: FloorMap3DProps) {
 
     let raf = 0;
     const frame = (): void => {
+      // People move between frames; the building does not. Only the live layer is touched at
+      // display rate — the floor is geometry already on the GPU.
+      const current = frameRef.current;
+      stage.people?.update(current.world, current.live, current.wallMs);
       const eye: Vec3 = orbitEye(stage.orbit);
       stage.camera.position.set(eye[0], eye[1], eye[2]);
       stage.camera.lookAt(stage.orbit.target[0], stage.orbit.target[1], stage.orbit.target[2]);
@@ -142,6 +164,7 @@ export function FloorMap3D({ layout }: FloorMap3DProps) {
     return () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
+      stage.people?.dispose();
       stage.floor?.dispose();
       renderer.dispose();
       stageRef.current = null;
@@ -154,14 +177,22 @@ export function FloorMap3D({ layout }: FloorMap3DProps) {
     if (stage === null) {
       return;
     }
-    stage.floor?.dispose();
     if (stage.floor !== null) {
       stage.scene.remove(stage.floor.root);
     }
+    stage.people?.dispose();
+    stage.floor?.dispose();
+
     const floor = buildFloorScene(arch, style, { vfovDeg: VFOV_DEG });
+    const people = buildLiveLayer(layout, arch, style);
+    // The live layer hangs off the floor's group so it inherits the same plan-to-scene
+    // translation: one offset, defined once, and people cannot drift from the building.
+    floor.root.add(people.root);
     stage.floor = floor;
+    stage.people = people;
     stage.scene.add(floor.root);
     stage.scene.background = new THREE.Color(style.bg);
+    floor.paintBays((bay) => frameRef.current.world.bays[bay]?.status ?? "free");
     stage.box = {
       halfWidth: (rectWidth(arch.dept) * SCALE) / 2,
       halfDepth: (rectHeight(arch.dept) * SCALE) / 2,
@@ -170,11 +201,18 @@ export function FloorMap3D({ layout }: FloorMap3DProps) {
     // Re-fit to whichever preset is showing: a new plan or a new pack must not leave the
     // camera framing the previous building.
     applyPreset(presetIdRef.current);
-  }, [arch, style, applyPreset]);
+  }, [arch, style, layout, applyPreset]);
 
   useEffect(() => {
     applyPreset(presetId);
   }, [presetId, applyPreset]);
+
+  // Bay status is a per-instance colour write on a mesh that already exists, so a bay turning
+  // over costs one buffer upload rather than a rebuild. Frames arrive a few times a second;
+  // repainting on frame arrival rather than per animation frame keeps it that way.
+  useEffect(() => {
+    stageRef.current?.floor?.paintBays((bay) => world.bays[bay]?.status ?? "free");
+  }, [world.bays, style]);
 
   // --- pointer controls ------------------------------------------------------------------
   const dragRef = useRef<{ x: number; y: number; pan: boolean } | null>(null);
