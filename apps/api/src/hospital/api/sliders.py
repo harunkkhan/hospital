@@ -4,12 +4,12 @@ The console posts named knobs::
 
     workload.arrival_rate_multiplier   staffing.physician_count  staffing.porter_count
     workload.ambulance_share           staffing.nurse_count      staffing.housekeeping_count
-                                       staffing.tech_count
+    workload.isolation_share           staffing.tech_count
     facility.{fast_track,general,observation,resus}_bays
 
 Not one of them is a literal path into the ``Scenario`` document. One is
 *relative* (a multiplier over the base rate, so it cannot be a leaf value at
-all); one is a plain rename; five address a headcount that lives in **both**
+all); two are plain renames; five address a headcount that lives in **both**
 ``staffing.blocks`` and ``staffing.default_counts``; four address entries of the
 ``facility.zones`` tuple. Handed to ``apply_overlay`` verbatim they are unknown
 fields, and ``extra="forbid"`` turns every slider the console has into a 422 —
@@ -62,6 +62,7 @@ _BAY_KEY_STEM: Mapping[ZoneType, str] = {
 _ALIAS_TARGETS: Mapping[str, tuple[str, ...]] = {
     "workload.arrival_rate_multiplier": ("workload.base_rate_per_hour",),
     "workload.ambulance_share": ("workload.ambulance_fraction",),
+    "workload.isolation_share": ("workload.isolation_fraction",),
     **{
         f"staffing.{role.value}_count": ("staffing.blocks", "staffing.default_counts")
         # Every role, from the core vocabulary rather than a list restated here:
@@ -99,6 +100,19 @@ def _ambulance_share(base: Scenario, value: float) -> dict[str, object]:
     """The console's name for ``workload.ambulance_fraction`` — a pure rename."""
     del base
     return {"workload": {"ambulance_fraction": value}}
+
+
+def _isolation_share(base: Scenario, value: float) -> dict[str, object]:
+    """The console's name for ``workload.isolation_fraction`` — a pure rename.
+
+    Demand-side, not capacity-side, even though it reads like a facility knob: it
+    changes the *mix that arrives*, and the isolation-capable bays it then
+    competes for are a separate ``ZoneQuota`` field the bay sliders already
+    carry. Pairing the two is the point — raising the share without raising the
+    isolation allocation is precisely the squeeze an operator wants to see.
+    """
+    del base
+    return {"workload": {"isolation_fraction": value}}
 
 
 def _headcount(role: StaffRole) -> Callable[[Scenario, float], dict[str, object]]:
@@ -216,6 +230,7 @@ def _zone_bays(zone_type: ZoneType) -> Callable[[Scenario, float], dict[str, obj
 _ALIASES: Mapping[str, Callable[[Scenario, float], dict[str, object]]] = {
     "workload.arrival_rate_multiplier": _arrival_rate_multiplier,
     "workload.ambulance_share": _ambulance_share,
+    "workload.isolation_share": _isolation_share,
     **{f"staffing.{role.value}_count": _headcount(role) for role in StaffRole},
     **{f"facility.{stem}_bays": _zone_bays(zone) for zone, stem in _BAY_KEY_STEM.items()},
 }

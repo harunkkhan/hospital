@@ -216,6 +216,61 @@ def test_a_missing_zone_is_opened_only_when_asked_for_bays() -> None:
     assert untouched.facility.zones == base.facility.zones
 
 
+# --------------------------------------------------------------------- demand: the mix
+def test_the_demand_sliders_reach_the_workload_fields_they_rename() -> None:
+    base = api_scenario()
+    isolating = compile_overrides(base, {"workload.isolation_share": 0.3})
+    assert isolating.workload.isolation_fraction == 0.3
+    # ...and nothing else in the mix moved with it.
+    assert isolating.workload.ambulance_fraction == base.workload.ambulance_fraction
+    assert isolating.workload.esi_mix == base.workload.esi_mix
+
+    assert (
+        compile_overrides(base, {"workload.ambulance_share": 0.75}).workload.ambulance_fraction
+        == 0.75
+    )
+    doubled = compile_overrides(base, {"workload.arrival_rate_multiplier": 2.0})
+    assert doubled.workload.base_rate_per_hour == base.workload.base_rate_per_hour * 2.0
+
+
+@pytest.mark.parametrize(
+    ("alias", "literal"),
+    [
+        ("workload.isolation_share", "workload.isolation_fraction"),
+        ("workload.ambulance_share", "workload.ambulance_fraction"),
+        ("staffing.tech_count", "staffing.default_counts"),
+        ("facility.general_bays", "facility.zones"),
+    ],
+)
+def test_an_alias_and_a_literal_path_onto_the_same_leaf_are_refused(
+    alias: str, literal: str
+) -> None:
+    """Two names for one field cannot both be honored, and resolving it by dict
+    order would make the derived scenario depend on JSON key order."""
+    with pytest.raises(ValueError, match="already sets"):
+        compile_overrides(api_scenario(), {alias: 0.5, literal: 0.5})
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        # A share is a probability: the bounds are ``WorkloadSpec``'s, not ours.
+        {"workload.isolation_share": 1.4},
+        {"workload.ambulance_share": -0.1},
+        # A headcount is a non-negative whole number (`range(-n)` is silently empty).
+        {"staffing.housekeeping_count": -1},
+        # A bay count likewise.
+        {"facility.resus_bays": -2},
+        {"facility.general_bays": 1.5},
+    ],
+)
+def test_out_of_range_values_are_data_layer_rejections(overrides: dict[str, float]) -> None:
+    """No slider bound lives in this module — every one of these is ``data``
+    saying no, surfaced by the caller as a 422."""
+    with pytest.raises(ValueError):
+        compile_overrides(api_scenario(), overrides)
+
+
 def test_a_floor_may_not_be_emptied_of_bays() -> None:
     """Not an API rule: ``FacilitySpec`` requires at least one bay in total."""
     with pytest.raises(ValueError, match="at least one bay"):
