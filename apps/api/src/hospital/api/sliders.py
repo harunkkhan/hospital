@@ -4,15 +4,16 @@ The console posts named knobs::
 
     workload.arrival_rate_multiplier   staffing.physician_count  staffing.porter_count
     workload.ambulance_share           staffing.nurse_count      staffing.housekeeping_count
-    facility.fast_track_bays           staffing.tech_count
+                                       staffing.tech_count
+    facility.{fast_track,general,observation,resus}_bays
 
 Not one of them is a literal path into the ``Scenario`` document. One is
 *relative* (a multiplier over the base rate, so it cannot be a leaf value at
 all); one is a plain rename; five address a headcount that lives in **both**
-``staffing.blocks`` and ``staffing.default_counts``; one addresses a single entry
-of the ``facility.zones`` tuple. Handed to ``apply_overlay`` verbatim they are
-unknown fields, and ``extra="forbid"`` turns every slider the console has into a
-422 — the whole panel is unreachable from the real client.
+``staffing.blocks`` and ``staffing.default_counts``; four address entries of the
+``facility.zones`` tuple. Handed to ``apply_overlay`` verbatim they are unknown
+fields, and ``extra="forbid"`` turns every slider the console has into a 422 —
+the whole panel is unreachable from the real client.
 
 So the aliases are compiled here, against the base scenario, into the nested
 overlay ``data.scenario.apply_overlay`` already validates. A key that is not an
@@ -40,6 +41,20 @@ from hospital.data.scenario import Scenario, apply_overlay
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+# Which console stem names each resizable zone type. Explicit rather than derived
+# from the enum value because the console says "resus", not "resus_trauma" — and
+# because the list is a deliberate subset: these four are the ED *care* zones
+# `data.layout.generate_floor` lays out from a `ZoneQuota`. Triage capacity is
+# `facility.triage_rooms` and imaging/lab are their own scalars (all three are
+# literal paths already), and the ward types (ICU, surgery, ...) belong to a
+# floor spec, not to a slider on an emergency department.
+_BAY_KEY_STEM: Mapping[ZoneType, str] = {
+    ZoneType.FAST_TRACK: "fast_track",
+    ZoneType.GENERAL: "general",
+    ZoneType.OBSERVATION: "observation",
+    ZoneType.RESUS_TRAUMA: "resus",
+}
+
 # One alias -> the leaf paths its compiled edit writes. Used to reject a request
 # that also addresses one of those paths literally: "multiply the base rate" and
 # "set the base rate" cannot both be honored, and picking one silently would make
@@ -57,7 +72,7 @@ _ALIAS_TARGETS: Mapping[str, tuple[str, ...]] = {
         # porters move people, which is what actually gates bed availability.
         for role in StaffRole
     },
-    "facility.fast_track_bays": ("facility.zones",),
+    **{f"facility.{stem}_bays": ("facility.zones",) for stem in _BAY_KEY_STEM.values()},
 }
 
 
@@ -117,36 +132,92 @@ def _headcount(role: StaffRole) -> Callable[[Scenario, float], dict[str, object]
     return compile_headcount
 
 
-def _fast_track_bays(base: Scenario, value: float) -> dict[str, object]:
-    """Resize the fast-track zone (adding the zone if the base has none).
+def _apportion(total: int, weights: list[int]) -> list[int]:
+    """Split ``total`` across ``weights`` in proportion, by largest remainder.
+
+    Chosen for one property: when ``total`` equals the sum of ``weights``, every
+    share comes back **exactly** as it went in (each ``total * w // pool`` is
+    ``w`` with zero remainder). So re-stating a zone type's current size rewrites
+    nothing — a knob at rest cannot quietly re-cut a floor's zones, which is what
+    lets the panel show a slider sitting on its base value.
+
+    An all-zero pool has no proportions to preserve, so it splits evenly, with
+    the leftover to the earliest zones — arbitrary, but deterministic, and it
+    only arises for a zone type that currently has no bays at all.
+    """
+    n = len(weights)
+    pool = sum(weights)
+    if pool <= 0:
+        shares = [total // n] * n
+        for i in range(total - sum(shares)):
+            shares[i] += 1
+        return shares
+    shares = [total * w // pool for w in weights]
+    remainders = [(total * w) % pool for w in weights]
+    order = sorted(range(n), key=lambda i: (-remainders[i], i))
+    for i in order[: total - sum(shares)]:
+        shares[i] += 1
+    return shares
+
+
+def _zone_bays(zone_type: ZoneType) -> Callable[[Scenario, float], dict[str, object]]:
+    """Resize one zone type's bay allocation across the whole floor.
+
+    The slider states the **total** number of bays of this type, not a per-zone
+    figure, because a floor may allocate a type more than once — the committed
+    ``scenarios/er_floor.yaml`` has two ``general`` zones — and "general bays" is
+    a fact about the ED, not about which of its two general wings you meant.
+    Writing the same number into each matching zone (what the fast-track-only
+    version did, harmlessly, because fast track appears once) would have doubled
+    the floor on the first drag of a two-zone type.
+
+    The total is apportioned back over the matching zones in proportion to what
+    they have now (:func:`_apportion`), so the relative shape of the floor is
+    preserved and the base total is a fixed point.
 
     ``facility.zones`` is a tuple, which ``_deep_merge`` replaces wholesale, so
-    the full list is rebuilt from the base with one entry retargeted.
+    the full list is rebuilt from the base with the matching entries retargeted.
     """
-    count = _as_count(value, "facility.fast_track_bays")
-    zones: list[object] = []
-    resized = False
-    for quota in base.facility.zones:
-        raw = cast("dict[str, object]", quota.model_dump(mode="json"))
-        if quota.zone_type is ZoneType.FAST_TRACK:
-            resized = True
-            raw["bays"] = count
+    key = f"facility.{_BAY_KEY_STEM[zone_type]}_bays"
+
+    def compile_bays(base: Scenario, value: float) -> dict[str, object]:
+        total = _as_count(value, key)
+        quotas = base.facility.zones
+        zones = [cast("dict[str, object]", quota.model_dump(mode="json")) for quota in quotas]
+        matching = [i for i, quota in enumerate(quotas) if quota.zone_type is zone_type]
+        if not matching:
+            # The "no such zone yet" branch, revisited now that the alias spans
+            # four zone types. Opening one is still the right reading for each of
+            # them: general / observation / resus_trauma / fast_track are all ED
+            # care zones `generate_floor` lays out from a quota, and a floor with
+            # none of a type is a floor where "give me N of them" can only mean
+            # "open the zone". It would NOT be right for the vocabulary's other
+            # capacity knobs, which is why `_BAY_KEY_STEM` stops where it does.
+            # A zero request adds nothing: "no bays of a type the floor does not
+            # have" is already the state being asked for, and an empty quota
+            # would only litter the tuple.
+            if total > 0:
+                zones.append({"zone_type": zone_type.value, "bays": total})
+            return {"facility": {"zones": zones}}
+        for index, share in zip(
+            matching, _apportion(total, [quotas[i].bays for i in matching]), strict=True
+        ):
+            zones[index]["bays"] = share
             # `isolation_bays <= bays` is a ZoneQuota invariant. Shrinking the zone
             # past its isolation allocation shrinks that subset with it: the slider
             # states the zone's size, and an isolation subset is a subset of it.
             # Rejecting instead would be a dead end the operator cannot act on.
-            raw["isolation_bays"] = min(quota.isolation_bays, count)
-        zones.append(raw)
-    if not resized:
-        zones.append({"zone_type": ZoneType.FAST_TRACK.value, "bays": count})
-    return {"facility": {"zones": zones}}
+            zones[index]["isolation_bays"] = min(quotas[index].isolation_bays, share)
+        return {"facility": {"zones": zones}}
+
+    return compile_bays
 
 
 _ALIASES: Mapping[str, Callable[[Scenario, float], dict[str, object]]] = {
     "workload.arrival_rate_multiplier": _arrival_rate_multiplier,
     "workload.ambulance_share": _ambulance_share,
     **{f"staffing.{role.value}_count": _headcount(role) for role in StaffRole},
-    "facility.fast_track_bays": _fast_track_bays,
+    **{f"facility.{stem}_bays": _zone_bays(zone) for zone, stem in _BAY_KEY_STEM.items()},
 }
 
 SLIDER_KEYS: tuple[str, ...] = tuple(sorted(_ALIASES))
