@@ -729,7 +729,104 @@ export function deriveFloor(layout: FloorLayout): FloorArchitecture {
     wingCursor += LAB_WIDTH;
   }
 
-  // --- support rooms: everything the clinical program did not claim ----------------------
+  const support = layOutSupportRooms({
+    pods,
+    wing,
+    cross,
+    fohRect,
+    ambulance,
+    dept,
+    spineY,
+    wingRect,
+    northSupportBand,
+    southSupportBand,
+    northBand,
+    southBand,
+    northPods,
+    southPods,
+    rnd,
+  });
+
+  const { anchors, walkIn } = buildAnchors({
+    layout,
+    nodes,
+    dept,
+    spine,
+    spineY,
+    cross,
+    northPerimeter,
+    southPods,
+    bays,
+    wing,
+    triage,
+    stations,
+    waiting,
+    ambulance,
+  });
+
+  const rooms: Room[] = [...bays, ...wing, ...triage, ...support];
+  if (waiting !== null) {
+    rooms.push(waiting);
+  }
+  if (ambulance !== null) {
+    rooms.push(ambulance);
+  }
+
+  return {
+    plate,
+    dept,
+    bands,
+    spine,
+    cross,
+    spineY,
+    circulation: [spine, cross, northPerimeter, southPerimeter, ...pods.map((p) => p.corridor)],
+    pods,
+    bays,
+    stations,
+    triage,
+    wing,
+    wingBlock: wingRect,
+    support,
+    waiting,
+    ambulance,
+    walkIn,
+    rooms,
+    anchors,
+    bayById: new Map(bays.map((b) => [b.id, b])),
+  };
+}
+
+interface SupportInput {
+  readonly pods: readonly Pod[];
+  readonly wing: readonly PlainRoom[];
+  readonly cross: Rect;
+  readonly fohRect: Rect | null;
+  readonly ambulance: PlainRoom | null;
+  readonly dept: Rect;
+  readonly spineY: number;
+  readonly wingRect: Rect;
+  readonly northSupportBand: Rect;
+  readonly southSupportBand: Rect;
+  readonly northBand: PackedBand;
+  readonly southBand: PackedBand;
+  readonly northPods: Rect;
+  readonly southPods: Rect;
+  readonly rnd: () => number;
+}
+
+/**
+ * Back-of-house: every room the clinical program did not claim.
+ *
+ * Split out of the plan pipeline because it is a pure consumer of already-final geometry —
+ * it reads the packed bands and writes an independent list, touching nothing upstream. It is
+ * also the one stage that is wholly invented (see the note inside), so keeping it separate
+ * keeps the boundary between derived and invented architecture visible.
+ */
+function layOutSupportRooms(input: SupportInput): PlainRoom[] {
+  const {
+    pods, wing, cross, fohRect, ambulance, dept, spineY, wingRect,
+    northSupportBand, southSupportBand, northBand, southBand, northPods, southPods, rnd,
+  } = input;
   // The layout carries no back-of-house at all, so all of this is invented — drawn to fill
   // the space the program leaves, and named from a fixed vocabulary.
   const claimed: Rect[] = [
@@ -845,8 +942,38 @@ export function deriveFloor(layout: FloorLayout): FloorArchitecture {
     addSupport(rect(pod.rect.x0, extent.y0, pod.rect.x1, pod.rect.y0), "x", 2);
     addSupport(rect(pod.rect.x0, pod.rect.y1, pod.rect.x1, extent.y1), "x", 2);
   }
+  return support;
+}
 
-  // --- anchors: where every node is DRAWN -------------------------------------------------
+interface AnchorInput {
+  readonly layout: FloorLayout;
+  readonly nodes: readonly RouteNode[];
+  readonly dept: Rect;
+  readonly spine: Rect;
+  readonly spineY: number;
+  readonly cross: Rect;
+  readonly northPerimeter: Rect;
+  readonly southPods: Rect;
+  readonly bays: readonly BayRoom[];
+  readonly wing: readonly PlainRoom[];
+  readonly triage: readonly PlainRoom[];
+  readonly stations: readonly StationDesk[];
+  readonly waiting: PlainRoom | null;
+  readonly ambulance: PlainRoom | null;
+}
+
+/**
+ * Where every graph node is DRAWN.
+ *
+ * The live layer places people by node id, and the drawn plan is not the graph's own
+ * geometry, so this map is the seam between the two. Split out of the pipeline for the same
+ * reason as the support rooms: it consumes final geometry and produces one independent value.
+ */
+function buildAnchors(input: AnchorInput): { anchors: Map<NodeId, Point>; walkIn: Point | null } {
+  const {
+    layout, nodes, dept, spine, spineY, cross, northPerimeter, southPods,
+    bays, wing, triage, stations, waiting, ambulance,
+  } = input;
   const anchors = new Map<NodeId, Point>();
   seedFallbackAnchors(anchors, nodes, dept);
   for (const room of [...bays, ...wing, ...triage]) {
@@ -888,37 +1015,7 @@ export function deriveFloor(layout: FloorLayout): FloorArchitecture {
     const t = junctions.length === 1 ? 0.5 : i / (junctions.length - 1);
     anchors.set(node.id, [spine.x0 + 300 + t * (rectWidth(spine) - 600), spineY]);
   });
-
-  const rooms: Room[] = [...bays, ...wing, ...triage, ...support];
-  if (waiting !== null) {
-    rooms.push(waiting);
-  }
-  if (ambulance !== null) {
-    rooms.push(ambulance);
-  }
-
-  return {
-    plate,
-    dept,
-    bands,
-    spine,
-    cross,
-    spineY,
-    circulation: [spine, cross, northPerimeter, southPerimeter, ...pods.map((p) => p.corridor)],
-    pods,
-    bays,
-    stations,
-    triage,
-    wing,
-    wingBlock: wingRect,
-    support,
-    waiting,
-    ambulance,
-    walkIn,
-    rooms,
-    anchors,
-    bayById: new Map(bays.map((b) => [b.id, b])),
-  };
+  return { anchors, walkIn };
 }
 
 /**
