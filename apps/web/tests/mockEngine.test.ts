@@ -291,6 +291,20 @@ describe("MockEngine scenario knobs are realized, not recorded", () => {
     expect(thin.buildFrame("snapshot").staff.filter((s) => s.role === "nurse")).toHaveLength(1);
   });
 
+  test("the nurse count gates triage, so it moves throughput and not just utilization", () => {
+    const thin = new MockEngine("r", 9, "optimized", config({ "staffing.nurse_count": 1 }));
+    const staffed = new MockEngine("r", 9, "optimized", config({ "staffing.nurse_count": 8 }));
+    thin.advance(8 * HOUR_US);
+    staffed.advance(8 * HOUR_US);
+    const kpi = (e: MockEngine, key: string): number => e.metrics().values[key] ?? 0;
+    // One nurse queues patients at the door...
+    expect(kpi(thin, "door_to_triage_s_mean")).toBeGreaterThan(
+      kpi(staffed, "door_to_triage_s_mean"),
+    );
+    // ...and fewer of them get all the way out the other side.
+    expect(kpi(thin, "completions_per_week")).toBeLessThan(kpi(staffed, "completions_per_week"));
+  });
+
   test("an un-overridden run keeps the fixture roster byte-identical", () => {
     const plain = new MockEngine("r", 5, "optimized");
     const empty = new MockEngine("r", 5, "optimized", config({}));

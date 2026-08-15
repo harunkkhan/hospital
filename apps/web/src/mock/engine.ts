@@ -15,6 +15,15 @@
  * mock catalogue (mockApi.ts) publishes exactly the knobs this list covers, and
  * caps each at what this floor can express — a slider the demo cannot honor is a
  * placebo, and a placebo is worse than an absent control.
+ *
+ * Where the roster BITES is worth stating plainly, because it is the one place
+ * this mock is thinner than the engine it stands in for. Triage is staff-gated:
+ * a patient waits for a free nurse, so the nurse count moves throughput and
+ * door-to-triage. Provider visits and bay cleaning are not gated — those roles
+ * move utilization, walking and what is visible on the floor, but a bay still
+ * turns over on a timer rather than on a housekeeper arriving. The real engine
+ * (sim.physics) gates all of it; this is a wire-contract stand-in, and the live
+ * console is where the full mechanism runs.
  */
 
 import type {
@@ -507,7 +516,13 @@ export class MockEngine {
       if (bay === undefined) {
         break;
       }
+      // Triage is STAFF-GATED: no free nurse, no triage, and the queue grows.
+      // Without this the nurse slider would move utilization and walking while
+      // leaving throughput untouched — a control that looks live and is not.
       const nurse = this.idleStaffOfRole("nurse");
+      if (nurse === null) {
+        break;
+      }
       bay.status = "occupied";
       bay.occupant = patient.id;
       patient.stage = "triage";
@@ -523,11 +538,9 @@ export class MockEngine {
         kind: "triage_started",
         occurred_at: this.simTimeUs,
         patient: patient.id,
-        staff: nurse?.id ?? "nurse-1",
+        staff: nurse.id,
       });
-      if (nurse !== null) {
-        this.dispatchStaff(nurse, { kind: "triage", node: bay.id, durationUs: patient.remainingUs });
-      }
+      this.dispatchStaff(nurse, { kind: "triage", node: bay.id, durationUs: patient.remainingUs });
     }
   }
 
