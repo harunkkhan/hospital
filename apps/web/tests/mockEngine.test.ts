@@ -271,3 +271,86 @@ describe("MockEngine override validation (mirrors core semantics)", () => {
     }
   });
 });
+
+describe("MockEngine scenario knobs are realized, not recorded", () => {
+  const config = (overrides: Record<string, number>) => ({ base: "er_floor", overrides });
+
+  test("a staffing count builds the roster it asks for, keeping the fixture ids", () => {
+    const engine = new MockEngine("r", 5, "optimized", config({ "staffing.nurse_count": 6 }));
+    const nurses = engine.buildFrame("snapshot").staff.filter((s) => s.role === "nurse");
+    expect(nurses.map((s) => s.staff)).toEqual([
+      "nurse-1",
+      "nurse-2",
+      "nurse-3",
+      "nurse-4",
+      "nurse-5",
+      "nurse-6",
+    ]);
+    // ...and cutting below the fixture roster removes members rather than idling them.
+    const thin = new MockEngine("r", 5, "optimized", config({ "staffing.nurse_count": 1 }));
+    expect(thin.buildFrame("snapshot").staff.filter((s) => s.role === "nurse")).toHaveLength(1);
+  });
+
+  test("an un-overridden run keeps the fixture roster byte-identical", () => {
+    const plain = new MockEngine("r", 5, "optimized");
+    const empty = new MockEngine("r", 5, "optimized", config({}));
+    expect(JSON.stringify(plain.buildFrame("snapshot"))).toBe(
+      JSON.stringify(empty.buildFrame("snapshot")),
+    );
+  });
+
+  test("a bay-capacity knob takes bays OUT OF SERVICE, not out of the geometry", () => {
+    const engine = new MockEngine("r", 5, "optimized", config({ "facility.general_bays": 2 }));
+    const general = engine.buildFrame("snapshot").bays.filter((b) => b.bay.startsWith("bay-g"));
+    expect(general).toHaveLength(6); // the floor is unchanged...
+    expect(general.filter((b) => b.status === "closed")).toHaveLength(4); // ...its capacity is not
+  });
+
+  test("the isolation share contends for the two isolation-capable bays", () => {
+    const engine = new MockEngine("r", 5, "optimized", config({ "workload.isolation_share": 1 }));
+    engine.advance(6 * HOUR_US);
+    const occupied = engine
+      .buildFrame("snapshot")
+      .bays.filter((b) => b.status === "occupied" && !b.bay.startsWith("bay-t"))
+      .map((b) => b.bay);
+    expect(occupied.length).toBeGreaterThan(0);
+    // Only bay-r2 and bay-g6 are isolation_capable in the fixture floor.
+    expect(occupied.every((id) => id === "bay-r2" || id === "bay-g6")).toBe(true);
+  });
+});
+
+describe("mock slider catalogue", () => {
+  test("publishes grouped knobs read off the fixture floor", async () => {
+    const api = createMockApi();
+    const catalogue = await api.getSliders("er_floor");
+    expect(catalogue.scenario).toBe("er_floor");
+    const byKey = new Map(catalogue.knobs.map((k) => [k.key, k]));
+    // Values describe THIS floor: 6 general bays, 3 nurses, 13 bays in total.
+    expect(byKey.get("facility.general_bays")?.value).toBe(6);
+    expect(byKey.get("staffing.nurse_count")?.value).toBe(3);
+    // A bay knob cannot ask for more than the fixture geometry can express.
+    expect(byKey.get("facility.general_bays")?.max).toBe(6);
+    // Turnaround labour is grouped as capacity, not as clinical staffing.
+    expect(byKey.get("staffing.housekeeping_count")?.group).toBe("capacity");
+    expect(byKey.get("staffing.nurse_count")?.group).toBe("staffing");
+    expect(new Set(catalogue.knobs.map((k) => k.group))).toEqual(
+      new Set(["demand", "staffing", "capacity"]),
+    );
+  });
+
+  test("a saved scenario reports where IT sits, and the relative knob still reads 1", async () => {
+    const api = createMockApi();
+    const { id } = await api.createScenario({
+      base: "er_floor",
+      overrides: { "facility.general_bays": 2, "workload.arrival_rate_multiplier": 3 },
+    });
+    const byKey = new Map((await api.getSliders(id)).knobs.map((k) => [k.key, k]));
+    expect(byKey.get("facility.general_bays")?.value).toBe(2);
+    // Relative by definition: the 3x is already inside the rate this base describes.
+    expect(byKey.get("workload.arrival_rate_multiplier")?.value).toBe(1);
+  });
+
+  test("an unknown scenario has no catalogue (the mock's 404)", async () => {
+    await expect(createMockApi().getSliders("nope")).rejects.toThrow(/unknown scenario/);
+  });
+});

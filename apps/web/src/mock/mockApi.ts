@@ -16,9 +16,14 @@ import type {
   RunRequest,
   ScenarioSummary,
   SessionState,
+  SliderCatalogue,
+  SliderGroup,
+  SliderSpec,
+  StaffRole,
   StepGranularity,
 } from "../api/types";
 import { MockEngine, mulberry32, WEEK_US, type ScenarioConfig } from "./engine";
+import { makeMockLayout, STAFF_ROSTER } from "./fixtures";
 
 const TICK_MS = 100;
 const HEARTBEAT_TICKS = 20;
@@ -84,6 +89,68 @@ export function synthesizeCompare(
     };
   });
   return { baseline_run: baselineRun, optimized_run: optimizedRun, replications: 16, contrasts };
+}
+
+/**
+ * The mock backend's slider catalogue — the same wire shape the API publishes,
+ * describing THIS floor rather than the reference ED.
+ *
+ * Two deliberate differences from the live catalogue, both honesty rather than
+ * laziness. (1) Values and bay ranges are read off the hand-authored fixture
+ * (13 bays, 8 staff), so they describe what the mock engine will actually run;
+ * a bay knob therefore caps at the fixture's own count, because there is no
+ * geometry to open a fourteenth bay into. (2) Knobs this engine does not model —
+ * observation bays (no such zone here), imaging suites and lab stations (no
+ * imaging/lab service physics) — are OMITTED rather than published as sliders
+ * that move nothing. A control that silently does nothing teaches the operator
+ * something false about the model; an absent one only teaches them about the
+ * mock. The live catalogue is the full vocabulary.
+ */
+function mockKnobs(overrides: Readonly<Record<string, number>>): SliderSpec[] {
+  const layout = makeMockLayout();
+  const baysOfType = (zoneType: string): number =>
+    layout.bays.filter((b) => b.zone_type === zoneType).length;
+  const staffOfRole = (role: StaffRole): number =>
+    STAFF_ROSTER.filter((s) => s.role === role).length;
+
+  const spec = (
+    key: string,
+    label: string,
+    group: SliderGroup,
+    unit: string,
+    base: number,
+    min: number,
+    max: number,
+    step: number,
+  ): SliderSpec => ({
+    key,
+    label,
+    group,
+    min,
+    max,
+    step,
+    unit,
+    // Read against the scenario, exactly as the server does: a saved variant
+    // reports where IT sits, not where the canned base does.
+    value: overrides[key] ?? base,
+  });
+
+  return [
+    // The multiplier is relative, so it reads 1.0 against its own base — the
+    // override is already baked into the rate the base describes.
+    { ...spec("workload.arrival_rate_multiplier", "Arrival rate", "demand", "x base", 1, 0.25, 3, 0.05), value: 1 },
+    spec("workload.ambulance_share", "Ambulance arrivals", "demand", "share", 0.25, 0, 1, 0.01),
+    spec("workload.isolation_share", "Isolation required", "demand", "share", 0.05, 0, 1, 0.01),
+    spec("staffing.physician_count", "Physicians", "staffing", "on duty", staffOfRole("physician"), 0, 12, 1),
+    spec("staffing.nurse_count", "Nurses", "staffing", "on duty", staffOfRole("nurse"), 0, 12, 1),
+    spec("staffing.tech_count", "Techs", "staffing", "on duty", staffOfRole("tech"), 0, 12, 1),
+    spec("facility.general_bays", "General bays", "capacity", "bays", baysOfType("general"), 0, baysOfType("general"), 1),
+    spec("facility.resus_bays", "Resus / trauma bays", "capacity", "bays", baysOfType("resus_trauma"), 0, baysOfType("resus_trauma"), 1),
+    spec("facility.fast_track_bays", "Fast-track bays", "capacity", "bays", baysOfType("fast_track"), 0, baysOfType("fast_track"), 1),
+    spec("facility.triage_rooms", "Triage rooms", "capacity", "rooms", baysOfType("triage"), 0, baysOfType("triage"), 1),
+    spec("staffing.porter_count", "Porters", "capacity", "on duty", staffOfRole("porter"), 0, 12, 1),
+    spec("staffing.housekeeping_count", "Housekeeping", "capacity", "on duty", staffOfRole("housekeeping"), 0, 12, 1),
+  ];
 }
 
 const CANNED_SCENARIOS: ScenarioSummary[] = [
@@ -275,6 +342,13 @@ export function createMockApi(): ConsoleApi {
 
     async listScenarios() {
       return scenarios;
+    },
+
+    async getSliders(scenario): Promise<SliderCatalogue> {
+      if (!scenarios.some((s) => s.id === scenario)) {
+        throw new Error(`mock: unknown scenario ${scenario}`);
+      }
+      return { scenario, knobs: mockKnobs(savedOverrides.get(scenario) ?? {}) };
     },
 
     async createScenario(req) {
