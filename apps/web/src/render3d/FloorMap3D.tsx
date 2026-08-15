@@ -363,7 +363,11 @@ export function FloorMap3D({ layout, world, selected, onSelect, live }: FloorMap
           ))}
         </div>
       </div>
-      <p className="floor3d-tagline">{style.tagline}</p>
+      {/* The pane's background IS the style pack, so the caption takes the pack's own label
+          ink rather than a fixed colour that would disappear on one of the two. */}
+      <p className="floor3d-tagline" style={{ color: style.label }}>
+        {style.tagline}
+      </p>
     </div>
   );
 }
