@@ -115,6 +115,72 @@ export function wallRuns(
 }
 
 /**
+ * Where the bed goes in a treatment bay, and which way round the patient lies.
+ *
+ * Shared rather than duplicated because TWO renderers need the same answer: `scene.ts` draws
+ * the mattress and pillow, and `live.ts` lays the occupant on it. Computed independently they
+ * would drift, and the failure mode is a patient floating beside their own bed.
+ */
+export const BED = {
+  halfWidth: 45,
+  maxLength: 205,
+  /** Clear floor kept between the foot of the bed and the door wall. */
+  clearance: 120,
+  footInset: 45,
+} as const;
+
+export interface BedPlacement {
+  readonly mattress: Rect;
+  readonly pillow: Rect;
+  /** Unit vector in plan pointing from the foot of the bed toward the pillow. */
+  readonly toHead: readonly [number, number];
+}
+
+export function bedOf(room: Rect, doorSide: Side): BedPlacement {
+  const f = frameOf(room, doorSide);
+  const length = Math.min(BED.maxLength, f.D - BED.clearance);
+  const u = f.W / 2;
+  const head = f.D - BED.footInset;
+  // The head of the bed is against the wall OPPOSITE the door, which is the far end of the
+  // frame's own `v` axis — so the head-ward direction is that axis, read off the frame rather
+  // than switched on the side. One less place for a door orientation to be got wrong.
+  const near = f.box(u, 0, u, 0);
+  const far = f.box(u, 1, u, 1);
+  return {
+    mattress: f.box(u - BED.halfWidth, head - length, u + BED.halfWidth, head),
+    pillow: f.box(u - 40, head - 40, u + 40, head - 6),
+    toHead: [centerX(far) - centerX(near), centerY(far) - centerY(near)],
+  };
+}
+
+/**
+ * The waiting hall's seats, in the order people take them.
+ *
+ * Same reason as `bedOf`: `scene.ts` draws the chairs and `live.ts` sits the queue on them.
+ * A waiting room whose people hover between the seats reads as a rendering bug, which is
+ * exactly what two independent grids would produce.
+ */
+export function seatsOf(hall: Rect): readonly (readonly [number, number])[] {
+  const rows = Math.max(2, Math.min(6, Math.floor(rectHeight(hall) / 380)));
+  const perRow = Math.max(3, Math.min(14, Math.floor(rectWidth(hall) / 150)));
+  const x0 = hall.x0 + 340;
+  const x1 = hall.x1 - 220;
+  const y0 = hall.y0 + 300;
+  const y1 = hall.y1 - 240;
+  if (x1 <= x0 || y1 <= y0) {
+    return [];
+  }
+  const seats: (readonly [number, number])[] = [];
+  for (let row = 0; row < rows; row += 1) {
+    const y = y0 + (row * (y1 - y0)) / (rows - 1);
+    for (let i = 0; i < perRow; i += 1) {
+      seats.push([x0 + (i * (x1 - x0)) / (perRow - 1), y]);
+    }
+  }
+  return seats;
+}
+
+/**
  * A small deterministic stream. Support-room subdivision has to look irregular without
  * being random: the same layout must draw identically on every client and across reloads,
  * or two operators comparing screens would see different buildings.

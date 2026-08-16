@@ -136,6 +136,10 @@ export function FloorMap3D({ layout, world, selected, onSelect, live }: FloorMap
       return;
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // The fit-out and the people cast; a ShadowMaterial plane in the scene catches. Soft PCF
+    // because a hard-edged shadow under a hairline drawing looks like a rendering artefact.
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     const stage: Stage = {
       renderer,

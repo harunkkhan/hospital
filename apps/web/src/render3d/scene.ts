@@ -23,14 +23,17 @@ import * as THREE from "three";
 import type { BayId, BayStatus } from "../api/types";
 import type { FloorArchitecture } from "./derive";
 import {
+  BED,
   HEIGHTS,
   SCALE,
+  bedOf,
   centerX,
   centerY,
   frameOf,
   rect,
   rectHeight,
   rectWidth,
+  seatsOf,
   wallRuns,
   type Rect,
   type Side,
@@ -151,12 +154,18 @@ class BoxBatch {
     ]);
   }
 
-  emit(parent: THREE.Object3D, material: THREE.Material, track: Tracker): void {
+  emit(
+    parent: THREE.Object3D,
+    material: THREE.Material,
+    track: Tracker,
+    castShadow = false,
+  ): void {
     if (this.boxes.length === 0) {
       return;
     }
     const geometry = track(new THREE.BoxGeometry(1, 1, 1));
     const mesh = new THREE.InstancedMesh(geometry, material, this.boxes.length);
+    mesh.castShadow = castShadow;
     const matrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3();
@@ -198,6 +207,50 @@ export function buildFloorScene(
   const root = new THREE.Group();
   root.position.set(-centerX(arch.dept) * S, 0, -centerY(arch.dept) * S);
 
+  // Two lights and a shadow catcher — the whole lighting rig.
+  //
+  // The intensities are chosen so an up-facing white surface still reads at the pack's own
+  // value: this is meant to give the solids form, not to relight the drawing. The key comes
+  // from the north-west because that is where the plan's own labels and leaders sit, so the
+  // shadows fall away from the text rather than under it.
+  const sky = track(new THREE.HemisphereLight(0xffffff, 0xbfc6cf, 1.6));
+  root.add(sky);
+  const key = track(new THREE.DirectionalLight(0xffffff, 1.15));
+  const spanX = rectWidth(arch.dept) * S;
+  const spanZ = rectHeight(arch.dept) * S;
+  const reach = Math.max(spanX, spanZ);
+  key.position.set(centerX(arch.dept) * S - spanX * 0.5, reach * 0.9, centerY(arch.dept) * S - spanZ * 0.6);
+  key.target.position.set(centerX(arch.dept) * S, 0, centerY(arch.dept) * S);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  const half = reach * 0.62;
+  Object.assign(key.shadow.camera, {
+    left: -half,
+    right: half,
+    top: half,
+    bottom: -half,
+    near: 1,
+    far: reach * 2.4,
+  });
+  key.shadow.bias = -0.0009;
+  key.shadow.normalBias = 0.02;
+  root.add(key);
+  root.add(key.target);
+
+  // Shadows land on a ShadowMaterial plane rather than on the floor washes themselves. The
+  // washes are stacked, translucent and depth-write-free — a receiver has to be opaque to the
+  // depth buffer, and making them so would change the palette. This catches the shadow and is
+  // otherwise invisible.
+  const catcher = new THREE.Mesh(
+    track(new THREE.PlaneGeometry(spanX, spanZ)),
+    track(new THREE.ShadowMaterial({ opacity: 0.17 })),
+  );
+  catcher.rotation.x = -Math.PI / 2;
+  catcher.position.set(centerX(arch.dept) * S, 0.03, centerY(arch.dept) * S);
+  catcher.receiveShadow = true;
+  catcher.renderOrder = 6;
+  root.add(catcher);
+
   const fill = (color: string, opacity: number): THREE.Material =>
     track(
       new THREE.MeshBasicMaterial({
@@ -206,6 +259,22 @@ export function buildFloorScene(
         opacity,
         side: THREE.DoubleSide,
         depthWrite: false,
+      }),
+    );
+  // Volumes are LIT; the flat floor washes are not.
+  //
+  // A hairline drawing whose only solids are unshaded reads as a diagram — every box the same
+  // value from every angle, which is exactly the blandness. Lambert costs one light pass and
+  // gives the fit-out a top-versus-side falloff, so a bed reads as a bed. The stacked,
+  // depth-write-free floor washes stay unlit on purpose: shading them would tint the palette
+  // the pack has already chosen, and they are horizontal, so there is nothing to shade.
+  const solid = (color: string, opacity: number): THREE.Material =>
+    track(
+      new THREE.MeshLambertMaterial({
+        color,
+        transparent: opacity < 1,
+        opacity,
+        side: THREE.DoubleSide,
       }),
     );
   const stroke = (color: string, opacity: number): THREE.Material =>
@@ -349,13 +418,14 @@ export function buildFloorScene(
   // one description serves a bay opening east, west, north or south.
   for (const bay of arch.bays) {
     const f = frameOf(bay.rect, bay.doorSide);
-    const bedLength = Math.min(205, f.D - 120);
     const u = f.W / 2;
     const head = f.D - 45;
-    const bed = f.box(u - 45, head - bedLength, u + 45, head);
-    furnitureLight.box(bed, HEIGHTS.bed - 18, HEIGHTS.bed);
-    furnitureEdge.ring(bed, HEIGHTS.bed * S);
-    furnitureLight.box(f.box(u - 40, head - 40, u + 40, head - 6), HEIGHTS.bed, HEIGHTS.bed + 12);
+    // `bedOf` is shared with the live layer, which lays the occupant on this exact mattress.
+    const placement = bedOf(bay.rect, bay.doorSide);
+    const bedLength = Math.min(BED.maxLength, f.D - BED.clearance);
+    furnitureLight.box(placement.mattress, HEIGHTS.bed - 18, HEIGHTS.bed);
+    furnitureEdge.ring(placement.mattress, HEIGHTS.bed * S);
+    furnitureLight.box(placement.pillow, HEIGHTS.bed, HEIGHTS.bed + 12);
     furniture.box(f.box(u - 70, f.D - 22, u + 70, f.D - 8), 90, 150);
     furniture.box(f.box(u + 52, head - 22, u + 72, head - 2), 0, 130);
     furniture.box(f.box(u + 38, head - 20, u + 86, head - 4), 130, 165);
@@ -433,21 +503,10 @@ export function buildFloorScene(
   // The waiting hall: rows of seating and a reception desk, sized to the hall it is given.
   if (arch.waiting !== null) {
     const r = arch.waiting.rect;
-    const rows = Math.max(2, Math.min(6, Math.floor(rectHeight(r) / 380)));
-    const perRow = Math.max(3, Math.min(14, Math.floor(rectWidth(r) / 150)));
-    const x0 = r.x0 + 340;
-    const x1 = r.x1 - 220;
-    const y0 = r.y0 + 300;
-    const y1 = r.y1 - 240;
-    if (x1 > x0 && y1 > y0) {
-      for (let row = 0; row < rows; row += 1) {
-        const y = y0 + (row * (y1 - y0)) / (rows - 1);
-        for (let i = 0; i < perRow; i += 1) {
-          const x = x0 + (i * (x1 - x0)) / (perRow - 1);
-          furniture.box(rect(x - 22, y - 22, x + 22, y + 22), 0, HEIGHTS.chair);
-          furniture.box(rect(x - 22, y + 16, x + 22, y + 24), HEIGHTS.chair, HEIGHTS.chair + 42);
-        }
-      }
+    // `seatsOf` is shared with the live layer, which sits the queue on these exact chairs.
+    for (const [x, y] of seatsOf(r)) {
+      furniture.box(rect(x - 22, y - 22, x + 22, y + 22), 0, HEIGHTS.chair);
+      furniture.box(rect(x - 22, y + 16, x + 22, y + 24), HEIGHTS.chair, HEIGHTS.chair + 42);
     }
     furniture.box(rect(r.x0 + 70, r.y0 + 90, r.x0 + 300, r.y0 + 210), 0, 108);
   }
@@ -461,8 +520,8 @@ export function buildFloorScene(
     furniture.box(f.box(24, f.D - 80, f.W - 24, f.D - 24), 0, 88);
   }
 
-  furniture.emit(root, fill(style.ink, style.furnitureOp), track);
-  furnitureLight.emit(root, fill(style.ink, style.furnitureOp * 0.7), track);
+  furniture.emit(root, solid(style.ink, style.furnitureOp), track, true);
+  furnitureLight.emit(root, solid(style.ink, style.furnitureOp * 0.7), track, true);
   furnitureEdge.emit(root, stroke(style.ink, style.furnitureEdgeOp), track);
 
   // The ambulance apron, marked with chevrons the way a real one is.
