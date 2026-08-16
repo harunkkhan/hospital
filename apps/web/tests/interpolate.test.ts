@@ -9,8 +9,8 @@ import {
 } from "../src/render/interpolate";
 
 const NODES = indexNodes([
-  { id: "a", label: "A", x_cm: 0, y_cm: 0 },
-  { id: "b", label: "B", x_cm: 1000, y_cm: 0 },
+  { id: "a", label: "A", x_cm: 0, y_cm: 0, floor: 0 },
+  { id: "b", label: "B", x_cm: 1000, y_cm: 0, floor: 0 },
 ]);
 
 function walking(progress: number): StaffKinematic {

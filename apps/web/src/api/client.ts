@@ -24,6 +24,7 @@ import type {
   ScenarioCreateRequest,
   ScenarioSummary,
   SessionState,
+  SliderCatalogue,
   StreamFrame,
 } from "./types";
 
@@ -53,6 +54,12 @@ export interface ConsoleApi {
   getBottleneck(run: RunId): Promise<BottleneckReport>;
   listScenarios(): Promise<readonly ScenarioSummary[]>;
   createScenario(req: ScenarioCreateRequest): Promise<ScenarioCreated>;
+  /**
+   * The parameter vocabulary, read against one base — names, ranges, and where
+   * that base currently sits on each knob. Per-scenario because the value half
+   * is a fact about the base; a global catalogue could only guess it.
+   */
+  getSliders(scenario: string): Promise<SliderCatalogue>;
   openStream(run: RunId, callbacks: StreamCallbacks): StreamHandle;
 }
 
@@ -149,6 +156,10 @@ export function createHttpApi(baseUrl = "/api"): ConsoleApi {
         method: "POST",
         body: JSON.stringify(req),
       });
+    },
+
+    getSliders(scenario) {
+      return requestJson<SliderCatalogue>(u(`/scenarios/${scenario}/sliders`));
     },
 
     openStream(run, callbacks) {

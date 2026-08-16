@@ -18,23 +18,34 @@ Both arms are ``shift_aware``, or the comparison would be a fraud: a collapsed h
 roster is on duty for all 168 hours, so it would "win" on service purely by being staffed
 at night while the solved roster respected its own schedule.
 
-The baseline is therefore **flat staffing at the reference headcount, around the clock** —
-the honest straw man a hospital actually reaches for when it does not forecast: pick a
-level that handles the busy part of the day and run it always. The committed scenario's own
-blocks cannot serve as the baseline because they schedule only twelve hours a day and would
-leave the ED empty overnight, which is a different (and much worse) policy rather than a
-naive one.
+Two baselines, because one of them was a straw man and the correction matters.
+
+*No scheduling at all* — flat staffing at the reference headcount around the clock. Useful
+as a floor, but nobody competent staffs this way, and an earlier version of this file
+compared only against it and consequently claimed the solved roster "buys the week with
+fewer paid hours".
+
+*A competent human rota* — ``scenarios/er_floor_shifts.yaml``, three eight-hour shifts a day
+sized to the arrival profile. This is the honest comparison, and against it **the saving
+claim does not hold**: the solved roster spends slightly *more* hours than the rota. What it
+does instead is deliver materially better service for them, which is a narrower and far more
+credible result. Measured numbers below.
 
 ### What it measured
 
 One evaluation week, both arms shift-aware under CRN, folded through the M1 analysis path::
 
-    safety   paid-h   door-to-provider   breach-h   completions
-    flat       4608        403 s               6           913
-    1.0        1456        617 s              19           912
-    1.5        2040        445 s               -           914
-    2.0        2576        406 s               6           912
-    2.5        3144        395 s               -           914
+    arm            paid-h   door-to-provider   breach-h   completions
+    flat 24/7        4608        403 s               6           913
+    human rota       2448        474 s              10           912
+    solved  s=1.0    1456        617 s              19           912
+    solved  s=1.5    2040        445 s               -           914
+    solved  s=2.0    2576        406 s               6           912
+    solved  s=2.5    3144        395 s               -           914
+
+Against the rota, the evaluated solved arm spends **5% more** staff-hours (2576 vs 2448) and
+returns **14% better** door-to-provider (406 s vs 474 s). That is the result: at comparable
+cost, shaping the roster to a forecast beats shaping it to intuition. It is not a saving.
 
 Three readings, and the third is a criticism of this repository rather than a result.
 
@@ -44,22 +55,18 @@ rather than staff-limited at the reference operating point, so cutting staff len
 queue instead of turning patients away. A reader who took "same completions" as "free" would
 have it backwards: the cost shows up in ``door_to_provider``, and at 1.0 that is 53% worse.
 
-**44% fewer hours, but only 31% of it is the forecast's doing.** The flat roster staffs six
-techs, and *nothing in the simulation ever creates a task requiring a tech* — measured at
-0.00 role-minutes per patient. Those six are 864 of the 2032 hours saved, i.e. 43% of the
-headline, and removing them is "do not hire a role the model never uses" rather than
-anything a forecast discovered. Against a flat roster with the idle techs taken out (3744
-paid-h) the solved roster saves 1168 hours, 31%. That is the number to quote, and the rest
-is a finding about the model.
+**The saving against flat staffing is mostly not the forecast's doing.** The flat roster
+staffs six techs, and *nothing in the simulation ever creates a task requiring a tech* —
+measured at 0.00 role-minutes per patient. Those six are 864 of the 2032 hours "saved", 43%
+of that headline, and removing them is "do not hire a role the model never uses" rather than
+anything a forecast discovered. The committed rota omits them for exactly this reason, which
+is part of why comparing against it is the fairer test.
 
-What the forecast *does* contribute is visible in the composition, not just the size: at its
-peak the solved roster runs 8 physicians and 10 nurses where the flat one runs 6 and 14. It
-rebalances toward the roles the measured per-patient minutes say are binding, which no
-amount of scaling a hand-set roster up or down would produce.
-
-It is also, still, as much a statement about the committed scenario being over-staffed as
-about the lever, and *not* evidence that a solved roster is 31% better on a floor that is
-genuinely staff-constrained.
+**What the forecast contributes is the shape, not the size.** At its peak the solved roster
+runs 8 physicians and 10 nurses where flat runs 6 and 14, rebalancing toward the roles the
+measured per-patient minutes say are binding. Scaling a hand-set roster up or down cannot
+produce that, and it is what buys the 14% better door-to-provider at 5% more cost than a
+rota a person would actually write.
 
 **The cheapest arm is the thinnest, and — measured — that is defensible rather than a
 modelling error.** An earlier version of this file called it "a real gap: the cost model
@@ -305,9 +312,26 @@ def _run(spec: StaffingSpec) -> _Outcome:
 
 
 @cache
+def _rota_spec() -> StaffingSpec:
+    """The committed human three-shift rota — the baseline that is not a straw man."""
+    return load_scenario(_REPO_ROOT / "scenarios" / "er_floor_shifts.yaml").staffing
+
+
+@cache
 def _outcomes() -> tuple[_Outcome, _Outcome]:
-    """(flat, solved) on the identical realized week — computed once, asserted many."""
-    return _run(_flat_spec()), _run(_spec_from(_solved_roster(safety=_TUNED_SAFETY)))
+    """(rota, solved) on the identical realized week — computed once, asserted many.
+
+    The rota, not the flat roster, because comparing a solved schedule against *no*
+    schedule flatters it. ``_flat_outcome`` is still available for the tests that
+    genuinely want the no-scheduling floor.
+    """
+    return _run(_rota_spec()), _run(_spec_from(_solved_roster(safety=_TUNED_SAFETY)))
+
+
+@cache
+def _flat_outcome() -> _Outcome:
+    """Flat staffing around the clock — what no scheduling at all looks like."""
+    return _run(_flat_spec())
 
 
 @cache
@@ -366,7 +390,8 @@ def test_the_saving_survives_removing_the_roles_the_model_never_uses() -> None:
     flat roster with them removed, the solved roster must still be materially cheaper in
     hours, or the forecast contributed nothing but the discovery of an idle role.
     """
-    flat, solved = _outcomes()
+    flat = _flat_outcome()
+    _rota, solved = _outcomes()
     idle_role_hours = sum(
         count * (flat.paid_hours / _flat_headcount())
         for role, count in _flat_peak().items()
@@ -410,17 +435,39 @@ def test_the_solved_roster_varies_across_the_day() -> None:
     )
 
 
-def test_the_solved_roster_buys_the_week_with_fewer_paid_hours() -> None:
-    """The claim of §7's last lever: forecasting the demand costs less than covering it flat.
+def test_scheduling_at_all_beats_not_scheduling() -> None:
+    """The easy claim, kept because it is true and because it is *only* the easy claim.
 
-    Both arms are shift-aware and see the identical realized week under CRN, so the
-    difference is the roster and nothing else.
+    Flat staffing round the clock is what an ED does when it does not plan. Both a solved
+    roster and a hand-written rota beat it on hours by a wide margin — which says more about
+    paying for the peak at 3 a.m. than about forecasting.
     """
-    flat, solved = _outcomes()
-    assert solved.paid_hours < flat.paid_hours, (
-        f"solved {solved.paid_hours:.0f}h vs flat {flat.paid_hours:.0f}h"
+    rota, solved = _outcomes()
+    flat = _flat_outcome()
+    assert solved.paid_hours < flat.paid_hours
+    assert rota.paid_hours < flat.paid_hours
+
+
+def test_the_solved_roster_beats_a_human_rota_on_service_at_comparable_cost() -> None:
+    """The real claim, and deliberately not the one an earlier version of this file made.
+
+    Against a competent three-shift rota the solved roster is **not** cheaper — it spends
+    slightly more. What it does is convert those hours into materially better service by
+    shaping them to the forecast. Asserting "fewer hours" here would have been true only
+    against the flat straw man, and this test exists to stop that claim coming back.
+    """
+    rota, solved = _outcomes()
+    # Comparable cost: within a tenth, and honestly allowed to be the dearer of the two.
+    assert solved.paid_hours <= rota.paid_hours * 1.10, (
+        f"solved {solved.paid_hours:.0f}h is not comparable to rota {rota.paid_hours:.0f}h"
     )
-    assert solved.cost_cents < flat.cost_cents
+    # ...and materially better service for it.
+    improvement = (rota.door_to_provider_s - solved.door_to_provider_s) / rota.door_to_provider_s
+    assert improvement > 0.05, (
+        f"solved door-to-provider {solved.door_to_provider_s:.0f}s vs rota "
+        f"{rota.door_to_provider_s:.0f}s — only {improvement:+.1%}"
+    )
+    assert solved.breach_hours <= rota.breach_hours
 
 
 def test_the_saving_holds_service_rather_than_abandoning_patients() -> None:
@@ -432,11 +479,14 @@ def test_the_saving_holds_service_rather_than_abandoning_patients() -> None:
     Door-to-provider is the one that bites: it is where thinning the roster actually shows
     up, and holding it within a tenth of the flat arm is the claim.
     """
-    flat, solved = _outcomes()
-    assert solved.completions >= 0.95 * flat.completions, (
-        f"solved completed {solved.completions} vs flat {flat.completions}"
+    rota, solved = _outcomes()
+    flat = _flat_outcome()
+    assert solved.completions >= 0.95 * rota.completions, (
+        f"solved completed {solved.completions} vs rota {rota.completions}"
     )
     assert math.isfinite(solved.door_to_provider_s)
+    # Against the *flat* roster — the most generously staffed arm there is — the solved
+    # roster still holds door-to-provider within a tenth, on roughly half the hours.
     drift = (solved.door_to_provider_s - flat.door_to_provider_s) / flat.door_to_provider_s
     assert drift <= _SERVICE_TOLERANCE, (
         f"door-to-provider drifted {drift:+.1%}: "
@@ -453,7 +503,7 @@ def test_the_mean_load_roster_is_measurably_too_thin() -> None:
     than the flat roster and returns door-to-provider ~53% worse, which is well outside the
     tolerance the evaluated arm has to meet.
     """
-    flat, _ = _outcomes()
+    flat = _flat_outcome()
     thin = _thin_outcome()
     assert thin.paid_hours < flat.paid_hours
     drift = (thin.door_to_provider_s - flat.door_to_provider_s) / flat.door_to_provider_s
@@ -477,7 +527,8 @@ def test_pricing_delay_does_not_overturn_the_thin_roster_and_that_is_measured() 
     ordering is allowed to stand. A future floor whose waits approach the targets would flip
     it without any change here.
     """
-    flat, solved = _outcomes()
+    _rota, solved = _outcomes()
+    flat = _flat_outcome()
     thin = _thin_outcome()
     assert thin.cost_cents < solved.cost_cents < flat.cost_cents
     assert thin.door_to_provider_s > solved.door_to_provider_s

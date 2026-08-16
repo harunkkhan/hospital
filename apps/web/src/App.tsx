@@ -19,7 +19,7 @@ import { KPIPanel } from "./components/KPIPanel";
 import { Legend } from "./components/Legend";
 import { OverridePanel } from "./components/OverridePanel";
 import { PlaybackControls } from "./components/PlaybackControls";
-import { ScenarioControls } from "./components/ScenarioControls";
+import { ScenarioLab } from "./components/ScenarioLab";
 import { usePolled } from "./hooks/usePolled";
 import { useRunManager } from "./hooks/useRunManager";
 import { useStream } from "./hooks/useStream";
@@ -75,6 +75,8 @@ export function App() {
     [api, run, handle],
   );
   const scenariosFetcher = useMemo(() => () => api.listScenarios(), [api]);
+  // Stable, so the lab's per-base catalogue effect fires on the base, not on us.
+  const loadCatalogue = useCallback((id: string) => api.getSliders(id), [api]);
 
   const metrics = usePolled(metricsFetcher, 4000);
   const bottleneck = usePolled(bottleneckFetcher, 8000);
@@ -158,11 +160,15 @@ export function App() {
           error={handle !== null && handle.shadow == null ? "no shadow arm (compare_to unset)" : compare.error}
           onRefresh={compare.refresh}
         />
-        <ScenarioControls
+        <ScenarioLab
           scenarios={scenarios.data}
           currentSeed={handle?.seed ?? DEFAULT_RUN.seed}
+          loadCatalogue={loadCatalogue}
           onRerun={start}
           onSaveScenario={(req) => api.createScenario(req)}
+          runId={run}
+          metrics={liveWorld.kpiPreview ?? metrics.data}
+          simTime={liveWorld.simTime}
         />
       </aside>
 

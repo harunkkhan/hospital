@@ -29,7 +29,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from hospital.api import overrides, runs, sessions, stream
+from hospital.api import overrides, runs, sessions, sliders, stream
 from hospital.api.runs import ScenarioStore
 from hospital.api.sessions import SessionRegistry
 from hospital.api.wire import merge_wire_schemas
@@ -118,6 +118,11 @@ def create_app(*, scenario_dir: str | Path | None = "scenarios") -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(runs.router)
+    # The console's parameter vocabulary hangs off the scenario resource
+    # (`/scenarios/{id}/sliders`) but is mounted from its own module, so the
+    # slider names, their ranges, and their inverses stay in one file rather
+    # than half in the run resource.
+    app.include_router(sliders.router)
     app.include_router(sessions.router)
     app.include_router(overrides.router)
     app.include_router(stream.router)

@@ -66,6 +66,7 @@ function makeFakeApi(opts: { failLayoutFor?: (runId: string) => boolean } = {}):
     async createScenario() {
       return { id: "scn" };
     },
+    getSliders: unused,
     openStream() {
       return { close() {} };
     },

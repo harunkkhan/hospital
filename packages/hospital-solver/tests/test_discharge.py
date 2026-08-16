@@ -8,12 +8,25 @@ from _solver_fixtures import (
     default_config,
     demo_compiled,
     make_patient,
+    staff_member,
+    staff_state,
     task,
     waiting,
 )
 
-from hospital.core import BayStatus, DecisionInput, EsiAcuity, PlanItem, StaffRole
-from hospital.solver.discharge import FloorLoad, prioritize_discharge
+from hospital.core import (
+    BayStatus,
+    DecisionInput,
+    EsiAcuity,
+    PlanItem,
+    SimTime,
+    StaffMember,
+    StaffRole,
+    StaffState,
+    TaskId,
+    hours,
+)
+from hospital.solver.discharge import FloorLoad, floor_load, prioritize_discharge
 from hospital.solver.oracle import GraphRoutingOracle
 
 CONFIG = default_config()
@@ -129,3 +142,99 @@ def test_unblock_value_ignores_post_placement_waiters() -> None:
         if i.patient is not None and i.priority is not None
     }
     assert ranks["occ-gen"] < ranks["occ-resus"]
+
+
+class TestFloorLoad:
+    """The gate's input, which was a hard-coded 0.0 from M1 until it was measured."""
+
+    @staticmethod
+    def _di(*states: StaffState, now_us: int = 0) -> DecisionInput:
+        return decision_input(staff=states, now_us=now_us)
+
+    @staticmethod
+    def _roster() -> tuple[StaffMember, ...]:
+        return (
+            staff_member("md-1", StaffRole.PHYSICIAN),
+            staff_member("md-2", StaffRole.PHYSICIAN),
+            staff_member("rn-1", StaffRole.NURSE),
+            staff_member("rn-2", StaffRole.NURSE),
+        )
+
+    def test_an_idle_floor_is_not_at_peak(self) -> None:
+        load = floor_load(
+            self._di(*(staff_state(s.id.root) for s in self._roster())), self._roster()
+        )
+        assert load.provider_utilization == 0.0
+        assert load.nurse_utilization == 0.0
+        assert not load.is_peak()
+
+    def test_a_fully_committed_pool_is_at_peak(self) -> None:
+        """The condition §7's gate exists for, and which it never once saw before."""
+        busy = tuple(
+            staff_state(s.id.root).model_copy(update={"current_task": TaskId(f"t-{s.id.root}")})
+            for s in self._roster()
+        )
+        load = floor_load(self._di(*busy), self._roster())
+        assert load.provider_utilization == 1.0
+        assert load.nurse_utilization == 1.0
+        assert load.is_peak()
+
+    def test_utilization_is_busy_over_available(self) -> None:
+        """One of two physicians working is 0.5 — not 0.25 of some notional headcount."""
+        states = (
+            staff_state("md-1").model_copy(update={"current_task": TaskId("t1")}),
+            staff_state("md-2"),
+            staff_state("rn-1"),
+            staff_state("rn-2"),
+        )
+        load = floor_load(self._di(*states), self._roster())
+        assert load.provider_utilization == 0.5
+        assert load.nurse_utilization == 0.0
+
+    def test_an_off_duty_member_counts_in_neither_numerator_nor_denominator(self) -> None:
+        """A quiet night must not read as a peak.
+
+        Off shift and absent both surface as a future ``busy_until`` with no task. Counting
+        those as busy would saturate the gate exactly when the floor is emptiest, and demote
+        the documentation that a quiet night is the right time to do.
+        """
+        states = (
+            staff_state("md-1").model_copy(update={"current_task": TaskId("t1")}),
+            # off duty until later: unavailable, not busy
+            staff_state("md-2").model_copy(update={"busy_until": SimTime(hours(8).root)}),
+            staff_state("rn-1"),
+            staff_state("rn-2"),
+        )
+        load = floor_load(self._di(*states), self._roster())
+        # One physician working out of one available -> saturated, correctly.
+        assert load.provider_utilization == 1.0
+        # ...and if the working one is also off duty, the pool is empty, not saturated.
+        all_off = tuple(
+            staff_state(s.id.root).model_copy(update={"busy_until": SimTime(hours(8).root)})
+            for s in self._roster()
+        )
+        empty = floor_load(self._di(*all_off), self._roster())
+        assert empty.provider_utilization == 0.0
+        assert not empty.is_peak(), "an empty floor is not a busy one"
+
+    def test_a_past_busy_until_is_available_again(self) -> None:
+        states = (
+            staff_state("md-1").model_copy(update={"busy_until": SimTime(0)}),
+            staff_state("md-2").model_copy(update={"current_task": TaskId("t1")}),
+            staff_state("rn-1"),
+            staff_state("rn-2"),
+        )
+        load = floor_load(self._di(*states, now_us=hours(1).root), self._roster())
+        assert load.provider_utilization == 0.5
+
+    def test_staff_absent_from_the_roster_are_ignored(self) -> None:
+        """The roster supplies the roles; a state without one cannot be classified."""
+        states = (
+            staff_state("ghost").model_copy(update={"current_task": TaskId("t1")}),
+            staff_state("md-1"),
+            staff_state("md-2"),
+            staff_state("rn-1"),
+            staff_state("rn-2"),
+        )
+        load = floor_load(self._di(*states), self._roster())
+        assert load.provider_utilization == 0.0

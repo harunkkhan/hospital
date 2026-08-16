@@ -76,6 +76,7 @@ def _shaft_node(floor: int, shaft: int, y_cm: int) -> RouteNode:
     return RouteNode(
         id=NodeId(f"elev_{shaft:02d}_f{floor:02d}"),
         label=f"elevator {shaft} floor {floor}",
+        floor=floor,
         x_cm=-_SHAFT_OFFSET_CM - shaft * _SHAFT_PITCH_CM,
         # Viz-only, and the one place a floor becomes a coordinate: stacking the shafts
         # vertically is what makes a rendered building look like a building.
@@ -96,7 +97,8 @@ def _renamed(layout: FloorLayout, floor: int) -> FloorLayout:
 
     graph = RouteGraph(
         nodes=tuple(
-            node.model_copy(update={"id": _node_id(prefix, node.id)}) for node in layout.graph.nodes
+            node.model_copy(update={"id": _node_id(prefix, node.id), "floor": floor})
+            for node in layout.graph.nodes
         ),
         edges=tuple(
             edge.model_copy(update={"a": _node_id(prefix, edge.a), "b": _node_id(prefix, edge.b)})

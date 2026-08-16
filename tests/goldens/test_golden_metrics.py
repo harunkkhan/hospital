@@ -23,12 +23,53 @@ The pins assert the HONEST M1 story, trade included:
   It is also now *priced*, so the trade shows up in money and not only in seconds.
 * Throughput is demand-limited at this operating point: completions flat (ns).
 
-Re-baselined twice: at M4b, when ``KPI_KEYS`` grew 27 -> 30, and again when
-``deadline_breach_hours_total`` made it 31. Both times **only the interval bounds moved.**
+**One of M1's three stated acceptance criteria is not met, and that is recorded here rather
+than engineered around.** Section 12 accepts M1 "when a reference run produces metrics.json
+in which OPTIMIZED beats BASELINE on acuity-weighted time, staff-minutes walked, *and weekly
+completions* with significant confidence intervals". This golden delivers the first two and
+not the third: ``completions_per_week`` is flat and non-significant.
+
+The reason is the operating point, not the policy. This floor runs at ``bay_utilization``
+~0.21 — 76 bays against six arrivals an hour — so throughput is limited by demand and no
+placement or dispatch decision can add a completion. ``er_floor_stressed`` stresses
+*staffing*, not beds, which is why it does not change that.
+
+Measured, so the claim is not hand-waving: on a bay-constrained variant of the same week (22
+bays, ``bay_utilization`` ~0.75) the criterion *does* come alive — the optimized arm completes
+about 15 more patients a week than the baseline, significantly, with end-of-week WIP falling
+by the same 15. But at six paired reps the *other* two criteria go non-significant there: on a
+congested floor the travel saving and the objective gain are swamped by queueing variance.
+
+So no committed scenario satisfies all three at once, and moving this golden to a congested
+floor would trade two passes for one. It has not been moved. Choosing an operating point until
+an acceptance test goes green is selecting the evidence, which is the same failure as a fake
+win — and this file's whole purpose is to refuse that. The gap is a property of the criterion
+(the three measures pull toward different floors), not a defect the golden should hide.
+
+Re-baselined three times. Twice for KPI-contract growth (27 -> 30 at M4b, then 31 when
+``deadline_breach_hours_total`` landed), where **only the interval bounds moved** —
+
 ``paired_bootstrap`` corrects across the whole KPI family, so each extra key tightens the
 per-key alpha and widens every exploratory CI a little. Every ``diff_mean`` stayed
 byte-identical — the runs, seeds, and CRN draws did not change, and measuring more things
-cannot move an estimate — and **no significance verdict flipped** either time.
+cannot move an estimate.
+
+The third is different in kind: a **behaviour** change, when the documentation load gate
+started firing. §7's "schedule documentation into low-load windows" had a mechanism from M1
+whose only production input was the neutral ``FloorLoad()``, and 0.0 utilization can never
+cross a 0.8 threshold — so it had never once fired. Measuring the load from the staff states
+the projection already carries puts it at peak for about half of all decision ticks, and 29
+of 32 estimates moved as a result.
+
+**It cost the milestone about 6.5% of its headline win**, and that is the honest reading
+rather than a regression to explain away: ``weighted_objective_total`` fell from +3.65M to
++3.41M. Deferring paperwork at peak frees staff for patient-facing work — mean
+door-to-provider's regression shrinks from -175 s to -168 s — but patients then wait longer
+for the documentation that ends their stay, holding bays and adding acuity-weighted time. The
+gate is what the spec asks for; this is what it costs here, at the pre-existing 0.8 threshold,
+which was deliberately not tuned to make the number look better.
+
+**No significance verdict flipped in any of the three re-baselines.**
 
 That the milestone survived both is by construction rather than luck:
 ``weighted_objective_total`` is a pre-registered primary endpoint tested at the full alpha
@@ -48,63 +89,63 @@ from _golden_helpers import GOLDENS_DIR, METRICS_REPS, METRICS_SEED
 # baseline - optimized: positive favors OPTIMIZED for lower-is-better metrics.
 _EXPECTED_CONTRASTS: dict[str, dict[str, float | bool]] = {
     "weighted_objective_total": {
-        "diff_mean": 3649887.6,
-        "ci_lo": 1772938.9525000001,
-        "ci_hi": 5444257.3549999995,
+        "diff_mean": 3410959.7,
+        "ci_lo": 1415096.39,
+        "ci_hi": 5531594.2,
         "significant": True,
     },
     "door_to_provider_s_mean": {
-        "diff_mean": -175.3940930754121,
-        "ci_lo": -241.31364886167134,
-        "ci_hi": -113.35732724683747,
+        "diff_mean": -167.7901546954885,
+        "ci_lo": -228.12349965492854,
+        "ci_hi": -113.71550718758597,
         "significant": True,
     },
     "staff_minutes_walked": {
-        "diff_mean": 109.84885813000001,
-        "ci_lo": 64.24918887197596,
-        "ci_hi": 149.6187587377005,
+        "diff_mean": 106.0984132616666,
+        "ci_lo": 61.995834087619635,
+        "ci_hi": 145.2012721491132,
         "significant": True,
     },
     "completions_per_week": {
-        "diff_mean": -0.1,
+        "diff_mean": 0.2,
         "ci_lo": -1.9,
-        "ci_hi": 1.7,
+        "ci_hi": 2.1,
         "significant": False,
     },
     "deadline_breach_hours_total": {
-        "diff_mean": -38.33453320263889,
-        "ci_lo": -61.691274358627545,
-        "ci_hi": -24.049869710752425,
+        "diff_mean": -38.708130808638884,
+        "ci_lo": -61.37200528885143,
+        "ci_hi": -24.564418329223994,
         "significant": True,
     },
     "los_s_mean_by_esi_1": {
-        "diff_mean": 848.553831845413,
-        "ci_lo": 416.29985383525894,
-        "ci_hi": 1412.6054062426847,
+        "diff_mean": 823.0502519186772,
+        "ci_lo": 373.0594256157192,
+        "ci_hi": 1396.4187685802337,
         "significant": True,
     },
     "los_s_mean_by_esi_2": {
-        "diff_mean": 826.3164328646739,
-        "ci_lo": 518.1955895066719,
-        "ci_hi": 1207.2626389699285,
+        "diff_mean": 819.4891513252902,
+        "ci_lo": 520.447448894836,
+        "ci_hi": 1189.8733430009047,
         "significant": True,
     },
     "los_s_mean_by_esi_3": {
-        "diff_mean": -386.81699092937487,
-        "ci_lo": -564.3914300786852,
-        "ci_hi": -225.1071757991806,
+        "diff_mean": -332.519133427469,
+        "ci_lo": -520.8627246204493,
+        "ci_hi": -180.82952251582554,
         "significant": True,
     },
     "los_s_mean_by_esi_4": {
-        "diff_mean": -128.6644707584579,
-        "ci_lo": -499.9273161109475,
-        "ci_hi": 415.5051593243789,
+        "diff_mean": -200.92783711722913,
+        "ci_lo": -542.3783773932706,
+        "ci_hi": 82.13850001500697,
         "significant": False,
     },
     "los_s_mean_by_esi_5": {
-        "diff_mean": -732.6016454713905,
-        "ci_lo": -2069.4940888563424,
-        "ci_hi": 601.2090499654846,
+        "diff_mean": -397.8850298881292,
+        "ci_lo": -1446.4039967650242,
+        "ci_hi": 603.5502607972602,
         "significant": False,
     },
 }
