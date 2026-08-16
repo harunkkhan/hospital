@@ -46,14 +46,22 @@ body {
 .app-shell {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  /* Metrics | floor | controls. The floor takes what is left, so it grows on a wide display
+     instead of the rails growing with it. */
+  grid-template-columns: 336px minmax(0, 1fr) 356px;
   grid-template-areas:
-    "header header"
-    "map side"
-    "controls side";
+    "header header header"
+    "metrics map controls"
+    "metrics playback controls";
   height: 100%;
   gap: 8px;
   padding: 8px;
+}
+
+@media (max-width: 1400px) {
+  .app-shell {
+    grid-template-columns: 300px minmax(0, 1fr) 320px;
+  }
 }
 
 .app-header {
@@ -89,17 +97,44 @@ body {
   overflow: hidden;
 }
 
-.side-pane {
-  grid-area: side;
+.rail {
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* The scrollbar is the rail's own, not the page's; a rail that scrolled the shell would
+     take the floor with it. */
+  scrollbar-width: thin;
+  padding-right: 2px;
+}
+
+.rail-left {
+  grid-area: metrics;
+}
+
+.rail-right {
+  grid-area: controls;
 }
 
 .controls-pane {
-  grid-area: controls;
+  grid-area: playback;
+}
+
+/* The legend rides on the floor, bottom-left, clear of the 3D view's own chrome (top-left)
+   and its style caption (bottom-left inside the canvas gets nudged by this). */
+.map-legend {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 2;
+  max-width: 320px;
+  pointer-events: none;
+}
+
+.map-legend .panel {
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .panel {
@@ -194,12 +229,18 @@ label.field {
   background: var(--surface-raised);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
-  padding: 6px 8px;
+  /* Label over value, tight: in a fixed-width rail the tile is read by scanning down the
+     column of numbers, so vertical rhythm matters more than breathing room. */
+  padding: 7px 9px 6px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .stat-tile .label {
   font-size: 10.5px;
+  letter-spacing: 0.02em;
   color: var(--ink-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -207,9 +248,11 @@ label.field {
 }
 
 .stat-tile .value {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 600;
+  line-height: 1.15;
   color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-tile .value .unit {
@@ -455,8 +498,10 @@ table.kv td:last-child {
 
 .floor3d-tagline {
   position: absolute;
-  left: 10px;
-  bottom: 8px;
+  /* Right-aligned: the legend owns the bottom-left of the floor pane. */
+  right: 12px;
+  bottom: 10px;
+  text-align: right;
   margin: 0;
   max-width: 46ch;
   font-size: 12.5px;

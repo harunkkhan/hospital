@@ -141,10 +141,24 @@ export function App() {
             {bootError ?? "starting run…"}
           </div>
         )}
+        {/* The legend describes the floor, so it sits on it rather than competing for rail
+            space with the numbers. */}
+        <div className="map-legend">
+          <Legend />
+        </div>
       </main>
 
-      <aside className="side-pane">
-        <Legend />
+      {/* Monitoring on the left, controls on the right: reading what the department is doing
+          and changing what it is asked to do are different jobs, and interleaving them meant
+          scrolling past a slider to reach a KPI. */}
+      <aside className="rail rail-left" aria-label="Live metrics">
+        <KPIPanel metrics={liveWorld.kpiPreview ?? metrics.data} />
+        <BottleneckPanel report={bottleneck.data} />
+        <CompareView
+          compare={compare.data}
+          error={handle !== null && handle.shadow == null ? "no shadow arm (compare_to unset)" : compare.error}
+          onRefresh={compare.refresh}
+        />
         <OverridePanel
           layout={layout}
           world={liveWorld}
@@ -153,13 +167,9 @@ export function App() {
           runId={run}
           onResync={resync}
         />
-        <KPIPanel metrics={liveWorld.kpiPreview ?? metrics.data} />
-        <BottleneckPanel report={bottleneck.data} />
-        <CompareView
-          compare={compare.data}
-          error={handle !== null && handle.shadow == null ? "no shadow arm (compare_to unset)" : compare.error}
-          onRefresh={compare.refresh}
-        />
+      </aside>
+
+      <aside className="rail rail-right" aria-label="Scenario controls">
         <ScenarioLab
           scenarios={scenarios.data}
           currentSeed={handle?.seed ?? DEFAULT_RUN.seed}
