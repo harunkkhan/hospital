@@ -18,6 +18,7 @@ import * as THREE from "three";
 import type { FloorLayout } from "../api/types";
 import type { SelectedEntity } from "../state/runStore";
 import type { WorldView } from "../state/streamReducer";
+import { floorLabel, floorsOf, sliceToFloor } from "../render/floors";
 import {
   CAMERA_PRESETS,
   DEFAULT_PRESET,
@@ -77,7 +78,15 @@ export function FloorMap3D({ layout, world, selected, onSelect, live }: FloorMap
   const presetIdRef = useRef<PresetId>(presetId);
   presetIdRef.current = presetId;
 
-  const arch = useMemo(() => deriveFloor(layout), [layout]);
+  // A building's floors share a footprint, so their coordinates genuinely overlap. Deriving a
+  // plan from the whole graph would pack every ward's bays into the ED's own bands and stack
+  // the wards on top of it. Everything below is ONE storey; a single-floor scenario slices to
+  // itself, so an ED-only run is unchanged.
+  const floors = useMemo(() => floorsOf(layout), [layout]);
+  const [floor, setFloor] = useState(0);
+  const visible = useMemo(() => sliceToFloor(layout, floor), [layout, floor]);
+
+  const arch = useMemo(() => deriveFloor(visible), [visible]);
   const style = useMemo(() => stylePackById(styleId), [styleId]);
 
   // The latest world, its wall-clock arrival time and whether it is the live head — read from
@@ -127,6 +136,10 @@ export function FloorMap3D({ layout, world, selected, onSelect, live }: FloorMap
       return;
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // The fit-out and the people cast; a ShadowMaterial plane in the scene catches. Soft PCF
+    // because a hard-edged shadow under a hairline drawing looks like a rendering artefact.
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     const stage: Stage = {
       renderer,
@@ -190,7 +203,7 @@ export function FloorMap3D({ layout, world, selected, onSelect, live }: FloorMap
     stage.floor?.dispose();
 
     const floor = buildFloorScene(arch, style, { vfovDeg: VFOV_DEG });
-    const people = buildLiveLayer(layout, arch, style);
+    const people = buildLiveLayer(visible, arch, style);
     // The live layer hangs off the floor's group so it inherits the same plan-to-scene
     // translation: one offset, defined once, and people cannot drift from the building.
     floor.root.add(people.root);
@@ -207,7 +220,7 @@ export function FloorMap3D({ layout, world, selected, onSelect, live }: FloorMap
     // Re-fit to whichever preset is showing: a new plan or a new pack must not leave the
     // camera framing the previous building.
     applyPreset(presetIdRef.current);
-  }, [arch, style, layout, applyPreset]);
+  }, [arch, style, visible, applyPreset]);
 
   useEffect(() => {
     applyPreset(presetId);
@@ -338,6 +351,20 @@ export function FloorMap3D({ layout, world, selected, onSelect, live }: FloorMap
       />
       {failure !== null && <div className="floor3d-failure">{failure}</div>}
       <div className="floor3d-chrome">
+        {floors.length > 1 && (
+          <div className="floor3d-group">
+            {floors.map((f) => (
+              <button
+                key={f}
+                type="button"
+                className={f === floor ? "on" : undefined}
+                onClick={() => setFloor(f)}
+              >
+                {floorLabel(f)}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="floor3d-group">
           {CAMERA_PRESETS.map((preset) => (
             <button
