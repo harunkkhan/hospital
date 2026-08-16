@@ -62,6 +62,31 @@ body {
   .app-shell {
     grid-template-columns: 300px minmax(0, 1fr) 320px;
   }
+
+  .app-shell.metrics-collapsed {
+    grid-template-columns: 0 minmax(0, 1fr) 320px;
+  }
+}
+
+/* Collapsed, the metrics track goes to zero and the floor takes the width. The rail is
+   removed from the layout rather than hidden under it, so nothing keeps painting or
+   scrolling off-screen. */
+.app-shell.metrics-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 356px;
+}
+
+.app-shell.metrics-collapsed .rail-left {
+  display: none;
+}
+
+.app-shell {
+  transition: grid-template-columns 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell {
+    transition: none;
+  }
 }
 
 .app-header {

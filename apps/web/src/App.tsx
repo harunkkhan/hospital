@@ -49,6 +49,9 @@ export function App() {
   // The 3D floor is the default view; the flat map stays one click away for anyone whose
   // browser has no WebGL, and as the reference for what the route graph literally says.
   const [floorView, setFloorView] = useState<"2d" | "3d">("3d");
+  // The metrics rail collapses so the floor can have the width: on a laptop the plan is the
+  // thing being read, and 336px of numbers is a third of it.
+  const [metricsOpen, setMetricsOpen] = useState(true);
 
   const run = handle?.run ?? null;
 
@@ -97,7 +100,7 @@ export function App() {
     status === "open" ? "live" : status === "closed" ? "err" : "warn";
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${metricsOpen ? "" : " metrics-collapsed"}`}>
       <header className="app-header">
         <h1>ER Operator Console</h1>
         <span className="badge">{api.mode} mode</span>
@@ -112,6 +115,14 @@ export function App() {
         )}
         <button className="badge" onClick={() => setFloorView(floorView === "3d" ? "2d" : "3d")}>
           {floorView === "3d" ? "3D floor" : "2D map"}
+        </button>
+        <button
+          className="badge"
+          aria-expanded={metricsOpen}
+          aria-controls="metrics-rail"
+          onClick={() => setMetricsOpen(!metricsOpen)}
+        >
+          {metricsOpen ? "◧ Hide metrics" : "◧ Show metrics"}
         </button>
         <span className="spacer" />
         {bootError !== null && <span className="badge err">{bootError}</span>}
@@ -151,7 +162,7 @@ export function App() {
       {/* Monitoring on the left, controls on the right: reading what the department is doing
           and changing what it is asked to do are different jobs, and interleaving them meant
           scrolling past a slider to reach a KPI. */}
-      <aside className="rail rail-left" aria-label="Live metrics">
+      <aside className="rail rail-left" id="metrics-rail" aria-label="Live metrics">
         <KPIPanel metrics={liveWorld.kpiPreview ?? metrics.data} />
         <BottleneckPanel report={bottleneck.data} />
         <CompareView
