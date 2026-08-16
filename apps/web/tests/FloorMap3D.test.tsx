@@ -12,7 +12,7 @@ import { render, screen } from "@testing-library/react";
 
 import type { Bay, FloorLayout, RouteNode, Zone } from "../src/api/types";
 import { FloorMap3D } from "../src/render3d/FloorMap3D";
-import type { WorldView } from "../src/state/streamReducer";
+import { initialWorld } from "../src/state/streamReducer";
 
 function node(id: string, label: string, x: number, y: number, floor: number): RouteNode {
   return { id, label, x_cm: x, y_cm: y, floor };
@@ -74,22 +74,10 @@ function singleFloor(): FloorLayout {
   };
 }
 
-const WORLD: WorldView = {
-  simTime: 0,
-  seq: 0,
-  state: "paused",
-  speed: 1,
-  patients: {},
-  staff: {},
-  bays: {},
-  queues: {},
-  pendingTasks: [],
-  kpiPreview: null,
-};
 
 function mount(layout: FloorLayout): void {
   render(
-    <FloorMap3D layout={layout} world={WORLD} selected={null} onSelect={() => {}} live={false} />,
+    <FloorMap3D layout={layout} world={initialWorld()} selected={null} onSelect={() => {}} live={false} />,
   );
 }
 
