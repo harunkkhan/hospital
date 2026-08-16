@@ -2400,7 +2400,7 @@
       },
       "ScenarioInline": {
         "additionalProperties": false,
-        "description": "A stored base scenario plus slider overrides.\n\nA key is either one of the console's named knobs (``api.sliders.SLIDER_KEYS``\n\u2014 e.g. ``\"workload.arrival_rate_multiplier\"``, which is *relative* and so\ncould never be a leaf value) or a literal dotted path into the ``Scenario``\ndocument (e.g. ``\"workload.base_rate_per_hour\"``, whose value replaces the\naddressed leaf). Both compile through ``api.sliders.compile_overrides`` into\nan overlay ``data.scenario.apply_overlay`` validates.",
+        "description": "A stored base scenario plus slider overrides.\n\nA key is either one of the console's named knobs (``api.sliders.SLIDER_KEYS``\n\u2014 e.g. ``\"workload.arrival_rate_multiplier\"``, which is *relative* and so\ncould never be a leaf value) or a literal dotted path into the ``Scenario``\ndocument (e.g. ``\"workload.base_rate_per_hour\"``, whose value replaces the\naddressed leaf). Both compile through ``api.sliders.compile_overrides`` into\nan overlay ``data.scenario.apply_overlay`` validates.\n\n``GET /scenarios/{id}/sliders`` publishes the knob vocabulary \u2014 names, groups,\nranges, units, and what each is worth in that base \u2014 so a client never has to\nguess either the keys or where the scenario currently sits on them.",
         "properties": {
           "base": {
             "title": "Base",
@@ -2562,6 +2562,84 @@
           "task_kind"
         ],
         "title": "SkillRule",
+        "type": "object"
+      },
+      "SliderCatalogue": {
+        "additionalProperties": false,
+        "description": "The knobs the console may draw, and where ``scenario`` currently sits on each.",
+        "properties": {
+          "knobs": {
+            "items": {
+              "$ref": "#/components/schemas/SliderSpec"
+            },
+            "title": "Knobs",
+            "type": "array"
+          },
+          "scenario": {
+            "title": "Scenario",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scenario",
+          "knobs"
+        ],
+        "title": "SliderCatalogue",
+        "type": "object"
+      },
+      "SliderSpec": {
+        "additionalProperties": false,
+        "description": "One knob of the console's parameter vocabulary, read against a base scenario.\n\n``min``/``max``/``step`` are **affordances**, not validation: they live here,\nnext to the alias they bound, so the panel cannot drift from what the data\nlayer accepts, but the server still judges every submitted value through\n``apply_overlay`` (see :func:`compile_overrides`). Widening a range here can\ntherefore only widen what the UI *offers* \u2014 never what the model accepts.\n\n``value`` is what this knob is worth in the base the catalogue was read\nagainst, so the panel opens on the truth. For the relative knob it is\nalways 1.0 (see :func:`_read_multiplier`).",
+        "properties": {
+          "group": {
+            "enum": [
+              "demand",
+              "staffing",
+              "capacity"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "step": {
+            "title": "Step",
+            "type": "number"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "group",
+          "min",
+          "max",
+          "step",
+          "unit",
+          "value"
+        ],
+        "title": "SliderSpec",
         "type": "object"
       },
       "StaffId": {
@@ -3822,6 +3900,46 @@
           }
         },
         "summary": "Get Scenario"
+      }
+    },
+    "/scenarios/{scenario_id}/sliders": {
+      "get": {
+        "description": "The console's parameter vocabulary, read against one stored scenario.\n\nA **sub-resource of the scenario**, not a flat ``/sliders``, because half of\nwhat a knob needs is a fact about the base it will edit: its current value.\nA base-less catalogue could publish names and ranges but would have to answer\n\"where is this now?\" with a default \u2014 and a panel that opens on a default is\na panel whose first drag silently rewrites a field nobody touched. Hanging it\noff ``/scenarios/{id}`` also means the unknown-base 404 is the same lookup\n(and the same answer) the rest of the scenario resource gives.\n\nRead-only and derived: it stores nothing, and re-reading it after a\n``POST /scenarios`` against the *derived* id shows where that variant now\nsits.",
+        "operationId": "get_slider_catalogue_scenarios__scenario_id__sliders_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SliderCatalogue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Slider Catalogue"
       }
     }
   }

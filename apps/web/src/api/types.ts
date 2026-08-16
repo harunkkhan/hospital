@@ -445,6 +445,45 @@ export interface ScenarioCreated {
 }
 
 // ---------------------------------------------------------------------------
+// the slider catalogue (GET /scenarios/{id}/sliders — owned by api/sliders.py)
+// ---------------------------------------------------------------------------
+
+/**
+ * Demand vs supply, which is the only way an OR model can be pushed. Supply is
+ * split into the clinicians who see patients (`staffing`) and the `capacity`
+ * that has to exist for them to work in — bays, rooms, suites, plus the
+ * housekeeping/porter labour that turns a bay over. There is no consumables
+ * group because this simulator has no consumables: it models capacity, not
+ * inventory (see the api/sliders.py module docstring).
+ */
+export type SliderGroup = "demand" | "staffing" | "capacity";
+
+/**
+ * One knob the console may draw. `min`/`max`/`step` are server-owned
+ * AFFORDANCES, not validation — the API still judges every submitted value
+ * through data.scenario, so a value outside this range is accepted or refused
+ * on the model's terms, not the panel's. The panel must therefore never treat
+ * the range as a guarantee, and must widen it to admit a `value` outside it.
+ */
+export interface SliderSpec {
+  key: string;
+  label: string;
+  group: SliderGroup;
+  min: number;
+  max: number;
+  step: number;
+  unit: string;
+  /** What this knob is worth in the base the catalogue was read against. */
+  value: number;
+}
+
+export interface SliderCatalogue {
+  /** The base id these values were read against — never a global default. */
+  scenario: string;
+  knobs: readonly SliderSpec[];
+}
+
+// ---------------------------------------------------------------------------
 // stream frames (GET /runs/{id}/stream — doc 07 §7.2, owned by api/stream.py)
 // ---------------------------------------------------------------------------
 

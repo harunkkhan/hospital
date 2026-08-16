@@ -386,3 +386,74 @@ table.kv td:last-child {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* --- scenario lab --- */
+.lab-head {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.knob-group {
+  margin-top: 10px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 6px;
+}
+
+.knob-group h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.knob-group p {
+  margin: 2px 0 6px;
+}
+
+.knob-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 3px 0;
+}
+
+.knob-row .knob-label {
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knob-row .knob-value {
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.knob-row .knob-flag {
+  grid-column: 1 / -1;
+  order: 3;
+}
+
+.knob-row input[type="range"] {
+  grid-column: 1 / -1;
+  order: 2;
+  width: 100%;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.lab-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}

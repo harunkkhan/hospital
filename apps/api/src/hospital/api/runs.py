@@ -79,6 +79,10 @@ class ScenarioInline(FrozenModel):
     document (e.g. ``"workload.base_rate_per_hour"``, whose value replaces the
     addressed leaf). Both compile through ``api.sliders.compile_overrides`` into
     an overlay ``data.scenario.apply_overlay`` validates.
+
+    ``GET /scenarios/{id}/sliders`` publishes the knob vocabulary — names, groups,
+    ranges, units, and what each is worth in that base — so a client never has to
+    guess either the keys or where the scenario currently sits on them.
     """
 
     base: str

@@ -7,6 +7,23 @@
  * comes from one seeded PRNG consumed in a fixed order inside fixed
  * 1-sim-second quanta, so a given seed always yields byte-identical frames —
  * pacing (speed) never touches sampling, mirroring the real driver invariant.
+ *
+ * Scenario knobs are REALIZED here, not recorded: arrival rate and ambulance
+ * share shape the arrival stream, isolation share contends for the two
+ * isolation-capable bays, the staffing counts build the roster (mirroring
+ * data.realize_staff), and the bay-capacity counts take bays out of service. The
+ * mock catalogue (mockApi.ts) publishes exactly the knobs this list covers, and
+ * caps each at what this floor can express — a slider the demo cannot honor is a
+ * placebo, and a placebo is worse than an absent control.
+ *
+ * Where the roster BITES is worth stating plainly, because it is the one place
+ * this mock is thinner than the engine it stands in for. Triage is staff-gated:
+ * a patient waits for a free nurse, so the nurse count moves throughput and
+ * door-to-triage. Provider visits and bay cleaning are not gated — those roles
+ * move utilization, walking and what is visible on the floor, but a bay still
+ * turns over on a timer rather than on a housekeeper arriving. The real engine
+ * (sim.physics) gates all of it; this is a wire-contract stand-in, and the live
+ * console is where the full mechanism runs.
  */
 
 import type {
@@ -67,6 +84,8 @@ interface MockPatient {
   bay: BayId | null;
   remainingUs: number;
   pinned: boolean;
+  /** Needs an isolation-capable bay — the mock floor has only two. */
+  isolation: boolean;
   /**
    * Queue-ordering priority ONLY — higher jumps the FIFO. Kept distinct from
    * stageSinceUs (stage-entry time) so a bump reorders the queue WITHOUT
@@ -142,6 +161,60 @@ export interface ScenarioConfig {
   overrides: Readonly<Record<string, number>>;
 }
 
+/**
+ * Which slider closes bays of which zone type. The mock floor is hand-authored
+ * geometry (fixtures.ts), so a capacity knob can only take bays OUT of service —
+ * there is nowhere to put a fourteenth one. That is why the mock catalogue caps
+ * each of these at the fixture's own count: the range the panel draws is the
+ * range this engine can actually realize, so no slider position is a placebo.
+ */
+const BAY_CAPACITY_KEYS: Readonly<Record<string, string>> = {
+  general: "facility.general_bays",
+  fast_track: "facility.fast_track_bays",
+  resus_trauma: "facility.resus_bays",
+  triage: "facility.triage_rooms",
+};
+
+const ROLE_ORDER: readonly StaffRole[] = [
+  "physician",
+  "nurse",
+  "tech",
+  "porter",
+  "housekeeping",
+];
+
+/**
+ * The roster a staffing slider realizes — the mock's stand-in for
+ * `data.realize_staff`: a count per role, homed round-robin over the stations.
+ *
+ * The fixture roster supplies the first members of each role, so an un-overridden
+ * run is byte-identical to before this knob existed (same ids, same order, same
+ * homes); beyond it, members are minted with the same id prefix.
+ */
+function scaleRoster(
+  overrides: Readonly<Record<string, number>>,
+  stations: readonly NodeId[],
+): { id: StaffId; role: StaffRole; home: NodeId }[] {
+  const out: { id: StaffId; role: StaffRole; home: NodeId }[] = [];
+  for (const role of ROLE_ORDER) {
+    const fixtures = STAFF_ROSTER.filter((f) => f.role === role);
+    const requested = overrides[`staffing.${role}_count`];
+    const count = Math.max(0, Math.round(requested ?? fixtures.length));
+    const prefix = fixtures[0]?.id.split("-")[0] ?? role;
+    for (let k = 0; k < count; k += 1) {
+      const fixture = fixtures[k];
+      out.push(
+        fixture ?? {
+          id: `${prefix}-${k + 1}`,
+          role,
+          home: stations[k % stations.length] ?? "c-1",
+        },
+      );
+    }
+  }
+  return out;
+}
+
 export class MockEngine {
   readonly runId: RunId;
   readonly arm: "baseline" | "optimized";
@@ -161,6 +234,8 @@ export class MockEngine {
   private readonly arrivalMultiplier: number;
   /** P(ambulance) for each arrival. */
   private readonly ambulanceShare: number;
+  /** P(needs an isolation-capable bay) for each arrival. */
+  private readonly isolationShare: number;
 
   private rng: () => number;
   private accUs = 0;
@@ -204,20 +279,31 @@ export class MockEngine {
     this.arrivalMultiplier = Math.max(0.1, overrides["workload.arrival_rate_multiplier"] ?? 1);
     const share = overrides["workload.ambulance_share"];
     this.ambulanceShare = share === undefined ? 0.25 : Math.max(0, Math.min(1, share));
+    const isolation = overrides["workload.isolation_share"];
+    this.isolationShare = isolation === undefined ? 0.05 : Math.max(0, Math.min(1, isolation));
     this.layout = makeMockLayout();
     this.rng = mulberry32(seed);
     this.nextArrivalUs = Math.round((30 * S + this.rng() * 120 * S) / this.arrivalMultiplier);
 
+    // Bays beyond a zone type's requested capacity start CLOSED and stay closed:
+    // a capacity slider takes real bays out of service rather than annotating a
+    // number nothing reads (placement, cleaning and utilization all key off status).
+    const openedPerZone = new Map<string, number>();
     for (const bay of this.layout.bays) {
+      const capacityKey = BAY_CAPACITY_KEYS[bay.zone_type];
+      const cap = capacityKey === undefined ? undefined : overrides[capacityKey];
+      const opened = openedPerZone.get(bay.zone_type) ?? 0;
+      const closed = cap !== undefined && opened >= Math.max(0, Math.round(cap));
+      openedPerZone.set(bay.zone_type, opened + (closed ? 0 : 1));
       this.bays.set(bay.id, {
         id: bay.id,
-        status: "free",
+        status: closed ? "closed" : "free",
         occupant: null,
         cleaningEta: null,
         remainingUs: 0,
       });
     }
-    for (const fixture of STAFF_ROSTER) {
+    for (const fixture of scaleRoster(overrides, this.layout.stations)) {
       this.staff.set(fixture.id, {
         id: fixture.id,
         role: fixture.role,
@@ -357,6 +443,7 @@ export class MockEngine {
       const id = `p-${String(this.patientCounter).padStart(4, "0")}`;
       const esi = this.drawEsi();
       const mode = this.rng() < this.ambulanceShare ? "ambulance" : "walk_in";
+      const isolation = this.rng() < this.isolationShare;
       const complaint = COMPLAINTS[Math.floor(this.rng() * COMPLAINTS.length)] ?? "unwell";
       const atNode = mode === "ambulance" ? "entr-ambo" : "entr-main";
       this.patients.set(id, {
@@ -370,6 +457,7 @@ export class MockEngine {
         bay: null,
         remainingUs: 0,
         pinned: false,
+        isolation,
         priority: 0,
       });
       this.emit({ kind: "patient_arrived", occurred_at: this.simTimeUs, patient: id, mode });
@@ -428,7 +516,13 @@ export class MockEngine {
       if (bay === undefined) {
         break;
       }
+      // Triage is STAFF-GATED: no free nurse, no triage, and the queue grows.
+      // Without this the nurse slider would move utilization and walking while
+      // leaving throughput untouched — a control that looks live and is not.
       const nurse = this.idleStaffOfRole("nurse");
+      if (nurse === null) {
+        break;
+      }
       bay.status = "occupied";
       bay.occupant = patient.id;
       patient.stage = "triage";
@@ -444,19 +538,28 @@ export class MockEngine {
         kind: "triage_started",
         occurred_at: this.simTimeUs,
         patient: patient.id,
-        staff: nurse?.id ?? "nurse-1",
+        staff: nurse.id,
       });
-      if (nurse !== null) {
-        this.dispatchStaff(nurse, { kind: "triage", node: bay.id, durationUs: patient.remainingUs });
-      }
+      this.dispatchStaff(nurse, { kind: "triage", node: bay.id, durationUs: patient.remainingUs });
     }
   }
 
-  /** Free bay compatible with the patient's acuity, or null. */
-  private findFreeBay(esi: EsiAcuity): MockBay | null {
+  /** Free bay compatible with the patient's acuity (and isolation need), or null.
+   *
+   * Isolation is a hard placement constraint, not a preference: the floor has two
+   * isolation-capable bays, so raising the isolation share squeezes placement
+   * against a much smaller pool and boarding time climbs — the contention the
+   * demand knob exists to show. Isolation-capable bays are NOT reserved, so a
+   * routine patient may still be placed in one; that is the real trade-off, and
+   * hiding it would make the knob look free.
+   */
+  private findFreeBay(esi: EsiAcuity, isolation: boolean): MockBay | null {
     const allowed = allowedZoneTypes(esi);
     for (const fixture of this.layout.bays) {
       if (fixture.zone_type === "triage" || !allowed.includes(fixture.zone_type)) {
+        continue;
+      }
+      if (isolation && !fixture.isolation_capable) {
         continue;
       }
       const bay = this.bays.get(fixture.id);
@@ -508,7 +611,7 @@ export class MockEngine {
   private stepPlacement(): void {
     for (const patient of this.waitingByStage("waiting_bay")) {
       const by = this.arm === "baseline" ? "baseline" : "solver";
-      const bay = this.findFreeBay(patient.esi);
+      const bay = this.findFreeBay(patient.esi, patient.isolation);
       if (bay === null) {
         continue;
       }
@@ -795,9 +898,13 @@ export class MockEngine {
       values[`los_s_p90_by_esi_${esi}`] = percentile([...los].sort((a, b) => a - b), 0.9);
     }
     values["staff_minutes_walked"] = this.fracUs.walk / (60 * S);
+    // Denominated by the bays actually IN SERVICE, not by the floor's geometry:
+    // closing bays (by capacity slider or operator override) must not read as
+    // "utilization fell", which is the opposite of what closing them did.
+    const openBays = [...this.bays.values()].filter((b) => b.status !== "closed").length;
     values["bay_utilization"] = Math.min(
       1,
-      this.occupiedBayUs / (this.layout.bays.length * elapsedUs),
+      this.occupiedBayUs / (Math.max(openBays, 1) * elapsedUs),
     );
     values["turnaround_time_s_mean"] = mean(this.turnaroundS);
     values["boarding_time_s_mean"] = mean(this.boardingS);
@@ -924,6 +1031,13 @@ export class MockEngine {
           violations.push({
             kind: "bay_incompatible",
             detail: `esi ${patient.esi} not allowed in ${fixture.zone_type}`,
+            entity: bay.id,
+          });
+        }
+        if (patient.isolation && !fixture.isolation_capable) {
+          violations.push({
+            kind: "isolation_violated",
+            detail: "patient requires an isolation-capable bay",
             entity: bay.id,
           });
         }
