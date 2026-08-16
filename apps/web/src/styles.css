@@ -68,6 +68,13 @@ body {
   }
 }
 
+/* An icon-only badge: square, so a single glyph is not stretched by the badge's text padding. */
+.badge-icon {
+  padding-inline: 7px;
+  line-height: 1;
+  font-size: 13px;
+}
+
 /* Collapsed, the metrics track goes to zero and the floor takes the width. The rail is
    removed from the layout rather than hidden under it, so nothing keeps painting or
    scrolling off-screen. */

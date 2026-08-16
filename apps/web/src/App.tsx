@@ -116,13 +116,18 @@ export function App() {
         <button className="badge" onClick={() => setFloorView(floorView === "3d" ? "2d" : "3d")}>
           {floorView === "3d" ? "3D floor" : "2D map"}
         </button>
+        {/* Glyph only. The rail appearing or vanishing beside it is the state feedback, so the
+            wording is carried by the accessible name and the tooltip rather than taking up
+            header width to say what the layout already shows. */}
         <button
-          className="badge"
+          className="badge badge-icon"
           aria-expanded={metricsOpen}
           aria-controls="metrics-rail"
+          aria-label={metricsOpen ? "Hide metrics" : "Show metrics"}
+          title={metricsOpen ? "Hide metrics" : "Show metrics"}
           onClick={() => setMetricsOpen(!metricsOpen)}
         >
-          {metricsOpen ? "◧ Hide metrics" : "◧ Show metrics"}
+          ◧
         </button>
         <span className="spacer" />
         {bootError !== null && <span className="badge err">{bootError}</span>}
