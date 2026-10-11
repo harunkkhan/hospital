@@ -29,6 +29,8 @@ const ER_ZONES: readonly {
   { zone: "resus_trauma_04", zoneType: "resus_trauma", bays: 8, isolation: 8, stationLoads: [8] },
 ];
 
+/** Every fixture node is on the ground floor: this reproduces the single-storey ED. */
+const GROUND = 0;
 const SPINE_Y = 3871;
 const PITCH = 284;
 const ROOM_DEPTH = 420;
@@ -46,7 +48,7 @@ function makeErFloorLayout(): FloorLayout {
     loads.forEach((_, s) => {
       const id = `station_${zone.zone}_${String(s).padStart(2, "0")}`;
       stations.push(id);
-      nodes.push({
+      nodes.push({ floor: GROUND,
         id,
         label: "station",
         x_cm: 600 + (column + Math.floor((s * columns) / loads.length)) * PITCH,
@@ -68,7 +70,7 @@ function makeErFloorLayout(): FloorLayout {
           taken = 0;
         }
         const id = `bay_${zone.zone}_${String(k).padStart(2, "0")}`;
-        nodes.push({
+        nodes.push({ floor: GROUND,
           id,
           label: zone.zoneType,
           x_cm: 600 + (column + j) * PITCH,
@@ -91,18 +93,18 @@ function makeErFloorLayout(): FloorLayout {
   }
 
   for (let i = 0; i < column; i += 1) {
-    nodes.push({
+    nodes.push({ floor: GROUND,
       id: `corr_${String(i).padStart(3, "0")}`,
       label: "corridor",
       x_cm: 600 + i * PITCH,
       y_cm: SPINE_Y,
     });
   }
-  nodes.push({ id: "entrance_walk_in", label: "entrance", x_cm: 0, y_cm: SPINE_Y });
-  nodes.push({ id: "waiting_room", label: "waiting", x_cm: 0, y_cm: SPINE_Y - ROOM_DEPTH });
-  nodes.push({ id: "entrance_ambulance", label: "entrance", x_cm: FLOOR_WIDTH, y_cm: SPINE_Y });
+  nodes.push({ floor: GROUND, id: "entrance_walk_in", label: "entrance", x_cm: 0, y_cm: SPINE_Y });
+  nodes.push({ floor: GROUND, id: "waiting_room", label: "waiting", x_cm: 0, y_cm: SPINE_Y - ROOM_DEPTH });
+  nodes.push({ floor: GROUND, id: "entrance_ambulance", label: "entrance", x_cm: FLOOR_WIDTH, y_cm: SPINE_Y });
   for (let i = 0; i < 6; i += 1) {
-    nodes.push({
+    nodes.push({ floor: GROUND,
       id: `triage_${String(i).padStart(2, "0")}`,
       label: "triage",
       x_cm: 0,
@@ -110,18 +112,18 @@ function makeErFloorLayout(): FloorLayout {
     });
   }
   const mid = 600 + Math.floor(column / 2) * PITCH;
-  nodes.push({ id: "connector_north", label: "connector", x_cm: mid, y_cm: SPINE_Y - 2 * ROOM_DEPTH });
+  nodes.push({ floor: GROUND, id: "connector_north", label: "connector", x_cm: mid, y_cm: SPINE_Y - 2 * ROOM_DEPTH });
   const imaging: string[] = [];
   const lab: string[] = [];
   for (let i = 0; i < 3; i += 1) {
     const id = `imaging_${String(i).padStart(2, "0")}`;
     imaging.push(id);
-    nodes.push({ id, label: "imaging", x_cm: mid + i * ROOM_DEPTH, y_cm: SPINE_Y - 3 * ROOM_DEPTH });
+    nodes.push({ floor: GROUND, id, label: "imaging", x_cm: mid + i * ROOM_DEPTH, y_cm: SPINE_Y - 3 * ROOM_DEPTH });
   }
   for (let j = 0; j < 2; j += 1) {
     const id = `lab_${String(j).padStart(2, "0")}`;
     lab.push(id);
-    nodes.push({ id, label: "lab", x_cm: mid + (3 + j) * ROOM_DEPTH, y_cm: SPINE_Y - 3 * ROOM_DEPTH });
+    nodes.push({ floor: GROUND, id, label: "lab", x_cm: mid + (3 + j) * ROOM_DEPTH, y_cm: SPINE_Y - 3 * ROOM_DEPTH });
   }
 
   // The derivation never routes, so a spine-only edge list is enough to be a real graph.

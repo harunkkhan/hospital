@@ -49,6 +49,9 @@ export function App() {
   // The 3D floor is the default view; the flat map stays one click away for anyone whose
   // browser has no WebGL, and as the reference for what the route graph literally says.
   const [floorView, setFloorView] = useState<"2d" | "3d">("3d");
+  // The metrics rail collapses so the floor can have the width: on a laptop the plan is the
+  // thing being read, and 336px of numbers is a third of it.
+  const [metricsOpen, setMetricsOpen] = useState(true);
 
   const run = handle?.run ?? null;
 
@@ -97,7 +100,7 @@ export function App() {
     status === "open" ? "live" : status === "closed" ? "err" : "warn";
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${metricsOpen ? "" : " metrics-collapsed"}`}>
       <header className="app-header">
         <h1>ER Operator Console</h1>
         <span className="badge">{api.mode} mode</span>
@@ -112,6 +115,19 @@ export function App() {
         )}
         <button className="badge" onClick={() => setFloorView(floorView === "3d" ? "2d" : "3d")}>
           {floorView === "3d" ? "3D floor" : "2D map"}
+        </button>
+        {/* Glyph only. The rail appearing or vanishing beside it is the state feedback, so the
+            wording is carried by the accessible name and the tooltip rather than taking up
+            header width to say what the layout already shows. */}
+        <button
+          className="badge badge-icon"
+          aria-expanded={metricsOpen}
+          aria-controls="metrics-rail"
+          aria-label={metricsOpen ? "Hide metrics" : "Show metrics"}
+          title={metricsOpen ? "Hide metrics" : "Show metrics"}
+          onClick={() => setMetricsOpen(!metricsOpen)}
+        >
+          ◧
         </button>
         <span className="spacer" />
         {bootError !== null && <span className="badge err">{bootError}</span>}
@@ -141,10 +157,24 @@ export function App() {
             {bootError ?? "starting run…"}
           </div>
         )}
+        {/* The legend describes the floor, so it sits on it rather than competing for rail
+            space with the numbers. */}
+        <div className="map-legend">
+          <Legend />
+        </div>
       </main>
 
-      <aside className="side-pane">
-        <Legend />
+      {/* Monitoring on the left, controls on the right: reading what the department is doing
+          and changing what it is asked to do are different jobs, and interleaving them meant
+          scrolling past a slider to reach a KPI. */}
+      <aside className="rail rail-left" id="metrics-rail" aria-label="Live metrics">
+        <KPIPanel metrics={liveWorld.kpiPreview ?? metrics.data} />
+        <BottleneckPanel report={bottleneck.data} />
+        <CompareView
+          compare={compare.data}
+          error={handle !== null && handle.shadow == null ? "no shadow arm (compare_to unset)" : compare.error}
+          onRefresh={compare.refresh}
+        />
         <OverridePanel
           layout={layout}
           world={liveWorld}
@@ -153,13 +183,9 @@ export function App() {
           runId={run}
           onResync={resync}
         />
-        <KPIPanel metrics={liveWorld.kpiPreview ?? metrics.data} />
-        <BottleneckPanel report={bottleneck.data} />
-        <CompareView
-          compare={compare.data}
-          error={handle !== null && handle.shadow == null ? "no shadow arm (compare_to unset)" : compare.error}
-          onRefresh={compare.refresh}
-        />
+      </aside>
+
+      <aside className="rail rail-right" aria-label="Scenario controls">
         <ScenarioLab
           scenarios={scenarios.data}
           currentSeed={handle?.seed ?? DEFAULT_RUN.seed}

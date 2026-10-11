@@ -88,7 +88,9 @@ const BLUEPRINT: StylePack = {
   // read as fluorescent, so each is taken down to something a plotter could print.
   status: { free: "#12854a", occupied: "#2f6fd0", cleaning: "#b07908", closed: "#b3352f" },
   esi: { 1: "#b3352f", 2: "#c2611f", 3: "#a97a09", 4: "#12854a", 5: "#8a8a8a" },
-  staff: "#161616",
+  // Slate rather than near-black: a body at this scale is a silhouette, and pure ink on
+  // near-white reads as a bollard. Still clear of every acuity hue.
+  staff: "#4a5464",
   selection: "#161616",
   zoneTint: {
     fast_track: "#7fb3d5",
